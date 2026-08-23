@@ -10,7 +10,7 @@ import (
 )
 
 func (e *Engine) ForceSearch(ctx context.Context, subject model.SubjectType, id int64) error {
-	if err := e.store.Transitions().RetryNow(ctx, subject, id, "manual search requested"); err != nil {
+	if err := e.store.Transitions().RequestSearchNow(ctx, subject, id, "manual search requested"); err != nil {
 		return err
 	}
 	return e.Trigger("search")
@@ -21,7 +21,7 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 	if err != nil {
 		return model.Grab{}, err
 	}
-	if err := e.store.Transitions().RetryNow(ctx, subject, id, "manual release selected"); err != nil {
+	if err := e.store.Transitions().RequestSearchNow(ctx, subject, id, "manual release selected"); err != nil {
 		return model.Grab{}, err
 	}
 	lock, err := e.store.Locks().Acquire(ctx, subject, id, "manual-grab", 5*time.Minute)

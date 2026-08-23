@@ -74,26 +74,33 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 	if lock == nil {
 		return model.StateTransition{}, errors.New("search retry requires an item lock")
 	}
-	to := model.StateWanted
-	if terminal {
-		to = model.StateFailed
-	}
 	now := r.s.nowUTC()
 	var out model.StateTransition
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
-		from, err := itemState(ctx, tx, lock.Subject, lock.ID)
-		if err != nil {
-			return err
-		}
-		if from != model.StateSearching || !from.CanTransitionTo(to) {
-			return fmt.Errorf("%s:%d %s -> %s: %w", lock.Subject, lock.ID, from, to, ErrInvalidTransition)
-		}
 		table := "episodes"
 		if lock.Subject == model.SubjectMovie {
 			table = "movies"
 		}
+		var from model.ItemState
+		var importedPath string
+		err := tx.QueryRowContext(ctx, `SELECT state, imported_path FROM `+table+` WHERE id=?`,
+			lock.ID).Scan(&from, &importedPath)
+		if err != nil {
+			return err
+		}
+		to := model.StateWanted
+		if importedPath != "" {
+			// A failed upgrade search does not invalidate the existing import.
+			to = model.StateImported
+		} else if terminal {
+			to = model.StateFailed
+		}
+		validUpgradeFallback := to == model.StateImported && importedPath != ""
+		if from != model.StateSearching || (!from.CanTransitionTo(to) && !validUpgradeFallback) {
+			return fmt.Errorf("%s:%d %s -> %s: %w", lock.Subject, lock.ID, from, to, ErrInvalidTransition)
+		}
 		var nextValue any = nullTime(&next)
-		if terminal {
+		if terminal || to == model.StateImported {
 			nextValue = nil
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET state=?,
@@ -189,6 +196,17 @@ func (r *TransitionRepository) MarkImportedLocked(ctx context.Context, lock *Ite
 }
 
 func (r *TransitionRepository) RetryNow(ctx context.Context, subject model.SubjectType, id int64, reason string) error {
+	return r.retryNow(ctx, subject, id, reason, true)
+}
+
+// RequestSearchNow schedules immediate work without abandoning an existing
+// search, download, or import. Queue removal uses RetryNow after explicitly
+// stopping the torrent; user-facing search actions must use this stricter path.
+func (r *TransitionRepository) RequestSearchNow(ctx context.Context, subject model.SubjectType, id int64, reason string) error {
+	return r.retryNow(ctx, subject, id, reason, false)
+}
+
+func (r *TransitionRepository) retryNow(ctx context.Context, subject model.SubjectType, id int64, reason string, allowBusy bool) error {
 	lock, err := r.s.Locks().Acquire(ctx, subject, id, "manual-retry", time.Minute)
 	if err != nil {
 		return err
@@ -198,6 +216,9 @@ func (r *TransitionRepository) RetryNow(ctx context.Context, subject model.Subje
 		from, err := itemState(ctx, tx, subject, id)
 		if err != nil {
 			return err
+		}
+		if !allowBusy && (from == model.StateSearching || from.Active()) {
+			return fmt.Errorf("%s:%d is %s: %w", subject, id, from, ErrItemBusy)
 		}
 		if from != model.StateWanted {
 			if !from.CanTransitionTo(model.StateWanted) {

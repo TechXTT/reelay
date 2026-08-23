@@ -84,6 +84,14 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 	if err != nil {
 		return err
 	}
+	if state == model.StateImported {
+		// A completed torrent can be observed again after a restart. Treat that
+		// as success instead of attempting a second filesystem import.
+		grab.State = model.GrabImported
+		grab.Progress = 1
+		grab.LastError = ""
+		return e.store.Grabs().Update(ctx, grab)
+	}
 	if state == model.StateGrabbed {
 		if _, err := e.store.Transitions().Transition(ctx, grab.SubjectType, grab.SubjectID,
 			model.StateDownloading, "download completed", "completion observed before prior status poll"); err != nil {
@@ -96,6 +104,10 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			model.StateImporting, "download completed", grab.ContentPath); err != nil {
 			return err
 		}
+		state = model.StateImporting
+	}
+	if state != model.StateImporting {
+		return fmt.Errorf("completed grab cannot be imported while item is %s", state)
 	}
 	grab.State = model.GrabImporting
 	if err := e.store.Grabs().Update(ctx, grab); err != nil {

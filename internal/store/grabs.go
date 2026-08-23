@@ -78,6 +78,18 @@ func (r *GrabRepository) CreateGrabbed(ctx context.Context, lock *ItemLock, in m
 		if from != model.StateSearching {
 			return fmt.Errorf("create grabbed from %s: %w", from, ErrInvalidTransition)
 		}
+		var activeID int64
+		err = tx.QueryRowContext(ctx, `SELECT id FROM grabs
+ WHERE subject_type=? AND subject_id=?
+ AND state IN ('pending','downloading','completed','importing') LIMIT 1`,
+			in.SubjectType, in.SubjectID).Scan(&activeID)
+		if err == nil {
+			return fmt.Errorf("%s:%d already has active grab %d: %w",
+				in.SubjectType, in.SubjectID, activeID, ErrItemBusy)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check active grab: %w", err)
+		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO grabs (
  subject_type, subject_id, release_id, torrent_hash, category, state, progress,
  content_path, attempts, last_error, created_at, updated_at, progressed_at

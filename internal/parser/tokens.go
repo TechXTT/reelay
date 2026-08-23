@@ -116,6 +116,25 @@ func extractTokens(rest string, p *Parsed) {
 	tokens := tokenSplitRe.Split(strings.ToLower(rest), -1)
 	hdrSeen := map[string]bool{}
 
+	// Numeric display resolution describes the encoded output. Source markers
+	// such as UHD/4K may appear earlier in names for a 1080p encode and must not
+	// override an explicit 1080p/720p token.
+	for _, token := range tokens {
+		switch token {
+		case "2160p", "2160i":
+			p.Resolution = "2160p"
+		case "1080p", "1080i":
+			p.Resolution = "1080p"
+		case "720p", "720i":
+			p.Resolution = "720p"
+		case "480p", "480i", "576p", "576i":
+			p.Resolution = "480p"
+		}
+		if p.Resolution != "" {
+			break
+		}
+	}
+
 	// lookupPairFirst tries the two-token form before the single token.
 	//
 	// Order matters and cost real bugs: "DTS-HD" splits into "dts" and "hd",
@@ -143,8 +162,8 @@ func extractTokens(rest string, p *Parsed) {
 			pair = t + " " + tokens[i+1]
 		}
 
-		// Resolution: first match wins, so "1080p" is not overwritten by a
-		// later mention of the source's resolution.
+		// Resolution aliases are a fallback when no numeric output resolution
+		// exists anywhere in the name.
 		if p.Resolution == "" {
 			if v := lookupPairFirst(resolutionAlias, t, pair); v != "" {
 				p.Resolution = v

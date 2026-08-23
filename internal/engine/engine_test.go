@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -111,6 +112,9 @@ func TestWantedToImportedCycle(t *testing.T) {
 	if err != nil || movie.State != model.StateGrabbed {
 		t.Fatalf("after search state=%s err=%v", movie.State, err)
 	}
+	if err := eng.ForceSearch(ctx, model.SubjectMovie, movie.ID); !errors.Is(err, store.ErrItemBusy) {
+		t.Fatalf("repeat search while grabbed = %v, want ErrItemBusy", err)
+	}
 
 	clk.Advance(30 * time.Second)
 	if err := eng.StatusOnce(ctx); err != nil {
@@ -133,6 +137,35 @@ func TestWantedToImportedCycle(t *testing.T) {
 	history, err := db.Transitions().History(ctx, model.SubjectMovie, movie.ID, 20)
 	if err != nil || len(history) < 6 {
 		t.Fatalf("audit history len=%d err=%v", len(history), err)
+	}
+
+	// Legacy databases may contain a duplicate active grab. Observing its
+	// completed torrent after the subject imported must be idempotent.
+	grabs, err := db.Grabs().History(ctx, 10, 0)
+	if err != nil || len(grabs) != 1 {
+		t.Fatalf("grab history = %+v, %v", grabs, err)
+	}
+	stale := grabs[0]
+	stale.State = model.GrabImporting
+	if err := db.Grabs().Update(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.StatusOnce(ctx); err != nil {
+		t.Fatalf("idempotent completion: %v", err)
+	}
+	stale, _ = db.Grabs().Get(ctx, stale.ID)
+	if stale.State != model.GrabImported || stale.LastError != "" {
+		t.Fatalf("stale completed grab = %+v", stale)
+	}
+}
+
+func TestImportedQualityParsing(t *testing.T) {
+	got := importedQuality("1080p bluray av1 proper")
+	if got == nil || got.Resolution != "1080p" || got.Source != "bluray" || !got.Proper || got.Repack {
+		t.Fatalf("imported quality = %+v", got)
+	}
+	if got := importedQuality(""); got != nil {
+		t.Fatalf("empty quality = %+v, want nil", got)
 	}
 }
 

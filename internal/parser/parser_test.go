@@ -340,6 +340,16 @@ func TestParseNeverPanics(t *testing.T) {
 	}
 }
 
+func TestExplicitResolutionOverridesSourceMarker(t *testing.T) {
+	got := Parse("Project Hail Mary 2026 UHD BDRip IMAX 1080p AV1 HDR10 Atmos")
+	if got.Resolution != "1080p" {
+		t.Fatalf("resolution = %q, want 1080p", got.Resolution)
+	}
+	if got.Source != "bluray" || got.VideoCodec != "av1" {
+		t.Fatalf("quality parsing = %+v", got)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true

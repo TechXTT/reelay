@@ -13,6 +13,7 @@ import (
 )
 
 var illegalSegment = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
+var emptyBrackets = regexp.MustCompile(`\[\s*\]`)
 
 func (s *Service) destination(ctx context.Context, grab model.Grab, source string, fallback parser.Parsed) (string, parser.Parsed, error) {
 	parsed := parser.Parse(filepath.Base(source))
@@ -80,8 +81,9 @@ func render(template string, values map[string]string) string {
 		template = strings.ReplaceAll(template, "{"+key+"}", value)
 	}
 	template = strings.ReplaceAll(template, "()", "")
+	template = emptyBrackets.ReplaceAllString(template, "")
 	template = strings.Join(strings.Fields(template), " ")
-	return strings.TrimSpace(template)
+	return strings.TrimRight(strings.TrimSpace(template), " -_.")
 }
 
 func renderPath(template string, values map[string]string) string {

@@ -213,6 +213,13 @@ func TestNamingFallbackPathCapAndUnsupportedLink(t *testing.T) {
 	}
 }
 
+func TestRenderRemovesEmptyOptionalSuffixes(t *testing.T) {
+	got := render("Movie (2026) [1080p bluray av1]-{Group}", map[string]string{"Group": ""})
+	if got != "Movie (2026) [1080p bluray av1]" {
+		t.Fatalf("rendered name = %q", got)
+	}
+}
+
 func TestPostImportWebhook(t *testing.T) {
 	called := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

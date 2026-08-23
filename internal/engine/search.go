@@ -134,7 +134,7 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	}
 	result := scoring.Evaluate(scoring.Input{Releases: releases, Want: &target.want,
 		Profile: target.profile, Weights: e.cfg.Scoring, Now: e.clock.Now().UTC(),
-		Blacklist: blacklist, RuntimeMinutes: target.runtime})
+		Blacklist: blacklist, Imported: target.imported, RuntimeMinutes: target.runtime})
 	if err := e.persistCandidates(ctx, target, result); err != nil {
 		return e.retrySearch(ctx, lock, target, "candidate_store_error", err.Error())
 	}
@@ -207,7 +207,9 @@ func (e *Engine) retrySearch(ctx context.Context, lock *store.ItemLock, target s
 	_, err := e.store.Transitions().SearchRetryLocked(ctx, lock, now.Add(delay), reason, detail, terminal)
 	if err == nil {
 		state := model.StateWanted
-		if terminal {
+		if target.imported != nil {
+			state = model.StateImported
+		} else if terminal {
 			state = model.StateFailed
 		}
 		e.publish("state_transition", target, map[string]any{"state": state, "reason": reason})

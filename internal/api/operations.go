@@ -25,7 +25,7 @@ func (s *Server) handleEpisodePatch(w http.ResponseWriter, r *http.Request) erro
 		return BadRequest("monitored is required")
 	}
 	if *req.Monitored {
-		err = s.store.Transitions().RetryNow(r.Context(), model.SubjectEpisode, id, "episode monitored")
+		err = s.store.Transitions().RequestSearchNow(r.Context(), model.SubjectEpisode, id, "episode monitored")
 	} else {
 		_, err = s.store.Transitions().Transition(r.Context(), model.SubjectEpisode, id,
 			model.StateUnmonitored, "episode unmonitored", "API request")

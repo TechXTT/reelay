@@ -13,6 +13,7 @@ var (
 	ErrConflict          = errors.New("conflict")
 	ErrInvalidTransition = errors.New("invalid state transition")
 	ErrLocked            = errors.New("item is locked")
+	ErrItemBusy          = errors.New("item already has work in progress")
 )
 
 func encodeJSON(v any) (string, error) {

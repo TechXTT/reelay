@@ -8,6 +8,7 @@ import (
 
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/scoring"
 )
 
 type searchTarget struct {
@@ -20,7 +21,7 @@ type searchTarget struct {
 	firstWanted *time.Time
 	category    string
 	savePath    string
-	imported    string
+	imported    *scoring.Imported
 }
 
 func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
@@ -54,7 +55,7 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 			want:    model.Wanted{Kind: model.SubjectMovie, Title: movie.Title, Year: movie.Year},
 			profile: p, runtime: movie.RuntimeMinutes, attempts: movie.SearchAttempts,
 			firstWanted: movie.FirstWantedAt, category: e.cfg.Downloader.CategoryMovies,
-			savePath: e.cfg.Downloader.SavePathMovies, imported: movie.ImportedQuality})
+			savePath: e.cfg.Downloader.SavePathMovies, imported: importedQuality(movie.ImportedQuality)})
 	}
 	seriesCache := map[int64]model.Series{}
 	for _, episode := range episodes {
@@ -76,9 +77,22 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 				AbsoluteEp: episode.AbsoluteNumber, IsAnime: series.IsAnime},
 			profile: p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
 			firstWanted: episode.FirstWantedAt, category: e.cfg.Downloader.CategoryTV,
-			savePath: e.cfg.Downloader.SavePathTV, imported: episode.ImportedQuality})
+			savePath: e.cfg.Downloader.SavePathTV, imported: importedQuality(episode.ImportedQuality)})
 	}
 	return out, nil
+}
+
+func importedQuality(raw string) *scoring.Imported {
+	fields := strings.Fields(strings.ToLower(raw))
+	if len(fields) < 2 {
+		return nil
+	}
+	quality := &scoring.Imported{Resolution: fields[0], Source: fields[1]}
+	for _, field := range fields[2:] {
+		quality.Proper = quality.Proper || field == "proper"
+		quality.Repack = quality.Repack || field == "repack"
+	}
+	return quality
 }
 
 func targetKey(t searchTarget) string {

@@ -130,7 +130,14 @@ func rootFor(cfg *config.Config, subject model.SubjectType) string {
 }
 
 func qualityLabel(p parser.Parsed) string {
-	return strings.TrimSpace(strings.Join([]string{p.Resolution, p.Source, p.VideoCodec}, " "))
+	parts := []string{p.Resolution, p.Source, p.VideoCodec}
+	if p.Proper {
+		parts = append(parts, "proper")
+	}
+	if p.Repack {
+		parts = append(parts, "repack")
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 func sourceMatchesSubject(ctx context.Context, st *store.Store, grab model.Grab, parsed parser.Parsed) bool {

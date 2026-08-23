@@ -223,6 +223,109 @@ func TestReleaseDecisionsGrabBlacklistAndImport(t *testing.T) {
 	}
 }
 
+func TestActiveGrabBlocksAnotherHandoffAndManualSearch(t *testing.T) {
+	ctx := context.Background()
+	s := migratedDomainStore(t)
+	p, _ := s.Profiles().Default(ctx)
+	movie, err := s.Movies().Create(ctx, model.Movie{
+		Title: "Arrival", Year: 2016, ProfileID: p.ID, RootFolder: "/movies",
+		State: model.StateWanted,
+	}, "added")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := s.Releases().Upsert(ctx, model.StoredRelease{
+		Indexer: "fixture", RawTitle: "Arrival.2016.1080p.WEB-DL.x264-GROUP",
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		Magnet:    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+		SizeBytes: 1000, Seeders: 10, ParsedJSON: `{}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Grabs().Create(ctx, model.Grab{SubjectType: model.SubjectMovie,
+		SubjectID: movie.ID, ReleaseID: release.ID, TorrentHash: release.InfoHash,
+		Category: "reelay-movies", State: model.GrabDownloading}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Grabs().Create(ctx, model.Grab{SubjectType: model.SubjectMovie,
+		SubjectID: movie.ID, ReleaseID: release.ID, TorrentHash: release.InfoHash,
+		Category: "reelay-movies", State: model.GrabPending}); err == nil {
+		t.Fatal("partial unique index allowed a second active grab")
+	}
+	if _, err := s.Transitions().Transition(ctx, model.SubjectMovie, movie.ID,
+		model.StateSearching, "search", ""); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := s.Locks().Acquire(ctx, model.SubjectMovie, movie.ID, "test", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Grabs().CreateGrabbed(ctx, lock, model.Grab{SubjectType: model.SubjectMovie,
+		SubjectID: movie.ID, ReleaseID: release.ID, TorrentHash: release.InfoHash,
+		Category: "reelay-movies"}, "duplicate")
+	_ = lock.Release(ctx)
+	if !errors.Is(err, ErrItemBusy) {
+		t.Fatalf("second handoff = %v, want ErrItemBusy", err)
+	}
+	if err := s.Transitions().RequestSearchNow(ctx, model.SubjectMovie, movie.ID,
+		"manual search"); !errors.Is(err, ErrItemBusy) {
+		t.Fatalf("search while searching = %v, want ErrItemBusy", err)
+	}
+}
+
+func TestFailedUpgradeSearchReturnsToImported(t *testing.T) {
+	ctx := context.Background()
+	s := migratedDomainStore(t)
+	p, _ := s.Profiles().Default(ctx)
+	movie, err := s.Movies().Create(ctx, model.Movie{Title: "Primer", Year: 2004,
+		ProfileID: p.ID, RootFolder: "/movies", State: model.StateWanted}, "added")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, next := range []model.ItemState{model.StateSearching, model.StateGrabbed,
+		model.StateDownloading, model.StateImporting} {
+		if _, err := s.Transitions().Transition(ctx, model.SubjectMovie, movie.ID,
+			next, "fixture lifecycle", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, err := s.Locks().Acquire(ctx, model.SubjectMovie, movie.ID, "import", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Transitions().MarkImportedLocked(ctx, lock, "/movies/Primer/movie.mkv",
+		"1080p bluray x264", "fixture import"); err != nil {
+		t.Fatal(err)
+	}
+	_ = lock.Release(ctx)
+	if err := s.Transitions().RequestSearchNow(ctx, model.SubjectMovie, movie.ID,
+		"upgrade search"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transitions().Transition(ctx, model.SubjectMovie, movie.ID,
+		model.StateSearching, "upgrade search", ""); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = s.Locks().Acquire(ctx, model.SubjectMovie, movie.ID, "search", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := s.Transitions().SearchRetryLocked(ctx, lock, time.Now().Add(time.Hour),
+		"no acceptable release", "same quality", false)
+	_ = lock.Release(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.To != model.StateImported {
+		t.Fatalf("upgrade fallback = %s, want imported", transition.To)
+	}
+	movie, _ = s.Movies().Get(ctx, movie.ID)
+	if movie.State != model.StateImported || movie.ImportedPath == "" {
+		t.Fatalf("movie after failed upgrade = %+v", movie)
+	}
+}
+
 func TestDomainRowsPersistAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "reelay.db")

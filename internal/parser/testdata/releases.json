@@ -1,0 +1,1648 @@
+{
+  "_comment": [
+    "Golden corpus for the release-name parser. Each case asserts only the",
+    "fields it lists: an absent field is not checked, which keeps a case",
+    "focused on the behaviour it exists to pin down.",
+    "",
+    "Cases marked pathological:true document names the parser gets WRONG or",
+    "cannot fully resolve. Their expectations are the current, accepted",
+    "behaviour, so the corpus is a regression lock rather than a wish list.",
+    "Changing one of those expectations should be a deliberate decision.",
+    "",
+    "Names tagged 'apibay' are shapes the live Pirate Bay JSON API actually",
+    "returns: dots flattened to spaces, and the name field cut at 80 chars."
+  ],
+  "cases": [
+    {
+      "group": "standard scene TV",
+      "name": "The.Expanse.S01E01.1080p.BluRay.x264-ROVERS",
+      "expect": {
+        "title": "the expanse",
+        "title_raw": "The Expanse",
+        "season": 1,
+        "episodes": [1],
+        "resolution": "1080p",
+        "source": "bluray",
+        "video_codec": "x264",
+        "release_group": "ROVERS"
+      }
+    },
+    {
+      "name": "Breaking.Bad.S05E14.Ozymandias.1080p.BluRay.x265-RARBG",
+      "expect": {
+        "title": "breaking bad",
+        "season": 5,
+        "episodes": [14],
+        "resolution": "1080p",
+        "source": "bluray",
+        "video_codec": "x265",
+        "release_group": "RARBG"
+      }
+    },
+    {
+      "name": "Severance.S02E07.1080p.WEB.h264-SuccessfulCrab",
+      "expect": {
+        "title": "severance",
+        "season": 2,
+        "episodes": [7],
+        "resolution": "1080p",
+        "source": "webdl",
+        "video_codec": "x264",
+        "release_group": "SuccessfulCrab"
+      }
+    },
+    {
+      "name": "Shogun.2024.S01E10.2160p.DSNP.WEB-DL.DDP5.1.DV.HDR.H.265-NTb",
+      "expect": {
+        "title": "shogun",
+        "year": 2024,
+        "season": 1,
+        "episodes": [10],
+        "resolution": "2160p",
+        "source": "webdl",
+        "video_codec": "x265",
+        "audio_codec": "ddp",
+        "hdr": ["dv", "hdr10"],
+        "release_group": "NTb"
+      }
+    },
+    {
+      "name": "Andor.S02E01.1080p.WEB-DL.DDP5.1.Atmos.H.264-FLUX",
+      "expect": {
+        "title": "andor",
+        "season": 2,
+        "episodes": [1],
+        "resolution": "1080p",
+        "source": "webdl",
+        "video_codec": "x264",
+        "audio_codec": "atmos",
+        "release_group": "FLUX"
+      }
+    },
+    {
+      "name": "Slow.Horses.S04E06.720p.ATVP.WEBRip.x264-GalaxyTV",
+      "expect": {
+        "title": "slow horses",
+        "season": 4,
+        "episodes": [6],
+        "resolution": "720p",
+        "source": "webrip",
+        "video_codec": "x264",
+        "release_group": "GalaxyTV"
+      }
+    },
+    {
+      "name": "The.Bear.S03E04.HDTV.x264-SYNCOPY",
+      "expect": {
+        "title": "the bear",
+        "season": 3,
+        "episodes": [4],
+        "resolution": "",
+        "source": "hdtv",
+        "video_codec": "x264",
+        "release_group": "SYNCOPY"
+      }
+    },
+    {
+      "name": "Silo.S02E05.2160p.ATVP.WEB-DL.DDP5.1.Atmos.DV.HDR10+.H.265-FLUX",
+      "expect": {
+        "title": "silo",
+        "season": 2,
+        "episodes": [5],
+        "resolution": "2160p",
+        "source": "webdl",
+        "audio_codec": "atmos",
+        "hdr": ["dv", "hdr10plus"],
+        "video_codec": "x265",
+        "release_group": "FLUX"
+      }
+    },
+    {
+      "name": "Fallout.S01E08.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb",
+      "expect": {
+        "title": "fallout",
+        "season": 1,
+        "episodes": [8],
+        "resolution": "1080p",
+        "source": "webdl",
+        "audio_codec": "ddp",
+        "release_group": "NTb"
+      }
+    },
+    {
+      "name": "House.of.the.Dragon.S02E08.1080p.HMAX.WEB-DL.DD5.1.H.264-playWEB",
+      "expect": {
+        "title": "house of the dragon",
+        "season": 2,
+        "episodes": [8],
+        "resolution": "1080p",
+        "source": "webdl",
+        "audio_codec": "dd",
+        "release_group": "playWEB"
+      }
+    },
+    {
+      "name": "Mr.Robot.S04E13.1080p.AMZN.WEBRip.DDP5.1.x264-NTb",
+      "expect": {
+        "title": "mr robot",
+        "season": 4,
+        "episodes": [13],
+        "source": "webrip",
+        "release_group": "NTb"
+      }
+    },
+    {
+      "name": "Marvels.Daredevil.Born.Again.S01E03.1080p.WEB.H264-SuccessfulCrab",
+      "expect": {
+        "title": "marvels daredevil born again",
+        "season": 1,
+        "episodes": [3],
+        "release_group": "SuccessfulCrab"
+      }
+    },
+    {
+      "name": "Marvel's.Daredevil.S03E01.1080p.NF.WEB-DL.DDP5.1.x264-NTG",
+      "expect": {
+        "title": "marvels daredevil",
+        "season": 3,
+        "episodes": [1],
+        "release_group": "NTG"
+      },
+      "note": "apostrophe is dropped without leaving a gap, so this matches the apostrophe-free variant above"
+    },
+    {
+      "name": "Star.Trek.Strange.New.Worlds.S03E01.1080p.PMTP.WEB-DL.DDP5.1.H.264-NTb",
+      "expect": {
+        "title": "star trek strange new worlds",
+        "season": 3,
+        "episodes": [1]
+      }
+    },
+    {
+      "name": "S.W.A.T.S07E01.1080p.WEB.h264-ETHEL",
+      "expect": {
+        "title": "s w a t",
+        "season": 7,
+        "episodes": [1],
+        "release_group": "ETHEL"
+      },
+      "note": "single-letter dotted title; the S07E01 marker is what stops the cascade eating the whole name"
+    },
+    {
+      "name": "Yellowstone.2018.S05E14.1080p.WEB.h264-ELEANOR",
+      "expect": {
+        "title": "yellowstone",
+        "year": 2018,
+        "season": 5,
+        "episodes": [14]
+      }
+    },
+    {
+      "name": "The.Office.US.S03E09.720p.WEB-DL.AAC2.0.H.264-DOCERE",
+      "expect": {
+        "title": "the office us",
+        "season": 3,
+        "episodes": [9],
+        "resolution": "720p",
+        "audio_codec": "aac",
+        "video_codec": "x264"
+      }
+    },
+    {
+      "name": "Doctor.Who.2005.S13E06.1080p.HDTV.x264-ORGANiC",
+      "expect": {
+        "title": "doctor who",
+        "year": 2005,
+        "season": 13,
+        "episodes": [6],
+        "source": "hdtv"
+      }
+    },
+    {
+      "name": "Peaky.Blinders.S06E06.PROPER.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264-SMURF",
+      "expect": {
+        "title": "peaky blinders",
+        "season": 6,
+        "episodes": [6],
+        "proper": true,
+        "repack": false
+      }
+    },
+    {
+      "name": "Chernobyl.S01E05.REPACK.1080p.AMZN.WEB-DL.DD+5.1.H.264-SiGMA",
+      "expect": {
+        "title": "chernobyl",
+        "season": 1,
+        "episodes": [5],
+        "repack": true,
+        "proper": false
+      }
+    },
+    {
+      "name": "Arcane.S02E09.1080p.NF.WEB-DL.DUAL.DDP5.1.Atmos.H.264-FLUX",
+      "expect": {
+        "title": "arcane",
+        "season": 2,
+        "episodes": [9],
+        "audio_codec": "atmos"
+      }
+    },
+    {
+      "name": "The.Last.of.Us.S01E03.2160p.WEB-DL.DV.HDR.DDP5.1.Atmos.H.265-NTb",
+      "expect": {
+        "title": "the last of us",
+        "season": 1,
+        "episodes": [3],
+        "resolution": "2160p",
+        "hdr": ["dv", "hdr10"]
+      }
+    },
+    {
+      "name": "Reacher.S03E01.1080p.AMZN.WEB-DL.DDP.5.1.H.264-FLUX",
+      "expect": {
+        "title": "reacher",
+        "season": 3,
+        "episodes": [1],
+        "audio_codec": "ddp"
+      }
+    },
+    {
+      "name": "Ted.Lasso.S03E12.1080p.ATVP.WEB-DL.DDP5.1.H.264-NTb.mkv",
+      "expect": {
+        "title": "ted lasso",
+        "season": 3,
+        "episodes": [12],
+        "container": ".mkv",
+        "release_group": "NTb"
+      }
+    },
+    {
+      "name": "Succession.s04e10.1080p.web.h264-successfulcrab",
+      "expect": {
+        "title": "succession",
+        "season": 4,
+        "episodes": [10],
+        "release_group": "successfulcrab"
+      },
+      "note": "all-lowercase names occur in the wild; every pattern is case-insensitive"
+    },
+
+    {
+      "group": "multi-episode",
+      "name": "Show.Name.S01E01E02.1080p.WEB-DL.x264-GROUP",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1, 2],
+        "release_group": "GROUP"
+      }
+    },
+    {
+      "name": "Show.Name.S01E01-E03.1080p.WEB-DL.x264-GROUP",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1, 2, 3]
+      },
+      "note": "a dash means a RANGE, so episode 2 is in the file even though the name never says so"
+    },
+    {
+      "name": "Show.Name.S01E01-02.1080p.HDTV.x264",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1, 2]
+      }
+    },
+    {
+      "name": "Show.Name.S02E05E06E07.720p.HDTV.x264-LOL",
+      "expect": {
+        "title": "show name",
+        "season": 2,
+        "episodes": [5, 6, 7]
+      }
+    },
+    {
+      "name": "The.Expanse.S02E01-E13.1080p.BluRay.x265-GROUP",
+      "expect": {
+        "title": "the expanse",
+        "season": 2,
+        "episodes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      }
+    },
+    {
+      "name": "Show.Name.S01E01.1080p.WEB-DL.x264",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1]
+      },
+      "note": "regression guard: the -DL and the trailing -x264 must not read as an episode range"
+    },
+    {
+      "name": "Show.Name.S01E01-1080p.WEB-DL.x264-GROUP",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1]
+      },
+      "note": "without the negative lookahead this parsed as episodes 1 through 1080"
+    },
+    {
+      "name": "Show.Name.S01E01-720p.HDTV.x264",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1]
+      }
+    },
+    {
+      "name": "Show Name S01 E01-13 2017 WEBRip 1080p x264",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        "year": 2017,
+        "source": "webrip"
+      },
+      "note": "apibay shape: space between S01 and E01, dashed range, year after the marker"
+    },
+    {
+      "name": "Show.Name.1x02.720p.HDTV.x264-GROUP",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [2],
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "Show.Name.01x02x03.HDTV.XviD",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "episodes": [2, 3],
+        "video_codec": "xvid"
+      }
+    },
+    {
+      "name": "Some.Show.Season 2 Episode 5.1080p.WEB-DL",
+      "expect": {
+        "title": "some show",
+        "season": 2,
+        "episodes": [5],
+        "is_season_pack": false
+      },
+      "note": "the wordy form is tried before the bare-season pattern, which would otherwise call this a pack"
+    },
+
+    {
+      "group": "season packs",
+      "name": "The.Expanse.S01.1080p.BluRay.x265-RARBG",
+      "expect": {
+        "title": "the expanse",
+        "season": 1,
+        "episodes": [],
+        "is_season_pack": true,
+        "resolution": "1080p",
+        "source": "bluray"
+      }
+    },
+    {
+      "name": "The.Wire.Season.1.COMPLETE.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "title": "the wire",
+        "season": 1,
+        "is_season_pack": true
+      }
+    },
+    {
+      "name": "Band.of.Brothers.S01-S03.1080p.BluRay.x264",
+      "expect": {
+        "title": "band of brothers",
+        "season": 1,
+        "season_end": 3,
+        "is_season_pack": true
+      }
+    },
+    {
+      "name": "Some.Show.Seasons.1-5.720p.WEB-DL.x264",
+      "expect": {
+        "title": "some show",
+        "season": 1,
+        "season_end": 5,
+        "is_season_pack": true
+      }
+    },
+    {
+      "name": "Breaking.Bad.Complete.Series.1080p.BluRay.x265",
+      "expect": {
+        "title": "breaking bad",
+        "is_season_pack": true,
+        "season": 0
+      },
+      "note": "no season number is recoverable; the matcher rejects it for a specific episode"
+    },
+    {
+      "name": "The Expanse (2015) Season 01 S01 (1080p BluRay x265 HEVC 10bit A",
+      "expect": {
+        "title": "the expanse",
+        "year": 2015,
+        "season": 1,
+        "is_season_pack": true,
+        "resolution": "1080p",
+        "source": "bluray",
+        "video_codec": "x265",
+        "truncated": false
+      },
+      "note": "apibay, cut at 64 chars mid-word. Under 80 so the truncation flag cannot fire."
+    },
+    {
+      "name": "Wayne (2019) Season 1 S01 (1080p WEB-DL x265 HEVC 10bit AAC 5.1 t3nzin)",
+      "expect": {
+        "title": "wayne",
+        "year": 2019,
+        "season": 1,
+        "is_season_pack": true,
+        "resolution": "1080p",
+        "source": "webdl",
+        "video_codec": "x265"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "Some.Show.S01.2160p.NF.WEB-DL.DDP5.1.DV.HDR.H.265-FLUX",
+      "expect": {
+        "title": "some show",
+        "season": 1,
+        "is_season_pack": true,
+        "resolution": "2160p",
+        "hdr": ["dv", "hdr10"]
+      }
+    },
+    {
+      "name": "Fringe.S1.720p.BluRay.x264",
+      "expect": {
+        "title": "fringe",
+        "season": 1,
+        "is_season_pack": true
+      }
+    },
+    {
+      "name": "Dark.S02.COMPLETE.GERMAN.1080p.NF.WEBRip.x264",
+      "expect": {
+        "title": "dark",
+        "season": 2,
+        "is_season_pack": true,
+        "language": ["de"]
+      }
+    },
+    {
+      "name": "Some.Show.S03.Complete.Season.1080p.AMZN.WEBRip.DDP5.1.x264-Cinefeel",
+      "expect": {
+        "title": "some show",
+        "season": 3,
+        "is_season_pack": true,
+        "release_group": "Cinefeel"
+      }
+    },
+    {
+      "name": "Firefly.S01.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-EPSiLON",
+      "expect": {
+        "title": "firefly",
+        "season": 1,
+        "is_season_pack": true,
+        "source": "remux",
+        "audio_codec": "dts-hd",
+        "video_codec": "x264"
+      }
+    },
+    {
+      "name": "Rome.S01-02.1080p.BluRay.x265-GROUP",
+      "expect": {
+        "title": "rome",
+        "season": 1,
+        "season_end": 2,
+        "is_season_pack": true
+      }
+    },
+    {
+      "name": "The Expanse - Season 1 to 6 - Mp4 x264 AC3 1080p",
+      "expect": {
+        "title": "the expanse",
+        "season": 1,
+        "season_end": 6,
+        "is_season_pack": true,
+        "resolution": "1080p",
+        "video_codec": "x264",
+        "audio_codec": "dd"
+      },
+      "note": "real apibay row. 'Season 1 to 6' is not scene convention, but a spelled-out range still has to be read as one — otherwise this looks like a plain S01 pack."
+    },
+    {
+      "name": "Show.Name.S00.Specials.1080p.WEB-DL.x264",
+      "expect": {
+        "title": "show name",
+        "season": 0,
+        "is_season_pack": true
+      },
+      "note": "season zero is the specials convention; it must not be read as 'no season'"
+    },
+    {
+      "name": "Утро (2020) S01 1080p WEB-DL",
+      "expect": {
+        "title": "утро",
+        "year": 2020,
+        "season": 1,
+        "is_season_pack": true
+      },
+      "note": "non-Latin titles must survive normalisation; unicode letters are kept"
+    },
+
+    {
+      "group": "anime, absolute numbering",
+      "name": "[SubsPlease] Frieren - 28 (1080p) [F4E4A4C7].mkv",
+      "expect": {
+        "title": "frieren",
+        "absolute_ep": 28,
+        "resolution": "1080p",
+        "release_group": "SubsPlease",
+        "container": ".mkv"
+      }
+    },
+    {
+      "name": "[Erai-raws] One Piece - 1100 [1080p][Multiple Subtitle].mkv",
+      "expect": {
+        "title": "one piece",
+        "absolute_ep": 1100,
+        "resolution": "1080p",
+        "release_group": "Erai-raws"
+      }
+    },
+    {
+      "name": "[HorribleSubs] Boku no Hero Academia - 034 [720p].mkv",
+      "expect": {
+        "title": "boku no hero academia",
+        "absolute_ep": 34,
+        "resolution": "720p",
+        "release_group": "HorribleSubs"
+      }
+    },
+    {
+      "name": "[Judas] Jujutsu Kaisen - 47 (1080p) [x265 10bit AAC]",
+      "expect": {
+        "title": "jujutsu kaisen",
+        "absolute_ep": 47,
+        "video_codec": "x265",
+        "audio_codec": "aac",
+        "release_group": "Judas"
+      }
+    },
+    {
+      "name": "Frieren - 034v2 [1080p][HEVC].mkv",
+      "expect": {
+        "title": "frieren",
+        "absolute_ep": 34,
+        "video_codec": "x265"
+      },
+      "note": "v2 re-releases carry the version suffix on the episode number"
+    },
+    {
+      "name": "Mushoku.Tensei.E034.1080p.WEB.x264",
+      "expect": {
+        "title": "mushoku tensei",
+        "absolute_ep": 34,
+        "resolution": "1080p"
+      }
+    },
+    {
+      "name": "Some.Anime.EP012.720p.HDTV.x264",
+      "expect": {
+        "title": "some anime",
+        "absolute_ep": 12
+      }
+    },
+    {
+      "name": "[Anime Time] Steins Gate - 12 [BD][1080p][HEVC 10bit][Dual Audio]",
+      "expect": {
+        "title": "steins gate",
+        "absolute_ep": 12,
+        "source": "bluray",
+        "resolution": "1080p",
+        "release_group": "Anime Time"
+      }
+    },
+    {
+      "name": "[AnimeCreed] Akame ga Kill! [720p][Dual Audio][BD][Lucifer22]",
+      "expect": {
+        "title": "akame ga kill",
+        "resolution": "720p",
+        "source": "bluray",
+        "release_group": "AnimeCreed",
+        "absolute_ep": 0
+      },
+      "note": "real name from the user's NAS; a whole-series pack with no episode number at all"
+    },
+    {
+      "name": "[SubsPlease] Dan Da Dan - 05 (720p) [ABCD1234].mkv",
+      "expect": {
+        "title": "dan da dan",
+        "absolute_ep": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "One.Piece.1085.1080p.WEB.h264-KAWAII",
+      "expect": {
+        "title": "one piece 1085",
+        "absolute_ep": 0,
+        "resolution": "1080p",
+        "release_group": "KAWAII"
+      },
+      "pathological": true,
+      "note": "a bare number with no dash and no E is indistinguishable from part of the title, so it stays in the title. Matching such a release needs the series alias list."
+    },
+    {
+      "name": "[Cuervo] Vinland Saga - 24 (BD 1080p FLAC) [DualAudio]",
+      "expect": {
+        "title": "vinland saga",
+        "absolute_ep": 24,
+        "source": "bluray",
+        "audio_codec": "flac",
+        "release_group": "Cuervo"
+      }
+    },
+
+    {
+      "group": "anime, season and absolute together",
+      "name": "[Judas] Vinland Saga S2 - 07 (1080p) [Dual Audio]",
+      "expect": {
+        "title": "vinland saga",
+        "season": 2,
+        "absolute_ep": 7,
+        "is_season_pack": false,
+        "resolution": "1080p",
+        "release_group": "Judas"
+      },
+      "note": "the S2 wins the title boundary; the absolute number is then recovered from the remainder and the pack flag cleared"
+    },
+    {
+      "name": "[SubsPlease] Spy x Family S2 - 26 (1080p) [1A2B3C4D].mkv",
+      "expect": {
+        "season": 2,
+        "absolute_ep": 26,
+        "resolution": "1080p"
+      },
+      "note": "the 'x' in the title is a live hazard for the NxNN pattern"
+    },
+    {
+      "name": "Attack.on.Titan.S04E28.1080p.WEB.x264-GROUP",
+      "expect": {
+        "title": "attack on titan",
+        "season": 4,
+        "episodes": [28],
+        "absolute_ep": 0
+      }
+    },
+    {
+      "name": "Bleach.TYBW.S02E13.-.037.1080p.WEB.x264",
+      "expect": {
+        "title": "bleach tybw",
+        "season": 2,
+        "episodes": [13],
+        "absolute_ep": 37
+      },
+      "note": "both numbering schemes stated explicitly"
+    },
+    {
+      "name": "[Erai-raws] Kaiju No 8 S2 - 03 [1080p][HEVC]",
+      "expect": {
+        "season": 2,
+        "absolute_ep": 3,
+        "video_codec": "x265"
+      }
+    },
+    {
+      "name": "Demon.Slayer.S03.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG",
+      "expect": {
+        "title": "demon slayer",
+        "season": 3,
+        "is_season_pack": true,
+        "absolute_ep": 0,
+        "release_group": "VARYG"
+      }
+    },
+
+    {
+      "group": "daily shows",
+      "name": "The.Daily.Show.2024.03.15.1080p.WEB.h264-BAE",
+      "expect": {
+        "title": "the daily show",
+        "air_date": "2024-03-15",
+        "year": 0,
+        "resolution": "1080p",
+        "release_group": "BAE"
+      },
+      "note": "the date's year must not leak into the Year field"
+    },
+    {
+      "name": "The.Late.Show.2025-01-07.720p.WEB.x264-GROUP",
+      "expect": {
+        "title": "the late show",
+        "air_date": "2025-01-07",
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "Jeopardy.2024.11.21.1080p.HDTV.x264",
+      "expect": {
+        "title": "jeopardy",
+        "air_date": "2024-11-21",
+        "source": "hdtv"
+      }
+    },
+    {
+      "name": "Last.Week.Tonight.With.John.Oliver.S11E14.1080p.HMAX.WEB-DL.DD5.1.H.264",
+      "expect": {
+        "title": "last week tonight with john oliver",
+        "season": 11,
+        "episodes": [14],
+        "air_date": ""
+      },
+      "note": "some daily-ish shows are numbered conventionally; the SxxExx marker wins"
+    },
+    {
+      "name": "WWE.Raw.2025.02.03.720p.HDTV.x264-Star",
+      "expect": {
+        "title": "wwe raw",
+        "air_date": "2025-02-03"
+      }
+    },
+    {
+      "name": "Formula1.2024.Round22.Las.Vegas.GP.Race.1080p.F1TV.WEB-DL",
+      "expect": {
+        "title": "formula1",
+        "year": 2024,
+        "air_date": ""
+      },
+      "pathological": true,
+      "note": "sports naming has no episode grammar at all; this parses as a movie with year 2024. Sports are out of scope."
+    },
+    {
+      "name": "Conan.03.15.2024.1080p.WEB.x264",
+      "expect": {
+        "title": "conan",
+        "air_date": "2024-03-15"
+      },
+      "note": "US month-first ordering"
+    },
+    {
+      "name": "Some.Show.2024.13.45.1080p.WEB.x264",
+      "expect": {
+        "title": "some show",
+        "year": 2024,
+        "air_date": ""
+      },
+      "note": "month 13 and day 45 are rejected as a date, so this falls through to the movie-year rule"
+    },
+
+    {
+      "group": "movies with a year",
+      "name": "Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX",
+      "expect": {
+        "title": "dune part two",
+        "year": 2024,
+        "resolution": "2160p",
+        "source": "webdl",
+        "audio_codec": "atmos",
+        "hdr": ["dv", "hdr10"],
+        "video_codec": "x265",
+        "release_group": "FLUX"
+      }
+    },
+    {
+      "name": "Oppenheimer.2023.1080p.BluRay.x264-SbR",
+      "expect": {
+        "title": "oppenheimer",
+        "year": 2023,
+        "resolution": "1080p",
+        "source": "bluray",
+        "release_group": "SbR"
+      }
+    },
+    {
+      "name": "The.Matrix.1999.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FraMeSToR",
+      "expect": {
+        "title": "the matrix",
+        "year": 1999,
+        "source": "remux",
+        "audio_codec": "dts-hd",
+        "release_group": "FraMeSToR"
+      }
+    },
+    {
+      "name": "Sinners (2025) [1080p] [WEBRip] [x265] [10bit] [5.1] [YTS.MX]",
+      "expect": {
+        "title": "sinners",
+        "year": 2025,
+        "resolution": "1080p",
+        "source": "webrip",
+        "video_codec": "x265",
+        "release_group": "YTS.MX"
+      },
+      "note": "real name from the user's NAS; YTS puts every token in its own bracket"
+    },
+    {
+      "name": "A Minecraft Movie (2025) [1080p] [WEBRip] [x265] [10bit] [5.1] [YTS.MX]",
+      "expect": {
+        "title": "a minecraft movie",
+        "year": 2025,
+        "resolution": "1080p",
+        "release_group": "YTS.MX"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "Shutter.Island.2010.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265",
+      "expect": {
+        "title": "shutter island",
+        "year": 2010,
+        "resolution": "1080p",
+        "source": "bluray",
+        "audio_codec": "ddp",
+        "video_codec": "x265",
+        "release_group": "GalaxyRG265"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "Journey.to.Bethlehem.2023.1080p.AMZN.WEBRip.1400MB.DD5.1.x264-GalaxyRG",
+      "expect": {
+        "title": "journey to bethlehem",
+        "year": 2023,
+        "source": "webrip",
+        "audio_codec": "dd",
+        "release_group": "GalaxyRG"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "I Want to Eat Your Pancreas 2018 JAPANESE 1080p BluRay H264 AAC-VXT",
+      "expect": {
+        "title": "i want to eat your pancreas",
+        "year": 2018,
+        "language": ["ja"],
+        "resolution": "1080p",
+        "source": "bluray",
+        "video_codec": "x264",
+        "audio_codec": "aac",
+        "release_group": "VXT"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "Grown Ups (2010) [1080p]",
+      "expect": {
+        "title": "grown ups",
+        "year": 2010,
+        "resolution": "1080p"
+      },
+      "note": "real name from the user's NAS; minimal metadata"
+    },
+    {
+      "name": "Everything.Everywhere.All.at.Once.2022.2160p.UHD.BluRay.x265-TERMiNAL",
+      "expect": {
+        "title": "everything everywhere all at once",
+        "year": 2022,
+        "resolution": "2160p",
+        "source": "bluray",
+        "release_group": "TERMiNAL"
+      }
+    },
+    {
+      "name": "Godzilla.Minus.One.2023.JAPANESE.1080p.NF.WEB-DL.DDP5.1.x264-VARYG",
+      "expect": {
+        "title": "godzilla minus one",
+        "year": 2023,
+        "language": ["ja"]
+      }
+    },
+    {
+      "name": "Parasite.2019.KOREAN.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD.7.1-BLURANiUM",
+      "expect": {
+        "title": "parasite",
+        "year": 2019,
+        "language": ["ko"],
+        "source": "remux",
+        "audio_codec": "truehd",
+        "hdr": ["hdr10"]
+      }
+    },
+    {
+      "name": "Interstellar.2014.IMAX.2160p.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ",
+      "expect": {
+        "title": "interstellar",
+        "year": 2014,
+        "resolution": "2160p",
+        "audio_codec": "dts-hd",
+        "hdr": ["hdr10"]
+      }
+    },
+    {
+      "name": "Nosferatu.2024.1080p.WEBRip.DD5.1.x264-GROUP.mp4",
+      "expect": {
+        "title": "nosferatu",
+        "year": 2024,
+        "container": ".mp4",
+        "release_group": "GROUP"
+      }
+    },
+    {
+      "name": "Alien.Romulus.2024.PROPER.1080p.WEB-DL.DDP5.1.Atmos.H.264-FLUX",
+      "expect": {
+        "title": "alien romulus",
+        "year": 2024,
+        "proper": true
+      }
+    },
+    {
+      "name": "The.Substance.2024.REPACK.2160p.MUBI.WEB-DL.DDP5.1.H.265-GROUP",
+      "expect": {
+        "title": "the substance",
+        "year": 2024,
+        "repack": true
+      }
+    },
+    {
+      "name": "Wicked.2024.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv",
+      "expect": {
+        "title": "wicked",
+        "year": 2024,
+        "container": ".mkv"
+      }
+    },
+    {
+      "name": "Spider-Man.No.Way.Home.2021.1080p.BluRay.x264-VETO",
+      "expect": {
+        "title": "spider man no way home",
+        "year": 2021
+      },
+      "note": "the hyphen in the title normalises to a space, matching 'Spider Man'"
+    },
+    {
+      "name": "Mad.Max.Fury.Road.2015.2160p.UHD.BluRay.DV.HDR10Plus.TrueHD.7.1.Atmos-GROUP",
+      "expect": {
+        "title": "mad max fury road",
+        "year": 2015,
+        "hdr": ["dv", "hdr10plus"],
+        "audio_codec": "atmos"
+      },
+      "note": "HDR10Plus must not also register plain hdr10"
+    },
+    {
+      "name": "Léon.The.Professional.1994.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "title": "léon the professional",
+        "year": 1994
+      },
+      "note": "accented characters are preserved; they are unicode letters"
+    },
+
+    {
+      "group": "movies without a year",
+      "name": "Inception.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "title": "inception",
+        "year": 0,
+        "resolution": "1080p",
+        "source": "bluray"
+      }
+    },
+    {
+      "name": "The.Godfather.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD.7.1",
+      "expect": {
+        "title": "the godfather",
+        "year": 0,
+        "source": "remux"
+      }
+    },
+    {
+      "name": "Heat.1080p.BluRay.DTS.x264",
+      "expect": {
+        "title": "heat",
+        "year": 0,
+        "audio_codec": "dts"
+      }
+    },
+    {
+      "name": "Arrival.2160p.WEB-DL.DDP5.1.H.265",
+      "expect": {
+        "title": "arrival",
+        "year": 0,
+        "resolution": "2160p"
+      }
+    },
+    {
+      "name": "Whiplash.BluRay.1080p.DTS-HD.MA.5.1.AVC.REMUX",
+      "expect": {
+        "title": "whiplash",
+        "source": "remux",
+        "audio_codec": "dts-hd"
+      },
+      "note": "REMUX appears last but must still beat the earlier BluRay token"
+    },
+    {
+      "name": "Sicario.2160p.HDR.WEBRip.x265",
+      "expect": {
+        "title": "sicario",
+        "hdr": ["hdr10"],
+        "source": "webrip"
+      }
+    },
+
+    {
+      "group": "titles that contain or are years",
+      "name": "1917.2019.1080p.BluRay.x264-SPARKS",
+      "expect": {
+        "title": "1917",
+        "year": 2019,
+        "release_group": "SPARKS"
+      },
+      "note": "adjacent-year rule: the second of two touching years is the release year"
+    },
+    {
+      "name": "2012.2009.1080p.BluRay.x264-REFiNED",
+      "expect": {
+        "title": "2012",
+        "year": 2009
+      }
+    },
+    {
+      "name": "Blade.Runner.2049.2017.2160p.UHD.BluRay.REMUX.HDR.DTS-HD.MA.7.1-FraMeSToR",
+      "expect": {
+        "title": "blade runner 2049",
+        "year": 2017,
+        "source": "remux",
+        "hdr": ["hdr10"],
+        "audio_codec": "dts-hd"
+      },
+      "note": "the case the naive 'first year wins' rule gets wrong"
+    },
+    {
+      "name": "Blade.Runner.2049.(2017).2160p.BluRay.x265",
+      "expect": {
+        "title": "blade runner 2049",
+        "year": 2017
+      },
+      "note": "parenthesised year is an explicit marker and outranks the adjacency rule"
+    },
+    {
+      "name": "1984.1984.1080p.BluRay.x264",
+      "expect": {
+        "title": "1984",
+        "year": 1984
+      },
+      "note": "the title and the year are the same number"
+    },
+    {
+      "name": "2001.A.Space.Odyssey.1968.2160p.UHD.BluRay.REMUX.HDR.HEVC",
+      "expect": {
+        "title": "2001 a space odyssey",
+        "year": 1968
+      },
+      "note": "not adjacent, so the rule falls through to 'first year leaving a non-empty title' — which here is 2001, not 1968"
+    },
+    {
+      "name": "1917.1080p.BluRay.x264-SPARKS",
+      "expect": {
+        "title": "1917",
+        "year": 0
+      },
+      "note": "a lone year-like token with nothing before it stays as the title"
+    },
+    {
+      "name": "300.2006.1080p.BluRay.x264",
+      "expect": {
+        "title": "300",
+        "year": 2006
+      }
+    },
+    {
+      "name": "The.Hateful.Eight.2015.1080p.BluRay.x264",
+      "expect": {
+        "title": "the hateful eight",
+        "year": 2015
+      }
+    },
+    {
+      "name": "9.1917.1080p.BluRay.x264",
+      "expect": {
+        "title": "9",
+        "year": 1917
+      },
+      "note": "single-digit title followed by a year"
+    },
+
+    {
+      "group": "titles that look like season markers",
+      "name": "Se7en.1995.1080p.BluRay.x264-CiNEFiLE",
+      "expect": {
+        "title": "se7en",
+        "year": 1995,
+        "season": 0,
+        "episodes": [],
+        "release_group": "CiNEFiLE"
+      },
+      "note": "the S is followed by a letter, so no season pattern can fire"
+    },
+    {
+      "name": "Sense8.S01.COMPLETE.1080p.NF.WEBRip.DD5.1.x264-NTb",
+      "expect": {
+        "title": "sense8",
+        "season": 1,
+        "is_season_pack": true,
+        "audio_codec": "dd",
+        "release_group": "NTb"
+      },
+      "note": "the digit inside the title must not be mistaken for the season"
+    },
+    {
+      "name": "S1m0ne.2002.1080p.WEB-DL.x264",
+      "expect": {
+        "title": "s1m0ne",
+        "year": 2002,
+        "season": 0
+      },
+      "pathological": true,
+      "note": "'S1' is followed by 'm', so the word-boundary requirement saves us. A title like 'S1 Something' would not be so lucky."
+    },
+    {
+      "name": "District.9.2009.1080p.BluRay.x264",
+      "expect": {
+        "title": "district 9",
+        "year": 2009,
+        "season": 0
+      }
+    },
+    {
+      "name": "Sen.to.Chihiro.2001.1080p.BluRay.x264",
+      "expect": {
+        "title": "sen to chihiro",
+        "year": 2001,
+        "season": 0
+      }
+    },
+    {
+      "name": "Ocean's.Eleven.2001.1080p.BluRay.x264",
+      "expect": {
+        "title": "oceans eleven",
+        "year": 2001
+      }
+    },
+    {
+      "name": "S.Darko.2009.1080p.WEB-DL.x264",
+      "expect": {
+        "title": "s darko",
+        "year": 2009,
+        "season": 0
+      },
+      "note": "a lone S becomes its own token after separator normalisation and still must not match"
+    },
+    {
+      "name": "The.100.S01E01.720p.HDTV.x264-2HD",
+      "expect": {
+        "title": "the 100",
+        "season": 1,
+        "episodes": [1],
+        "release_group": "2HD"
+      },
+      "note": "a numeric title next to a real episode marker"
+    },
+
+    {
+      "group": "remux, proper, repack",
+      "name": "Sicario.2015.2160p.UHD.BluRay.REMUX.HDR10.HEVC.TrueHD.7.1.Atmos-BLURANiUM",
+      "expect": {
+        "source": "remux",
+        "hdr": ["hdr10"],
+        "audio_codec": "atmos"
+      }
+    },
+    {
+      "name": "Show.Name.S01E01.PROPER.REPACK.1080p.WEB-DL.x264-GROUP",
+      "expect": {
+        "proper": true,
+        "repack": true
+      },
+      "note": "both flags can be present at once"
+    },
+    {
+      "name": "Show.Name.S01E01.REPACK2.1080p.AMZN.WEB-DL.x264-NTb",
+      "expect": {
+        "repack": true
+      },
+      "note": "numbered repacks exist"
+    },
+    {
+      "name": "Movie.Name.2024.PROPER.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "title": "movie name",
+        "year": 2024,
+        "proper": true
+      }
+    },
+    {
+      "name": "Movie.Name.2024.1080p.BluRay.x264-PROPER",
+      "expect": {
+        "title": "movie name",
+        "proper": true,
+        "release_group": "PROPER"
+      },
+      "pathological": true,
+      "note": "PROPER in the group position is read as both the flag and the group name. Harmless: no real group is called PROPER, and the flag is correct."
+    },
+    {
+      "name": "Show.Name.S01E01.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-EPSiLON",
+      "expect": {
+        "source": "remux",
+        "video_codec": "x264",
+        "audio_codec": "dts-hd"
+      },
+      "note": "AVC maps to x264; REMUX beats BluRay"
+    },
+    {
+      "name": "Movie.2020.1080p.BDRemux.DTS-HD.MA.x264",
+      "expect": {
+        "source": "remux"
+      }
+    },
+    {
+      "name": "Movie.2020.1080p.BDRip.x264",
+      "expect": {
+        "source": "bluray"
+      }
+    },
+    {
+      "name": "Movie.2020.1080p.BRRip.XviD.AC3",
+      "expect": {
+        "source": "bluray",
+        "video_codec": "xvid",
+        "audio_codec": "dd"
+      }
+    },
+    {
+      "name": "Movie.2020.480p.DVDRip.XviD.AC3-GROUP",
+      "expect": {
+        "resolution": "480p",
+        "source": "dvd",
+        "video_codec": "xvid"
+      }
+    },
+
+    {
+      "group": "cam and banned sources",
+      "name": "New.Movie.2025.1080p.HDCAM.x264-GROUP",
+      "expect": {
+        "title": "new movie",
+        "year": 2025,
+        "resolution": "1080p",
+        "source": "cam"
+      },
+      "note": "the 1080p must not let the source look better than a cam"
+    },
+    {
+      "name": "New.Movie.2025.HDTS.1080p.x264",
+      "expect": {
+        "source": "cam"
+      }
+    },
+    {
+      "name": "New.Movie.2025.TELESYNC.720p.x264",
+      "expect": {
+        "source": "cam"
+      }
+    },
+    {
+      "name": "New.Movie.2025.DVDSCR.XviD",
+      "expect": {
+        "source": "cam"
+      }
+    },
+    {
+      "name": "New.Movie.2025.1080p.WEB-DL.HDCAM.x264",
+      "expect": {
+        "source": "cam"
+      },
+      "note": "a cam marker is never upgraded by a better-sounding token elsewhere in the name"
+    },
+
+    {
+      "group": "multi-language",
+      "name": "Movie.Name.2021.MULTi.VFF.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "title": "movie name",
+        "language": ["fr"]
+      }
+    },
+    {
+      "name": "Movie.Name.2021.FRENCH.1080p.BluRay.x264-GROUP",
+      "expect": {
+        "language": ["fr"]
+      }
+    },
+    {
+      "name": "GERMAN.Movie.Name.2021.1080p.BluRay.x264",
+      "expect": {
+        "title": "german movie name",
+        "language": ["de"]
+      },
+      "pathological": true,
+      "note": "a leading language marker is part of the title slice, because the boundary is set by the year. The language is still detected, since flags are scanned over the whole name."
+    },
+    {
+      "name": "Show Name - S01 E01-10 (2015) WEBRip 1080p x264 EAC3 ITA ENG SUB ITA ENG",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "year": 2015,
+        "audio_codec": "ddp",
+        "language": ["en", "it"]
+      },
+      "note": "apibay shape. 'SUB ITA' and 'SUB ENG' are subtitle tracks and must not add languages twice."
+    },
+    {
+      "name": "Movie.2019.ITA.ENG.1080p.BluRay.x264",
+      "expect": {
+        "language": ["en", "it"]
+      }
+    },
+    {
+      "name": "Movie.2019.1080p.BluRay.x264.SUB.ITA",
+      "expect": {
+        "language": []
+      },
+      "note": "subtitle-only markers contribute no audio language"
+    },
+    {
+      "name": "Movie.2019.RUSSIAN.1080p.WEB-DL.x264",
+      "expect": {
+        "language": ["ru"]
+      }
+    },
+    {
+      "name": "Movie.2019.1080p.BluRay.x264.KOREAN.JAPANESE",
+      "expect": {
+        "language": ["ja", "ko"]
+      },
+      "note": "language list is sorted so comparisons are order-independent"
+    },
+    {
+      "name": "Show.S01E01.1080p.NF.WEB-DL.DUAL.AUDIO.DDP5.1.x264",
+      "expect": {
+        "language": []
+      },
+      "note": "'DUAL AUDIO' says there are two but not which, so nothing is recorded rather than a guess"
+    },
+    {
+      "name": "Movie.2019.VOSTFR.1080p.WEB-DL.x264",
+      "expect": {
+        "language": ["fr"]
+      },
+      "pathological": true,
+      "note": "VOSTFR means original audio with French subtitles, so 'fr' overstates it. Accepted: French speakers do want these."
+    },
+
+    {
+      "group": "apibay-truncated and dot-stripped",
+      "name": "FROM S04E06 The Heart Is A Lonely Hunter 1080p AMZN WEB-DL DDP5 1 H 264-FLUX",
+      "expect": {
+        "title": "from",
+        "season": 4,
+        "episodes": [6],
+        "resolution": "1080p",
+        "source": "webdl",
+        "audio_codec": "ddp",
+        "video_codec": "x264",
+        "release_group": "FLUX"
+      },
+      "note": "real apibay name from the user's NAS. Dots are already spaces, so 'DDP5 1' and 'H 264' need the two-token lookahead."
+    },
+    {
+      "name": "From.S04E07.1080p.WEB.h264-GRACE",
+      "expect": {
+        "title": "from",
+        "season": 4,
+        "episodes": [7],
+        "release_group": "GRACE"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "Will Trent S04E15 The Blank Expanse of Nothing 1080p DSNP WEB-DL DD 5 1 H 2",
+      "expect": {
+        "title": "will trent",
+        "season": 4,
+        "episodes": [15],
+        "resolution": "1080p",
+        "source": "webdl",
+        "audio_codec": "dd",
+        "truncated": false
+      },
+      "note": "real apibay name, cut at 74 chars mid-token: 'H 2' is a severed 'H 264', so the video codec is unknowable"
+    },
+    {
+      "name": "Show Name - S01 E01-10 (2015) WEBRip 1080p x264 EAC3 ITA ENG SUB ITA ENG - Lul",
+      "expect": {
+        "title": "show name",
+        "season": 1,
+        "release_group": ""
+      },
+      "note": "apibay appends the uploader as ' - Lul(loz)'. The no-space-before-dash rule keeps it out of the group field, which preferred_groups scoring depends on."
+    },
+    {
+      "name": "The Expanse - S02 E01-13 (2017) WEBRip 1080p x264 EAC3 ITA ENG SUB ITA ENG - Lul",
+      "expect": {
+        "title": "the expanse",
+        "season": 2,
+        "episodes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        "year": 2017,
+        "release_group": "",
+        "truncated": true
+      },
+      "note": "real apibay row, exactly 80 characters, so the truncation flag fires"
+    },
+    {
+      "name": "www.UIndex.org    -    From.S04E01.1080p.WEB.h264-ETHEL",
+      "expect": {
+        "title": "from",
+        "season": 4,
+        "episodes": [1],
+        "release_group": "ETHEL"
+      },
+      "note": "real name from the user's NAS; the tracker prefix is stripped from the title"
+    },
+    {
+      "name": "www.UIndex.org    -    the.legend.of.aang.the.last.airbender.2026.1080p.web-dl.aac2.0.h264-ngp",
+      "expect": {
+        "title": "the legend of aang the last airbender",
+        "year": 2026,
+        "resolution": "1080p",
+        "source": "webdl",
+        "video_codec": "x264",
+        "release_group": "ngp"
+      },
+      "note": "real name from the user's NAS"
+    },
+    {
+      "name": "From.S04E08.1080p.WEB.h264-ETHEL[EZTVx.to].mkv",
+      "expect": {
+        "title": "from",
+        "season": 4,
+        "episodes": [8],
+        "release_group": "ETHEL",
+        "container": ".mkv"
+      },
+      "note": "real name from the user's NAS; the site tag sits between the group and the extension"
+    },
+    {
+      "name": "Show Name S01E01 1080p WEB h264-GROUP[TGx]",
+      "expect": {
+        "release_group": "GROUP"
+      }
+    },
+    {
+      "name": "Show Name S01E01 1080p HDTV x264-GROUP[rartv]",
+      "expect": {
+        "release_group": "GROUP"
+      }
+    },
+    {
+      "name": "Movie Name 2024 1080p WEBRip DDP5 1 x265 10bit-GalaxyRG265[TGx]",
+      "expect": {
+        "title": "movie name",
+        "year": 2024,
+        "audio_codec": "ddp",
+        "video_codec": "x265",
+        "release_group": "GalaxyRG265"
+      }
+    },
+    {
+      "name": "Some Show S01E01 1080p WEB DL DDP5 1 H 265",
+      "expect": {
+        "source": "webdl",
+        "audio_codec": "ddp",
+        "video_codec": "x265"
+      },
+      "note": "fully dot-stripped: WEB DL, DDP5 1 and H 265 all need the pair lookahead"
+    },
+
+    {
+      "group": "pathological",
+      "name": "",
+      "expect": {
+        "title": "",
+        "season": 0
+      },
+      "pathological": true,
+      "note": "empty input must not panic"
+    },
+    {
+      "name": "..........",
+      "expect": {
+        "title": ""
+      },
+      "pathological": true,
+      "note": "separators only; nothing survives normalisation"
+    },
+    {
+      "name": "1080p",
+      "expect": {
+        "title": "1080p",
+        "resolution": ""
+      },
+      "pathological": true,
+      "note": "with no boundary marker the whole name is the title, so the quality token is never reached. Unmatchable, which is the correct outcome."
+    },
+    {
+      "name": "S01E01",
+      "expect": {
+        "title": "",
+        "season": 1,
+        "episodes": [1]
+      },
+      "pathological": true,
+      "note": "numbering with no title. The matcher rejects it on the empty title."
+    },
+    {
+      "name": "[GroupOnly]",
+      "expect": {
+        "title": "",
+        "release_group": "GroupOnly"
+      },
+      "pathological": true
+    },
+    {
+      "name": "Show.Name.S99E99.1080p.WEB-DL.x264",
+      "expect": {
+        "season": 99,
+        "episodes": [99]
+      },
+      "pathological": true,
+      "note": "absurd but well-formed numbering is accepted; sanity limits belong in the matcher, not the parser"
+    },
+    {
+      "name": "Show.Name.S2024E01.1080p.WEB-DL.x264",
+      "expect": {
+        "season": 2024,
+        "episodes": [1]
+      },
+      "pathological": true,
+      "note": "year-as-season happens with some anthology naming"
+    },
+    {
+      "name": "Movie.Title.2020.2021.1080p.BluRay.x264",
+      "expect": {
+        "title": "movie title 2020",
+        "year": 2021
+      },
+      "pathological": true,
+      "note": "the adjacency rule cannot tell this from 'Blade Runner 2049 2017'. Two touching years are genuinely ambiguous."
+    },
+    {
+      "name": "4K.Ultra.HD.Movie.2020.2160p.BluRay",
+      "expect": {
+        "title": "4k ultra hd movie",
+        "year": 2020,
+        "resolution": "2160p"
+      },
+      "pathological": true,
+      "note": "quality words inside the title survive, because everything before the year boundary is the title"
+    },
+    {
+      "name": "Show.Name.Complete.Season.1080p.WEB-DL.x264",
+      "expect": {
+        "season": 0,
+        "is_season_pack": false
+      },
+      "pathological": true,
+      "note": "'Complete Season' with no number yields no season at all. Only 'Complete Series' and 'Complete Collection' set the pack flag."
+    },
+    {
+      "name": "Show - 1080 - Episode Title.mkv",
+      "expect": {
+        "title": "show",
+        "absolute_ep": 1080
+      },
+      "pathological": true,
+      "note": "a dashed number that is not an episode still reads as absolute numbering. Anime numbering and hyphenated titles are not distinguishable from the name alone."
+    },
+    {
+      "name": "01.Track.Name.mp3",
+      "expect": {
+        "container": ""
+      },
+      "pathological": true,
+      "note": "music files reach the parser only through a misconfigured category; .mp3 is not in the container list so nothing is stripped"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+# Architecture
+
+Reelay is one Go process with an embedded Vite application and a local SQLite
+database. Concrete clients are constructed in `cmd/reelay`; the engine only
+depends on the `Indexer`, `Downloader`, metadata, and importer interfaces.
+
+## Search to import
+
+1. The metadata loop refreshes followed TVmaze series and creates episode rows.
+   Monitoring rules move an episode to `wanted` only after air time plus grace.
+2. The search loop selects due rows, groups them by title, and queries healthy
+   indexers under a bounded semaphore. Every item is protected by a leased
+   SQLite advisory lock.
+3. Parser output passes through hard filters before accepted releases receive a
+   weighted score. All accepted and rejected decisions are persisted.
+4. The winner is added to the downloader with a Reelay-owned category. The grab
+   and `searching -> grabbed` transition are committed together.
+5. The status loop advances progress, detects no-progress stalls, blacklists a
+   failed info hash, and returns the item to `wanted` with backoff.
+6. At completion the importer maps the client path, discovers media files,
+   hardlinks or checksum-copies them into the library, carries subtitles, and
+   commits `importing -> imported` with the final path.
+7. Each transition and progress update is published to the bounded SSE bus. The
+   database remains authoritative if a browser misses an event.
+
+## State machine
+
+```text
+unmonitored -> wanted -> searching -> grabbed -> downloading -> importing -> imported
+                  ^          |             |                         |
+                  |          +-- no match -+                         +-> import_failed
+                  +-- retry/backoff/stall -------------------------------+
+
+wanted/searching -> failed after the configured give-up period
+failed/import_failed/imported -> wanted only by retry or upgrade
+```
+
+Every edge is validated in `model.ItemState.CanTransitionTo` and recorded in
+`state_transitions` with a reason. Loops use compare-and-update writes plus item
+leases, so duplicate manual and ticker invocations remain idempotent.
+
+## Storage and memory
+
+SQLite runs in WAL mode with one writer connection, a small configurable page
+cache, and two bounded read connections by default. Indexer JSON is decoded as
+a stream, search concurrency is bounded, due queries are limited, and SSE has a
+hard client cap. These choices are required for the 256 MB Synology target.
+
+## Filesystem boundary
+
+Configuration validation rejects unsafe roots. The importer resolves every
+destination relative to its configured root before creating, replacing, or
+deleting anything. Startup probes hardlinks between each mapped download path
+and library root. NFS with both paths in one export is recommended; SMB commonly
+falls back to a verified copy.
+

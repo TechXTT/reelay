@@ -1,0 +1,24 @@
+[Unit]
+Description=Reelay release watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reelay
+Group=reelay
+WorkingDirectory=/var/lib/reelay
+ExecStart=/usr/local/bin/reelay --config /etc/reelay/config.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/reelay /srv/media
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: web build
+        working-directory: web
+        run: npm ci && npm run build
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: latest
+          install-go: false
+
+      - name: test
+        run: go test ./...
+
+      # The race detector needs cgo. It runs here rather than on a Windows dev
+      # box, where a 64-bit host compiler is often missing.
+      - name: test -race
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: coverage
+        run: |
+          go test -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -n 30
+
+  cross:
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, goarm: "" }
+          - { goos: linux, goarch: arm64, goarm: "" }
+          # The Synology DS214se: Marvell Armada 370, 32-bit ARMv7.
+          - { goos: linux, goarch: arm, goarm: "7" }
+          - { goos: windows, goarch: amd64, goarm: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: build ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/TechXTT/reelay/internal/buildinfo.Version=${GITHUB_SHA::7}" \
+            -o "reelay-${GOOS}-${GOARCH}${GOARM}" ./cmd/reelay
+          ls -la reelay-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reelay-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}
+          path: reelay-*
+          retention-days: 7

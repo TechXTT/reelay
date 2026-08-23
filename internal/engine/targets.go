@@ -1,0 +1,104 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/TechXTT/reelay/internal/indexer"
+	"github.com/TechXTT/reelay/internal/model"
+)
+
+type searchTarget struct {
+	subject     model.SubjectType
+	id          int64
+	want        model.Wanted
+	profile     model.QualityProfile
+	runtime     int
+	attempts    int
+	firstWanted *time.Time
+	category    string
+	savePath    string
+	imported    string
+}
+
+func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
+	now := e.clock.Now().UTC()
+	movies, err := e.store.Movies().WantedDue(ctx, now, 500)
+	if err != nil {
+		return nil, err
+	}
+	episodes, err := e.store.Episodes().WantedDue(ctx, now, 1000)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchTarget, 0, len(movies)+len(episodes))
+	profiles := map[int64]model.QualityProfile{}
+	profile := func(id int64) (model.QualityProfile, error) {
+		if p, ok := profiles[id]; ok {
+			return p, nil
+		}
+		p, err := e.store.Profiles().Get(ctx, id)
+		if err == nil {
+			profiles[id] = p
+		}
+		return p, err
+	}
+	for _, movie := range movies {
+		p, err := profile(movie.ProfileID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, searchTarget{subject: model.SubjectMovie, id: movie.ID,
+			want:    model.Wanted{Kind: model.SubjectMovie, Title: movie.Title, Year: movie.Year},
+			profile: p, runtime: movie.RuntimeMinutes, attempts: movie.SearchAttempts,
+			firstWanted: movie.FirstWantedAt, category: e.cfg.Downloader.CategoryMovies,
+			savePath: e.cfg.Downloader.SavePathMovies, imported: movie.ImportedQuality})
+	}
+	seriesCache := map[int64]model.Series{}
+	for _, episode := range episodes {
+		series, ok := seriesCache[episode.SeriesID]
+		if !ok {
+			series, err = e.store.Series().Get(ctx, episode.SeriesID)
+			if err != nil {
+				return nil, err
+			}
+			seriesCache[episode.SeriesID] = series
+		}
+		p, err := profile(series.ProfileID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, searchTarget{subject: model.SubjectEpisode, id: episode.ID,
+			want: model.Wanted{Kind: model.SubjectEpisode, Title: series.Title,
+				Aliases: series.Aliases, Season: episode.Season, Episode: episode.Number,
+				AbsoluteEp: episode.AbsoluteNumber, IsAnime: series.IsAnime},
+			profile: p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
+			firstWanted: episode.FirstWantedAt, category: e.cfg.Downloader.CategoryTV,
+			savePath: e.cfg.Downloader.SavePathTV, imported: episode.ImportedQuality})
+	}
+	return out, nil
+}
+
+func targetKey(t searchTarget) string {
+	return fmt.Sprintf("%s:%t", strings.ToLower(strings.TrimSpace(t.want.Title)), t.want.IsAnime)
+}
+
+func targetQuery(t searchTarget) string {
+	if t.subject == model.SubjectMovie && t.want.Year > 0 {
+		return fmt.Sprintf("%s %d", t.want.Title, t.want.Year)
+	}
+	return t.want.Title
+}
+
+func targetCategories(t searchTarget) []int {
+	if t.subject == model.SubjectMovie {
+		return []int{indexer.CatMovies, indexer.CatMoviesDVDR, indexer.CatMoviesHD}
+	}
+	cats := []int{indexer.CatTVShows, indexer.CatTVShowsHD}
+	if t.want.IsAnime {
+		cats = append(cats, indexer.CatVideoOther)
+	}
+	return cats
+}

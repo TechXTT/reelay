@@ -1,0 +1,19 @@
+/bin/
+/dist/
+/data/
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# frontend
+/web/node_modules/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+coverage
+coverage.out
+*.cover

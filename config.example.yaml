@@ -1,0 +1,294 @@
+# ============================================================================
+# Reelay — example configuration
+#
+# Copy to config.yaml and edit. Reelay validates this file exhaustively at
+# startup and exits non-zero naming every offending key. There are no silent
+# defaults for paths or credentials.
+#
+# ENV OVERRIDES
+#   Any scalar key can be overridden by REELAY_<PATH>, uppercased, with dots
+#   replaced by underscores:
+#       server.auth_token        -> REELAY_SERVER_AUTH_TOKEN
+#       downloader.password      -> REELAY_DOWNLOADER_PASSWORD
+#       library.tv_root          -> REELAY_LIBRARY_TV_ROOT
+#       runtime.sqlite_cache_kb  -> REELAY_RUNTIME_SQLITE_CACHE_KB
+#   String lists take a comma-separated value:
+#       REELAY_SERVER_CORS_ORIGINS="http://a.local,http://b.local"
+#   Lists of objects (indexers, profiles, path_mappings) are file-only —
+#   there is no env syntax for them.
+# ============================================================================
+
+server:
+  # 127.0.0.1 keeps Reelay off the network. Use 0.0.0.0 only together with a
+  # non-empty auth_token — Reelay refuses to start otherwise.
+  bind: "127.0.0.1"
+  port: 7878
+
+  # Static bearer token. Required on every /api/* request except /api/v1/ping
+  # (an unauthenticated liveness probe that returns no information).
+  # Generate one with:  openssl rand -hex 32
+  auth_token: ""
+
+  # Browser origins allowed to call the API. Empty = same-origin only, which is
+  # what you want when the embedded UI is served by Reelay itself.
+  cors_origins: []
+
+  read_timeout: 15s
+  write_timeout: 0s # 0 = no write deadline; required for SSE to stay open
+  shutdown_timeout: 10s
+
+database:
+  # MUST live on a local filesystem. SQLite WAL is not safe over SMB or NFS;
+  # Reelay warns loudly if this path looks like a network location.
+  path: "./data/reelay.db"
+
+logging:
+  level: info # debug | info | warn | error
+  format: json # json | text   (--dev forces text)
+
+runtime:
+  # SQLite page cache per connection, in KiB. 2048 = 2 MiB.
+  # Drop to 512 for the 256 MB NAS (topology B).
+  sqlite_cache_kb: 2048
+
+  # Max concurrent indexer searches. 1 on the NAS, 4 on a desktop.
+  search_concurrency: 4
+
+  # SSE fan-out cap. Each client holds a goroutine and a buffered channel.
+  max_sse_clients: 4
+
+  # Rows older than this are pruned from state_transitions on startup and
+  # daily thereafter. 0 disables pruning (the table only ever grows).
+  audit_retention: 2160h # 90 days
+
+# ----------------------------------------------------------------------------
+# Indexers. Each entry is polled independently and circuit-broken independently.
+# ----------------------------------------------------------------------------
+indexers:
+  - name: tpb
+    type: piratebay # the only implemented type today
+    enabled: true
+
+    # Mirrors change. This is config, never a compiled-in constant.
+    base_url: "https://apibay.org"
+
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    # Outbound request budget. 0.1/s + burst 1 == one request every ten seconds.
+    #
+    # This is deliberately slow, and measured rather than guessed. The API
+    # throttles by returning its "No results returned" row — the same response
+    # it uses for a genuine miss — and novel queries three or four seconds
+    # apart start coming back that way. A 45-second pause clears it. Repeated
+    # identical queries are served from cache and never trip it, which makes
+    # the throttling easy to miss when testing by hand.
+    #
+    # Raising this does not get you more results; it gets you fewer, silently.
+    rate_limit_per_second: 0.1
+    rate_limit_burst: 1
+
+    request_timeout: 15s
+    max_retries: 3 # 5xx and network errors only; a 4xx is never retried
+
+    # Circuit breaker: N consecutive failures -> unhealthy for this long.
+    failure_threshold: 5
+    breaker_cooldown: 15m
+
+    # Appended as &tr= parameters to every magnet built from an info_hash.
+    trackers:
+      - "udp://tracker.opentrackr.org:1337/announce"
+      - "udp://open.demonii.com:1337/announce"
+      - "udp://open.stealth.si:80/announce"
+      - "udp://tracker.torrent.eu.org:451/announce"
+      - "udp://exodus.desync.com:6969/announce"
+      - "udp://tracker.dler.org:6969/announce"
+
+# ----------------------------------------------------------------------------
+# Download client.
+# ----------------------------------------------------------------------------
+downloader:
+  type: qbittorrent # qbittorrent (transmission is the planned second impl)
+  url: "http://127.0.0.1:8080"
+  username: "admin"
+  password: "" # prefer REELAY_DOWNLOADER_PASSWORD over storing it here
+
+  # Reelay only ever acts on torrents carrying one of these categories.
+  # A torrent without a Reelay category is invisible to it. This is a hard
+  # safety rule, not a preference.
+  category_tv: "reelay-tv"
+  category_movies: "reelay-movies"
+
+  # Where the client should save. These are paths as the CLIENT sees them.
+  #
+  # HARDLINK RULE: each save path must sit on the same filesystem as the
+  # library root it feeds. On a NAS that means *inside the same share* — you
+  # cannot hardlink from //nas/Downloads into //nas/Series, even when both live
+  # on one physical volume, because SMB expresses a link relative to the share.
+  # Dot-prefix the folder and put a `.ignore` file in it so Jellyfin/Plex skip
+  # it while scanning the surrounding library.
+  save_path_tv: "//nas/Series/.reelay-downloads"
+  save_path_movies: "//nas/Movies/.reelay-downloads"
+
+  add_paused: false
+
+  # A grab that has not reached 1% within this window is treated as stalled:
+  # removed from the client, its info_hash blacklisted for that item, and the
+  # item returned to `wanted` so a different release is chosen next round.
+  stall_timeout: 2h
+
+  # Translate paths reported by the client into paths Reelay can open.
+  # Needed when the client runs in a container or on another host. Longest
+  # matching downloader_prefix wins. Empty list = no translation.
+  path_mappings: []
+  # path_mappings:
+  #   - downloader_prefix: "/downloads"
+  #     local_prefix: "D:/downloads"
+
+# ----------------------------------------------------------------------------
+# Metadata providers. Responses are cached in SQLite with a TTL; no metadata
+# call ever happens inside the search hot path.
+# ----------------------------------------------------------------------------
+metadata:
+  # Movies. Without a key Reelay degrades to the title+year you typed.
+  tmdb_api_key: ""
+  tmdb_base_url: "https://api.themoviedb.org/3"
+
+  # Series episode lists. No key required.
+  tvmaze_base_url: "https://api.tvmaze.com"
+
+  cache_ttl: 24h
+  request_timeout: 15s
+
+# ----------------------------------------------------------------------------
+# Library layout. Reelay never writes outside these roots and never deletes
+# the download source.
+# ----------------------------------------------------------------------------
+library:
+  # UNC paths: write them with FORWARD slashes, or single-quote them.
+  # In double-quoted YAML a backslash is an escape character, so
+  # "\\nas\Series" is a parse error waiting to happen.
+  tv_root: "//nas/Series"
+  movie_root: "//nas/Movies"
+
+  # Hardlink so the client can keep seeding without a second copy on disk.
+  # Verified at startup per root (see /api/v1/health -> components).
+  # On failure Reelay falls back to copy+verify. It only moves if you say so.
+  hardlink: true
+  allow_move: false
+
+  # A folder NAME, not a path. Created inside whichever library root holds the
+  # file being replaced, so an upgrade is a rename instead of a copy. With two
+  # roots on two shares a single absolute path could only ever be same-volume
+  # for one of them. Empty string = delete outright (not recommended).
+  recycle_dir: ".reelay-recycle"
+
+  min_video_size_mb: 50
+  video_extensions: [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
+  subtitle_extensions: [".srt", ".ass", ".ssa", ".sub", ".idx"]
+
+  # Path segments that disqualify a file regardless of size.
+  ignore_patterns: ["sample", "extras", "featurette", "trailer", "proof"]
+
+  # Named placeholders. Unknown placeholders are a startup error.
+  # Available: {Title} {Year} {Season} {Episode} {EpisodeTitle} {Absolute}
+  #            {Resolution} {Source} {VideoCodec} {AudioCodec} {HDR} {Group} {Ext}
+  # {Season}/{Episode} are zero-padded to 2, {Absolute} to 3.
+  tv_folder_template: "{Title} ({Year})/Season {Season}"
+  tv_file_template: "{Title} - S{Season}E{Episode} - {EpisodeTitle} [{Resolution} {Source} {VideoCodec}]-{Group}"
+  anime_file_template: "{Title} - S{Season}E{Episode} - {Absolute} - {EpisodeTitle} [{Resolution} {Source} {VideoCodec}]-{Group}"
+  movie_folder_template: "{Title} ({Year})"
+  movie_file_template: "{Title} ({Year}) [{Resolution} {Source} {VideoCodec}]-{Group}"
+
+  max_path_length: 240 # Windows MAX_PATH headroom; 4096 is fine on Linux
+
+  # POSTed a JSON body after every successful import. Point it at Jellyfin's
+  # library-refresh endpoint if you want to. Empty = disabled.
+  post_import_webhook: ""
+
+# ----------------------------------------------------------------------------
+# Scheduler intervals. Every loop is also invocable on demand via
+# POST /api/v1/system/trigger/{loop}.
+# ----------------------------------------------------------------------------
+schedules:
+  search_interval: 15m # full search for everything `wanted`
+  recent_interval: 10m # cheap poll of the indexer's newest listing
+  status_interval: 30s # poll the download client for in-flight grabs
+  metadata_interval: 12h # refresh episode lists for followed series
+
+  # An episode is not searched for until this long after its air time.
+  air_grace: 1h
+
+  # Per-item retry backoff after a search finds no acceptable candidate.
+  search_backoff: [15m, 30m, 1h, 2h, 4h, 6h]
+
+  # Give up after this long with no match. The item stays visible with a
+  # manual retry action; it is simply no longer searched automatically.
+  search_give_up_after: 720h # 30 days
+
+# ----------------------------------------------------------------------------
+# Quality profiles, seeded on first run only. Edit them in the UI afterwards —
+# changes here are NOT re-applied to an existing database.
+#
+# allowed_* double as the preference order: earlier entries score higher.
+# ----------------------------------------------------------------------------
+profiles:
+  - name: "TV 1080p"
+    default: true
+    allowed_resolutions: ["1080p", "720p"]
+    allowed_sources: ["bluray", "webdl", "webrip", "hdtv"]
+    min_size_mb: 200
+    max_size_mb: 12000
+    min_seeders: 3
+    required_terms: []
+    banned_terms:
+      ["cam", "camrip", "hdcam", "ts", "telesync", "telecine", "screener", "r5"]
+    preferred_groups:
+      NTb: 300
+      FLUX: 300
+      QOQ: 250
+      RARBG: 100
+      YIFY: -200
+      YTS: -200
+    language_prefs: ["en"]
+    hdr_prefs: [] # e.g. ["dv","hdr10plus","hdr10"]
+
+    # Keep searching for an upgrade until a release at this tier is imported.
+    # Empty = never upgrade, first acceptable release wins.
+    upgrade_until: "1080p"
+
+  - name: "Movies 2160p"
+    default: false
+    allowed_resolutions: ["2160p", "1080p"]
+    allowed_sources: ["remux", "bluray", "webdl"]
+    min_size_mb: 2000
+    max_size_mb: 70000
+    min_seeders: 5
+    required_terms: []
+    banned_terms:
+      ["cam", "camrip", "hdcam", "ts", "telesync", "telecine", "screener", "r5"]
+    preferred_groups:
+      FraMeSToR: 300
+      TERMiNAL: 250
+      YIFY: -400
+      YTS: -400
+    language_prefs: ["en"]
+    hdr_prefs: ["dv", "hdr10plus", "hdr10"]
+    upgrade_until: "2160p"
+
+# ----------------------------------------------------------------------------
+# Scoring weights. Stage 2 only — hard filters are not weighted, they reject.
+# ----------------------------------------------------------------------------
+scoring:
+  resolution_weight: 1000
+  source_weight: 500
+  group_weight: 300 # multiplier on the per-group score above, /300
+  language_weight: 250
+  proper_repack_weight: 200
+  seeder_weight_max: 150 # min(max, 30*log2(1+seeders))
+  hdr_weight: 100
+  season_pack_weight: 400 # only when it covers >= 2 wanted episodes
+
+  # Points subtracted per day of age, capped, so an old-but-perfect release
+  # cannot be beaten by a fresh worse one. This is a tiebreak, not a filter.
+  age_penalty_per_day: 1
+  age_penalty_max: 60

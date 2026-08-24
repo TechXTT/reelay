@@ -1,7 +1,7 @@
 import "./styles.css";
 import { api, APIError, authToken, connectEvents, esc, setAuthToken } from "./api.ts";
 
-type View = "dashboard" | "series" | "movies" | "add" | "settings";
+type View = "dashboard" | "discover" | "series" | "movies" | "add" | "settings";
 type Item = Record<string, any>;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -13,6 +13,7 @@ type DialogCheck = { id: string; label: string; detail: string; checked?: boolea
 
 const nav: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◫" },
+  { id: "discover", label: "Discover", icon: "*" },
   { id: "series", label: "Series", icon: "▤" },
   { id: "movies", label: "Movies", icon: "▶" },
   { id: "add", label: "Add", icon: "+" },
@@ -35,6 +36,7 @@ async function navigate(view: View): Promise<void> {
   shell();
   try {
     if (view === "dashboard") await dashboard();
+    if (view === "discover") await discoverView();
     if (view === "series") await seriesView();
     if (view === "movies") await moviesView();
     if (view === "add") await addView();
@@ -122,6 +124,40 @@ async function dashboard(): Promise<void> {
     if (movie) void deleteCollection("movies", movie.id, movie.title, true, Boolean(movie.imported_path));
   });
   setConnection(health.status);
+}
+
+async function discoverView(selectedUser = "", mediaType = "movie"): Promise<void> {
+  const users = (await api<Item>("/api/v1/integrations/jellyfin/users")).items ?? [];
+  if (!users.length) {
+    content(`<div class="page-head"><div><h1>Discover</h1><p>Personalized from Jellyfin activity</p></div></div>
+      <div class="empty">Install and configure the Reelay Jellyfin plugin to synchronize users.</div>`);
+    return;
+  }
+  const user = users.find((value: Item) => `${value.server_id}:${value.user_id}` === selectedUser) ?? users[0];
+  const key = `${user.server_id}:${user.user_id}`;
+  const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&media_type=${mediaType}`;
+  const values = (await api<Item>(`/api/v1/recommendations?${query}`)).items ?? [];
+  const node = content(`<div class="page-head"><div><h1>Discover</h1><p>Recommendations for ${esc(user.display_name)}</p></div>
+    <button class="command" id="generate-recommendations">Refresh</button></div>
+    <div class="discover-toolbar"><label>User<select id="discover-user">${users.map((value: Item) => option(`${value.server_id}:${value.user_id}`, value.display_name, key)).join("")}</select></label>
+    <div class="segmented"><label><input type="radio" name="discover-type" value="movie" ${mediaType === "movie" ? "checked" : ""}><span>Movies</span></label>
+    <label><input type="radio" name="discover-type" value="series" ${mediaType === "series" ? "checked" : ""}><span>Series</span></label></div></div>
+    <div class="recommendation-grid">${values.length ? values.map((item: Item) => `<article class="recommendation-card">
+      ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
+      <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}</small></div><strong>${Number(item.score).toFixed(0)}</strong></div>
+      <p>${esc(item.overview || "")}</p><ul>${(item.reasons ?? []).map((reason: string) => `<li>${esc(reason)}</li>`).join("")}</ul>
+      <div class="row-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button><button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
+    </article>`).join("") : `<div class="empty">No active recommendations</div>`}</div>`);
+  node.querySelector<HTMLSelectElement>("#discover-user")!.onchange = event => void discoverView((event.currentTarget as HTMLSelectElement).value, mediaType);
+  node.querySelectorAll<HTMLInputElement>("[name=discover-type]").forEach(input => input.onchange = () => void discoverView(key, input.value));
+  node.querySelector<HTMLButtonElement>("#generate-recommendations")!.onclick = async () => {
+    await api("/api/v1/recommendations/generate", { method: "POST", body: JSON.stringify({ server_id: user.server_id, user_id: user.user_id, media_type: mediaType }) });
+    showToast("Recommendations refreshed"); await discoverView(key, mediaType);
+  };
+  for (const action of ["dismiss", "request"]) node.querySelectorAll<HTMLButtonElement>(`.rec-${action}`).forEach(button => button.onclick = async () => {
+    await api(`/api/v1/recommendations/${button.dataset.id}/actions`, { method: "POST", body: JSON.stringify({ action_id: crypto.randomUUID(), action }) });
+    showToast(action === "request" ? "Added to Reelay" : "Recommendation dismissed"); await discoverView(key, mediaType);
+  });
 }
 
 async function seriesView(): Promise<void> {
@@ -262,7 +298,8 @@ async function settingsView(): Promise<void> {
     <section><h2>Quality profiles</h2>${table(["Name", "Resolutions", "Sources", "Seeders"], (profiles.items ?? []).map((p: Item) => [
       esc(p.name), esc(p.allowed_resolutions.join(", ")), esc(p.allowed_sources.join(", ")), esc(p.min_seeders)
     ]))}</section>
-    <section><h2>Manual triggers</h2><div class="trigger-row">${["search", "status", "metadata", "recent"].map(loop => `<button class="command trigger" data-loop="${loop}">↻ <span>${loop}</span></button>`).join("")}</div></section>`);
+    <section><h2>Recommendations</h2>${table(["Setting", "Value"], [["Enabled", settings.recommendations.enabled ? "Yes" : "No"], ["Refresh", esc(settings.recommendations.refresh_interval)], ["Results per user", esc(settings.recommendations.result_limit)]])}</section>
+    <section><h2>Manual triggers</h2><div class="trigger-row">${["search", "status", "metadata", "recent", "recommendations"].map(loop => `<button class="command trigger" data-loop="${loop}">↻ <span>${loop}</span></button>`).join("")}</div></section>`);
   node.querySelector<HTMLFormElement>("#token-form")!.onsubmit = event => {
 	event.preventDefault();
 	const form = event.currentTarget as HTMLFormElement;

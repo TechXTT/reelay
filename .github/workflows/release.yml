@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+      - name: build web
+        working-directory: web
+        run: npm ci && npm run build
+      - name: build release artifacts
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/plugin-10.11 dist/plugin-12
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X github.com/TechXTT/reelay/internal/buildinfo.Version=$version -X github.com/TechXTT/reelay/internal/buildinfo.Commit=${GITHUB_SHA::7}" -o dist/reelay-linux-amd64 ./cmd/reelay
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X github.com/TechXTT/reelay/internal/buildinfo.Version=$version -X github.com/TechXTT/reelay/internal/buildinfo.Commit=${GITHUB_SHA::7}" -o dist/reelay-linux-arm64 ./cmd/reelay
+          GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "-s -w -X github.com/TechXTT/reelay/internal/buildinfo.Version=$version -X github.com/TechXTT/reelay/internal/buildinfo.Commit=${GITHUB_SHA::7}" -o dist/reelay-linux-armv7 ./cmd/reelay
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X github.com/TechXTT/reelay/internal/buildinfo.Version=$version -X github.com/TechXTT/reelay/internal/buildinfo.Commit=${GITHUB_SHA::7}" -o dist/reelay-windows-amd64.exe ./cmd/reelay
+          dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release -p:JellyfinLine=10.11 -p:Version=$version -o dist/plugin-10.11
+          dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release -p:JellyfinLine=12 -p:Version=$version -o dist/plugin-12
+          (cd dist/plugin-10.11 && zip -q ../reelay-jellyfin-10.11-v$version.zip Jellyfin.Plugin.Reelay.dll)
+          (cd dist/plugin-12 && zip -q ../reelay-jellyfin-12-v$version.zip Jellyfin.Plugin.Reelay.dll)
+          (cd dist && sha256sum reelay-* > SHA256SUMS)
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/reelay-* dist/SHA256SUMS --generate-notes --verify-tag
+      - name: generate Jellyfin catalogs
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          stable_zip="reelay-jellyfin-10.11-v$version.zip"
+          preview_zip="reelay-jellyfin-12-v$version.zip"
+          stable_md5="$(md5sum dist/$stable_zip | cut -d' ' -f1)"
+          preview_md5="$(md5sum dist/$preview_zip | cut -d' ' -f1)"
+          mkdir -p pages
+          jq -n --arg version "$version" --arg timestamp "$timestamp" --arg checksum "$stable_md5" --arg source "https://github.com/TechXTT/reelay/releases/download/$GITHUB_REF_NAME/$stable_zip" '[{guid:"d704b447-e6e7-48df-8f45-01b42e97a741",name:"Reelay",description:"Per-user recommendations and acquisition through Reelay.",overview:"Reelay integration for Jellyfin",owner:"TechXTT",category:"General",versions:[{version:$version,changelog:"See GitHub release notes",targetAbi:"10.11.11.0",sourceUrl:$source,checksum:$checksum,timestamp:$timestamp}]}]' > pages/manifest.json
+          jq -n --arg version "$version" --arg timestamp "$timestamp" --arg checksum "$preview_md5" --arg source "https://github.com/TechXTT/reelay/releases/download/$GITHUB_REF_NAME/$preview_zip" '[{guid:"d704b447-e6e7-48df-8f45-01b42e97a741",name:"Reelay Preview",description:"Preview Jellyfin 12 build of Reelay.",overview:"Reelay integration for Jellyfin 12",owner:"TechXTT",category:"General",versions:[{version:$version,changelog:"See GitHub release notes",targetAbi:"12.0.0.0",sourceUrl:$source,checksum:$checksum,timestamp:$timestamp}]}]' > pages/manifest-preview.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+      - id: pages
+        uses: actions/deploy-pages@v4

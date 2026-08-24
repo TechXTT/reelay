@@ -95,3 +95,51 @@ jobs:
           name: reelay-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}
           path: reelay-*
           retention-days: 7
+
+  plugin:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        jellyfin: ["10.11", "12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+      - name: test Jellyfin ${{ matrix.jellyfin }} plugin
+        run: dotnet test plugin/Jellyfin.Plugin.Reelay.Tests/Jellyfin.Plugin.Reelay.Tests.csproj -c Release -p:JellyfinLine=${{ matrix.jellyfin }}
+
+  plugin-smoke:
+    runs-on: ubuntu-latest
+    needs: plugin
+    strategy:
+      matrix:
+        include:
+          - { jellyfin: "10.11", image: "jellyfin/jellyfin:10.11.11" }
+          - { jellyfin: "12", image: "jellyfin/jellyfin:12.0-rc5" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+      - name: publish plugin
+        run: |
+          dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release \
+            -p:JellyfinLine=${{ matrix.jellyfin }} -o smoke/config/plugins/Reelay
+      - name: load plugin in Jellyfin
+        run: |
+          docker run -d --name jellyfin-smoke -v "$PWD/smoke/config:/config" "${{ matrix.image }}"
+          for attempt in $(seq 1 18); do
+            logs="$(docker logs jellyfin-smoke 2>&1 || true)"
+            if echo "$logs" | grep -Eiq 'Loaded assembly.*Jellyfin.Plugin.Reelay|Jellyfin.Plugin.Reelay.*loaded'; then
+              echo "$logs" | grep -Ei 'Reelay|Jellyfin.Plugin.Reelay'
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs jellyfin-smoke
+          exit 1

@@ -22,6 +22,8 @@ and embedded web UI are wired end to end.
 - Hardlink-first imports, verified copy fallback, configurable naming,
   season-pack discovery, subtitle carry-over, and recycle-on-upgrade.
 - Versioned REST API, bearer auth, health checks, SSE, and a responsive UI.
+- Explainable per-user recommendations and an optional Jellyfin plugin that
+  exposes missing titles as Discover libraries and routes requests to Reelay.
 
 ## Why Go
 
@@ -187,9 +189,11 @@ recognise.
 
 ## Jellyfin
 
-Jellyfin is a consumer, not an integration. Reelay writes correct filenames into
-the library layout and Jellyfin picks them up on its own scan; there is no
-Jellyfin API client and there will not be one.
+Jellyfin remains the consumer of imported media, and the optional plugin adds a
+discovery and request surface without changing the import pipeline. Reelay owns
+recommendations and requests; the plugin synchronizes library activity, creates
+per-user virtual libraries, and treats Favorite as Request and Dislike as
+Dismiss inside those virtual libraries. Playback never requests a title.
 
 Point one library at each root, with the matching content type:
 
@@ -212,6 +216,35 @@ Existing media with raw release-name folders is left alone — Reelay only write
 files it imports itself, so an untidy library and a Reelay-managed one can
 coexist in the same share indefinitely.
 
+### Recommendation plugin
+
+Recommendations require `metadata.tmdb_api_key` and
+`recommendations.enabled: true`. Install the plugin from the catalog matching
+your server, configure its Reelay URL and bearer token, test the connection,
+then enable recommendation sync on the plugin page:
+
+- Jellyfin 10.11 stable catalog:
+  `https://techxtt.github.io/reelay/manifest.json`
+- Jellyfin 12 preview catalog:
+  `https://techxtt.github.io/reelay/manifest-preview.json`
+
+The plugin configuration page shows two paths for every enabled Jellyfin user.
+Add each path manually under Dashboard → Libraries, once as Movies and once as
+Shows, and grant access only to that user. Jellyfin library permissions operate
+at library level, which is why each user needs separate Discover libraries.
+
+After enabling the plugin, run **Sync Reelay Recommendations** once from
+Dashboard -> Scheduled Tasks so the per-user folders exist before you add them
+as libraries. The plugin then performs a full sync at startup and every six hours. Favorites and
+dislikes are checked every minute and written to a durable retry outbox before
+being sent. Movie requests enter the wanted queue immediately. Series requests
+use `future_only` monitoring by default; change the series to `all` in Reelay if
+you want its aired back catalogue.
+
+Jellyfin `10.11.11` is the stable target. The Jellyfin 12 artifact tracks the
+exact prerelease ABI and should be used only with the matching preview server
+until Jellyfin 12 is stable.
+
 ## Development
 
 ```bash
@@ -219,6 +252,8 @@ make build      # or .\make.ps1 build
 make test
 make lint       # go vet + staticcheck
 make cross      # linux/amd64, linux/arm64, linux/armv7, windows/amd64
+make plugin     # Jellyfin 10.11 and 12 plugin ZIPs
+make test-all   # Go plus both plugin test targets
 make bench-mem  # peak RSS over a simulated search lifecycle
 ```
 
@@ -230,7 +265,15 @@ GitHub Actions workflow runs `-race` on Linux on every push.
 The direct Go dependency set is `modernc.org/sqlite`, `gopkg.in/yaml.v3`, and
 `golang.org/x/time`. The standard library supplies routing, gzip, SSE, clients,
 filesystem work, and test fakes. The frontend uses TypeScript and Vite only as
-development dependencies and has no runtime framework.
+development dependencies and has no runtime framework. Plugin production
+dependencies are the exact `Jellyfin.Controller` and `Jellyfin.Model` packages;
+xUnit and the .NET test SDK are test-only. Building the plugin requires the
+.NET 10 SDK; the 10.11 artifact targets `net9.0` and the 12 artifact targets
+`net10.0`.
+
+This monorepo is licensed under GPL-3.0. The Go service and plugin share one
+version and GitHub release, but remain separate runtime artifacts because
+Jellyfin must load the plugin assembly inside its own process.
 
 See [`docs/architecture.md`](docs/architecture.md) for the state machine and
 search-to-import flow.

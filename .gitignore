@@ -8,6 +8,9 @@ config.yaml
 
 # frontend
 /web/node_modules/
+/plugin/**/bin/
+/plugin/**/obj/
+/plugin/TestResults/
 
 # editors / OS
 .DS_Store

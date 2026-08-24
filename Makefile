@@ -10,6 +10,7 @@ BIN_DIR     := bin
 DIST_DIR    := dist
 
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+PLUGIN_VERSION ?= 0.1.0
 COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE        ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -23,7 +24,7 @@ LDFLAGS     := -s -w \
 # static binaries, and the SQLite driver is pure Go precisely so this holds.
 export CGO_ENABLED := 0
 
-.PHONY: all build test test-race cover lint vet fmt tidy run dev check web web-install cross docker bench-mem clean help
+.PHONY: all build test test-all test-race cover lint vet fmt tidy run dev check web web-install cross docker bench-mem plugin plugin-10 plugin-12 plugin-test clean help
 
 all: build
 
@@ -32,6 +33,8 @@ build:
 
 test:
 	go test ./...
+
+test-all: test plugin-test
 
 # -race requires cgo and a 64-bit host compiler. It runs in CI on Linux; on a
 # Windows dev box without a 64-bit gcc it will fail to build, which is a
@@ -85,6 +88,22 @@ cross:
 
 docker:
 	docker build -t reelay:$(VERSION) -t reelay:latest .
+
+plugin: plugin-10 plugin-12
+
+plugin-10:
+	@mkdir -p $(DIST_DIR)/plugin-10.11
+	dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release -p:JellyfinLine=10.11 -p:Version=$(PLUGIN_VERSION) -o $(DIST_DIR)/plugin-10.11
+	cd $(DIST_DIR)/plugin-10.11 && zip -q ../reelay-jellyfin-10.11-$(VERSION).zip Jellyfin.Plugin.Reelay.dll
+
+plugin-12:
+	@mkdir -p $(DIST_DIR)/plugin-12
+	dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release -p:JellyfinLine=12 -p:Version=$(PLUGIN_VERSION) -o $(DIST_DIR)/plugin-12
+	cd $(DIST_DIR)/plugin-12 && zip -q ../reelay-jellyfin-12-$(VERSION).zip Jellyfin.Plugin.Reelay.dll
+
+plugin-test:
+	dotnet test plugin/Jellyfin.Plugin.Reelay.Tests/Jellyfin.Plugin.Reelay.Tests.csproj -c Release -p:JellyfinLine=10.11
+	dotnet test plugin/Jellyfin.Plugin.Reelay.Tests/Jellyfin.Plugin.Reelay.Tests.csproj -c Release -p:JellyfinLine=12
 
 bench-mem:
 	@command -v /usr/bin/time >/dev/null 2>&1 || { echo "/usr/bin/time is required"; exit 1; }

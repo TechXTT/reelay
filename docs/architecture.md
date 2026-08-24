@@ -3,6 +3,8 @@
 Reelay is one Go process with an embedded Vite application and a local SQLite
 database. Concrete clients are constructed in `cmd/reelay`; the engine only
 depends on the `Indexer`, `Downloader`, metadata, and importer interfaces.
+The same repository also contains a separately built C# Jellyfin plugin. It is
+a filesystem/API bridge and does not contain recommendation or download logic.
 
 ## Search to import
 
@@ -54,3 +56,27 @@ deleting anything. Startup probes hardlinks between each mapped download path
 and library root. NFS with both paths in one export is recommended; SMB commonly
 falls back to a verified copy.
 
+## Recommendation flow
+
+1. The Jellyfin plugin pages through real Movie and Series items, excludes its
+   own virtual paths, and sends external IDs plus per-user completion/favorite/
+   like signals in bounded, idempotent batches. A sync token marks items absent
+   only after the final batch succeeds, so an interrupted sync cannot erase the
+   current inventory.
+2. Reelay selects at most 12 recent positive seeds and asks TMDB for recommended
+   and similar candidates. Cold-start profiles use TMDB Discover.
+3. Owned, requested, dismissed, and duplicate titles are removed before a
+   bounded set of at most 300 candidates is ranked.
+4. The deterministic scorer combines TMDB confidence, content and people
+   affinity, multi-seed evidence, rating confidence, user preferences, and a
+   small diversity bonus. Components and plain-language reasons are persisted.
+5. The plugin materializes the best 40 movies and series beneath isolated
+   per-user paths. Jellyfin supplies normal artwork and metadata from the TMDB
+   provider IDs embedded in their filenames.
+6. Favoriting a virtual item creates an idempotent Reelay request; disliking it
+   dismisses it. A durable plugin outbox retries failures. The item disappears
+   from Discover after success or once the real media enters the library.
+
+The plugin has one shared source tree with exact build targets for Jellyfin
+10.11.11 (`net9.0`) and Jellyfin 12 preview (`net10.0`). ABI-specific package
+versions are selected at build time; behavioral code is shared.

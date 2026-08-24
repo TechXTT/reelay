@@ -13,7 +13,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('build', 'test', 'test-race', 'cover', 'vet', 'lint', 'fmt', 'tidy',
-        'check', 'run', 'dev', 'cross', 'web', 'web-install', 'bench-mem', 'clean', 'help')]
+        'check', 'run', 'dev', 'cross', 'web', 'web-install', 'bench-mem', 'plugin', 'plugin-10', 'plugin-12', 'plugin-test', 'test-all', 'clean', 'help')]
     [string]$Target = 'build'
 )
 
@@ -23,6 +23,12 @@ Set-Location $PSScriptRoot
 $Binary = 'reelay'
 $Pkg = './cmd/reelay'
 $Module = 'github.com/TechXTT/reelay'
+$DotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+$Dotnet = if ($DotnetCommand) { $DotnetCommand.Source } else { $null }
+$LocalDotnet = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet10\dotnet.exe'
+if ((-not $Dotnet -or -not (& $Dotnet --list-sdks 2>$null | Select-String '^10\.')) -and (Test-Path $LocalDotnet)) {
+    $Dotnet = $LocalDotnet
+}
 
 function Get-GitValue([string[]]$GitArgs, [string]$Fallback) {
     try {
@@ -36,6 +42,7 @@ function Get-GitValue([string[]]$GitArgs, [string]$Fallback) {
 $Version = Get-GitValue @('describe', '--tags', '--always', '--dirty') 'dev'
 $Commit = Get-GitValue @('rev-parse', '--short', 'HEAD') 'none'
 $Date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$PluginVersion = if ($Version -match '^v?(\d+\.\d+\.\d+)') { $Matches[1] } else { '0.1.0' }
 
 $LdFlags = "-s -w " +
 "-X $Module/internal/buildinfo.Version=$Version " +
@@ -83,9 +90,24 @@ function Build-Cross {
     Get-ChildItem dist | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
 }
 
+function Build-Plugin([string]$Line) {
+    $folder = if ($Line -eq '12') { 'plugin-12' } else { 'plugin-10.11' }
+    $archive = "dist/reelay-jellyfin-$($Line)-$Version.zip"
+    New-Item -ItemType Directory -Force -Path "dist/$folder" | Out-Null
+    Invoke-Step "publish Jellyfin $Line plugin" {
+        & $Dotnet publish plugin/Jellyfin.Plugin.Reelay/Jellyfin.Plugin.Reelay.csproj -c Release "-p:JellyfinLine=$Line" "-p:Version=$PluginVersion" -o "dist/$folder"
+    }
+    Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+    Compress-Archive -LiteralPath "dist/$folder/Jellyfin.Plugin.Reelay.dll" -DestinationPath $archive
+}
+
 switch ($Target) {
     'build' { Build-Local }
     'test' { Invoke-Step 'go test' { go test ./... } }
+    'test-all' {
+        Invoke-Step 'go test' { go test ./... }
+        & $PSCommandPath plugin-test
+    }
     'test-race' {
         # -race needs cgo plus a 64-bit host C compiler. This machine has a
         # 32-bit MinGW, so say so plainly instead of emitting a wall of
@@ -128,6 +150,14 @@ switch ($Target) {
     'cross' { Build-Cross }
     'web-install' { Push-Location web; try { Invoke-Step 'npm ci' { npm ci } } finally { Pop-Location } }
     'web' { Push-Location web; try { Invoke-Step 'npm run build' { npm run build } } finally { Pop-Location } }
+    'plugin' { Build-Plugin '10.11'; Build-Plugin '12' }
+    'plugin-10' { Build-Plugin '10.11' }
+    'plugin-12' { Build-Plugin '12' }
+    'plugin-test' {
+        $env:DOTNET_ROLL_FORWARD = 'Major'
+        Invoke-Step 'Jellyfin 10.11 plugin tests' { & $Dotnet test plugin/Jellyfin.Plugin.Reelay.Tests/Jellyfin.Plugin.Reelay.Tests.csproj -c Release -p:JellyfinLine=10.11 }
+        Invoke-Step 'Jellyfin 12 plugin tests' { & $Dotnet test plugin/Jellyfin.Plugin.Reelay.Tests/Jellyfin.Plugin.Reelay.Tests.csproj -c Release -p:JellyfinLine=12 }
+    }
     'bench-mem' {
 		New-Item -ItemType Directory -Force -Path 'bin' | Out-Null
 		$testBinary = Join-Path $PSScriptRoot 'bin\reelay-engine-membench.test.exe'
@@ -165,6 +195,6 @@ switch ($Target) {
         Write-Host 'cleaned'
     }
     'help' {
-        Write-Host 'Targets: build test test-race cover vet lint fmt tidy check run dev cross web web-install bench-mem clean'
+        Write-Host 'Targets: build test test-all test-race cover vet lint fmt tidy check run dev cross web web-install plugin plugin-10 plugin-12 plugin-test bench-mem clean'
     }
 }

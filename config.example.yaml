@@ -256,12 +256,14 @@ profiles:
     # Empty = never upgrade, first acceptable release wins.
     upgrade_until: "1080p"
 
-  - name: "Movies 2160p"
+  - name: "Movies Efficient"
     default: false
     allowed_resolutions: ["2160p", "1080p"]
-    allowed_sources: ["remux", "bluray", "webdl"]
+    allowed_sources: ["bluray", "webdl"]
     min_size_mb: 2000
-    max_size_mb: 70000
+    # Movie limits are absolute. 12000 MB keeps oversized remuxes out while
+    # still allowing efficient 2160p and high-quality 1080p encodes.
+    max_size_mb: 12000
     min_seeders: 5
     required_terms: []
     banned_terms:

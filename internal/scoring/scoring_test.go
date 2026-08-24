@@ -327,6 +327,22 @@ func TestSizeLimitsScaleWithRuntime(t *testing.T) {
 	}
 }
 
+func TestMovieSizeLimitIsAbsolute(t *testing.T) {
+	movie := rel("The.Matrix.1999.1080p.BluRay.x265-GROUP", 50, 20000, 1)
+	in := baseInput([]indexer.Release{movie}, &model.Wanted{
+		Kind: model.SubjectMovie, Title: parser.NormalizeTitle("The Matrix"), Year: 1999,
+	})
+	in.RuntimeMinutes = 180
+
+	res := Evaluate(in)
+	if len(res.Rejected) != 1 || res.Rejected[0].RejectedBy != RejectSize {
+		t.Fatalf("a long movie must not multiply its size ceiling: %+v", res)
+	}
+	if !strings.Contains(res.Rejected[0].Reason, "12000 MB ceiling") {
+		t.Fatalf("unexpected movie size reason: %s", res.Rejected[0].Reason)
+	}
+}
+
 func TestUpgradeRules(t *testing.T) {
 	cases := []struct {
 		name     string

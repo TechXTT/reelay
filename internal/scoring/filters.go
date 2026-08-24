@@ -162,7 +162,10 @@ func filterSize(c *Candidate, in Input) (string, string) {
 		return "", ""
 	}
 	units := contentUnits(c.Parsed, c.Release.Files)
-	scale := runtimeScale(in.RuntimeMinutes)
+	scale := 1.0
+	if in.Want != nil && in.Want.Kind == model.SubjectEpisode {
+		scale = runtimeScale(in.RuntimeMinutes)
+	}
 
 	minMB := int(float64(in.Profile.MinSizeMB) * float64(units) * scale)
 	maxMB := int(float64(in.Profile.MaxSizeMB) * float64(units) * scale)

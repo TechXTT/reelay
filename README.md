@@ -224,9 +224,9 @@ your server, configure its Reelay URL and bearer token, test the connection,
 then enable recommendation sync on the plugin page:
 
 - Jellyfin 10.11 stable catalog:
-  `https://techxtt.github.io/reelay/manifest.json`
+  `https://github.bozhilov.me/reelay/manifest.json`
 - Jellyfin 12 preview catalog:
-  `https://techxtt.github.io/reelay/manifest-preview.json`
+  `https://github.bozhilov.me/reelay/manifest-preview.json`
 
 The plugin configuration page shows two paths for every enabled Jellyfin user.
 Add each path manually under Dashboard → Libraries, once as Movies and once as

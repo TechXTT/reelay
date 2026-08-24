@@ -134,3 +134,49 @@ func TestCachedPayloadMustRemainDecodable(t *testing.T) {
 		t.Fatal("test invariant")
 	}
 }
+
+func TestTMDBDiscoveryAndTVmazeExternalLookup(t *testing.T) {
+	tmdbServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/movie/42/recommendations":
+			_, _ = w.Write([]byte(`{"results":[{"id":99,"title":"Candidate","release_date":"2024-01-02","genre_ids":[878],"vote_average":8.2,"vote_count":1200}]}`))
+		case "/genre/movie/list":
+			_, _ = w.Write([]byte(`{"genres":[{"id":878,"name":"Science Fiction"}]}`))
+		case "/movie/99":
+			_, _ = w.Write([]byte(`{"id":99,"title":"Candidate","release_date":"2024-01-02","runtime":121,"genres":[{"id":878,"name":"Science Fiction"}],"credits":{"cast":[{"name":"Actor A"}],"crew":[{"name":"Director A","job":"Director"}]},"keywords":{"keywords":[{"name":"space"}]},"external_ids":{"imdb_id":"tt0000099"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer tmdbServer.Close()
+	tmdb, err := NewTMDB(TMDBOptions{BaseURL: tmdbServer.URL, APIKey: "secret", Cache: &memoryCache{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := tmdb.Recommendations(t.Context(), "movie", 42)
+	if err != nil || len(values) != 1 || values[0].Genres[0] != "Science Fiction" {
+		t.Fatalf("recommendations=%+v err=%v", values, err)
+	}
+	detail, err := tmdb.DiscoveryDetails(t.Context(), "movie", 99)
+	if err != nil || detail.IMDBID != "tt0000099" || detail.RuntimeMinutes != 121 || len(detail.People) != 2 || len(detail.Keywords) != 1 {
+		t.Fatalf("detail=%+v err=%v", detail, err)
+	}
+
+	tvmazeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/lookup/shows" || r.URL.Query().Get("thetvdb") != "81189" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":1396,"name":"Breaking Bad","premiered":"2008-01-20","averageRuntime":47,"externals":{"imdb":"tt0903747","thetvdb":81189}}`))
+	}))
+	defer tvmazeServer.Close()
+	tvmaze, err := NewTVmaze(TVmazeOptions{BaseURL: tvmazeServer.URL, Cache: &memoryCache{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	series, err := tvmaze.LookupSeries(t.Context(), 81189, "")
+	if err != nil || series.TVmazeID != 1396 || series.Year != 2008 {
+		t.Fatalf("series=%+v err=%v", series, err)
+	}
+}

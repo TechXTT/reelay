@@ -39,6 +39,10 @@ func (s *Server) handleEpisodePatch(w http.ResponseWriter, r *http.Request) erro
 }
 
 func (s *Server) handleEpisodeSearch(w http.ResponseWriter, r *http.Request) error {
+	return s.handleForceSearch(w, r, model.SubjectEpisode, "episode")
+}
+
+func (s *Server) handleForceSearch(w http.ResponseWriter, r *http.Request, subject model.SubjectType, noun string) error {
 	id, err := pathID(r)
 	if err != nil {
 		return err
@@ -46,8 +50,8 @@ func (s *Server) handleEpisodeSearch(w http.ResponseWriter, r *http.Request) err
 	if s.engine == nil {
 		return Unavailable("engine is unavailable")
 	}
-	if err := s.engine.ForceSearch(r.Context(), model.SubjectEpisode, id); err != nil {
-		return Conflict("episode cannot be searched now").WithCause(err)
+	if err := s.engine.ForceSearch(r.Context(), subject, id); err != nil {
+		return Conflict("%s cannot be searched now", noun).WithCause(err)
 	}
 	writeJSON(w, s.logFor(r), http.StatusAccepted, map[string]any{"queued": true})
 	return nil
@@ -185,6 +189,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) error {
 		"downloader": map[string]any{"type": s.cfg.Downloader.Type, "url": s.cfg.Downloader.URL,
 			"username": s.cfg.Downloader.Username, "password": "[redacted]"},
 		"library": s.cfg.Library, "schedules": s.cfg.Schedules, "runtime": s.cfg.Runtime,
+		"recommendations": map[string]any{"enabled": s.cfg.Recommendations.Enabled,
+			"refresh_interval": s.cfg.Recommendations.RefreshInterval.String(),
+			"result_limit":     s.cfg.Recommendations.ResultLimit},
 	})
 	return nil
 }

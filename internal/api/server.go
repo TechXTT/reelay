@@ -26,6 +26,7 @@ import (
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metadata"
+	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 	webui "github.com/TechXTT/reelay/web"
 )
@@ -37,16 +38,19 @@ const (
 )
 
 type Server struct {
-	cfg        *config.Config
-	store      *store.Store
-	log        *slog.Logger
-	clock      clock.Clock
-	engine     *engine.Engine
-	movies     metadata.MovieProvider
-	series     metadata.SeriesProvider
-	indexers   []indexer.Indexer
-	downloader downloader.Downloader
-	static     fs.FS
+	cfg             *config.Config
+	store           *store.Store
+	log             *slog.Logger
+	clock           clock.Clock
+	engine          *engine.Engine
+	movies          metadata.MovieProvider
+	series          metadata.SeriesProvider
+	indexers        []indexer.Indexer
+	downloader      downloader.Downloader
+	recommendations *recommendation.Service
+	externalSeries  metadata.ExternalSeriesProvider
+	discovery       metadata.RecommendationProvider
+	static          fs.FS
 
 	http      *http.Server
 	startedAt time.Time
@@ -56,15 +60,18 @@ type Server struct {
 }
 
 type Options struct {
-	Config     *config.Config
-	Store      *store.Store
-	Logger     *slog.Logger
-	Clock      clock.Clock
-	Engine     *engine.Engine
-	Movies     metadata.MovieProvider
-	Series     metadata.SeriesProvider
-	Indexers   []indexer.Indexer
-	Downloader downloader.Downloader
+	Config          *config.Config
+	Store           *store.Store
+	Logger          *slog.Logger
+	Clock           clock.Clock
+	Engine          *engine.Engine
+	Movies          metadata.MovieProvider
+	Series          metadata.SeriesProvider
+	Indexers        []indexer.Indexer
+	Downloader      downloader.Downloader
+	Recommendations *recommendation.Service
+	ExternalSeries  metadata.ExternalSeriesProvider
+	Discovery       metadata.RecommendationProvider
 }
 
 func New(opt Options) *Server {
@@ -78,6 +85,7 @@ func New(opt Options) *Server {
 		clock:     opt.Clock,
 		startedAt: opt.Clock.Now(), engine: opt.Engine, movies: opt.Movies,
 		series: opt.Series, indexers: opt.Indexers, downloader: opt.Downloader,
+		recommendations: opt.Recommendations, externalSeries: opt.ExternalSeries, discovery: opt.Discovery,
 	}
 	s.static, _ = fs.Sub(webui.Dist, "dist")
 
@@ -168,6 +176,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/profiles/{id}", s.wrap(s.handleProfileDelete))
 	mux.HandleFunc("GET /api/v1/settings", s.wrap(s.handleSettings))
 	mux.HandleFunc("POST /api/v1/system/trigger/{loop}", s.wrap(s.handleTrigger))
+	mux.HandleFunc("POST /api/v1/integrations/jellyfin/sync", s.wrap(s.handleJellyfinSync))
+	mux.HandleFunc("POST /api/v1/integrations/jellyfin/events", s.wrap(s.handleJellyfinEvents))
+	mux.HandleFunc("GET /api/v1/integrations/jellyfin/users", s.wrap(s.handleJellyfinUsers))
+	mux.HandleFunc("GET /api/v1/recommendations", s.wrap(s.handleRecommendations))
+	mux.HandleFunc("POST /api/v1/recommendations/generate", s.wrap(s.handleRecommendationGenerate))
+	mux.HandleFunc("POST /api/v1/recommendations/{id}/actions", s.wrap(s.handleRecommendationAction))
 
 	// Everything under /api that has no route yet gets a JSON 404 rather than
 	// the stdlib's text/plain "404 page not found".

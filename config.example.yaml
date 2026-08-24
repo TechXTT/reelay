@@ -294,3 +294,21 @@ scoring:
   # cannot be beaten by a fresh worse one. This is a tiebreak, not a filter.
   age_penalty_per_day: 1
   age_penalty_max: 60
+
+# Per-user Jellyfin discovery. The Jellyfin plugin sends library activity to
+# Reelay; TMDB supplies candidates and Reelay performs the explainable ranking.
+recommendations:
+  # Enable after setting metadata.tmdb_api_key and installing the Jellyfin plugin.
+  enabled: false
+  refresh_interval: 6h
+  candidate_limit: 300
+  result_limit: 40
+  seed_limit: 12
+  expiry: 24h
+  provider_weight: 25
+  affinity_weight: 20
+  people_weight: 15
+  multi_seed_weight: 15
+  rating_weight: 10
+  preference_weight: 5
+  novelty_weight: 10

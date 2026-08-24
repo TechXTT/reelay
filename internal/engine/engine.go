@@ -13,6 +13,7 @@ import (
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metadata"
+	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 )
 
@@ -21,16 +22,17 @@ type Importer interface {
 }
 
 type Options struct {
-	Store      *store.Store
-	Config     *config.Config
-	Indexers   []indexer.Indexer
-	Downloader downloader.Downloader
-	TVmaze     metadata.SeriesProvider
-	Importer   Importer
-	PathMapper *downloader.PathMapper
-	Clock      clock.Clock
-	Logger     *slog.Logger
-	Events     *EventBus
+	Store           *store.Store
+	Config          *config.Config
+	Indexers        []indexer.Indexer
+	Downloader      downloader.Downloader
+	TVmaze          metadata.SeriesProvider
+	Importer        Importer
+	PathMapper      *downloader.PathMapper
+	Clock           clock.Clock
+	Logger          *slog.Logger
+	Events          *EventBus
+	Recommendations *recommendation.Service
 }
 
 type Engine struct {
@@ -46,10 +48,12 @@ type Engine struct {
 	events     *EventBus
 	searchSem  chan struct{}
 
-	searchTrigger   chan struct{}
-	statusTrigger   chan struct{}
-	metadataTrigger chan struct{}
-	recentTrigger   chan struct{}
+	searchTrigger         chan struct{}
+	statusTrigger         chan struct{}
+	metadataTrigger       chan struct{}
+	recentTrigger         chan struct{}
+	recommendationTrigger chan struct{}
+	recommendations       *recommendation.Service
 }
 
 func New(opt Options) (*Engine, error) {
@@ -77,6 +81,7 @@ func New(opt Options) (*Engine, error) {
 		searchSem:     make(chan struct{}, concurrency),
 		searchTrigger: make(chan struct{}, 1), statusTrigger: make(chan struct{}, 1),
 		metadataTrigger: make(chan struct{}, 1), recentTrigger: make(chan struct{}, 1),
+		recommendationTrigger: make(chan struct{}, 1), recommendations: opt.Recommendations,
 	}, nil
 }
 
@@ -93,6 +98,8 @@ func (e *Engine) Trigger(loop string) error {
 		ch = e.metadataTrigger
 	case "recent":
 		ch = e.recentTrigger
+	case "recommendations":
+		ch = e.recommendationTrigger
 	default:
 		return fmt.Errorf("unknown engine loop %q", loop)
 	}
@@ -115,6 +122,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		{"status", e.cfg.Schedules.StatusInterval.Duration, e.statusTrigger, e.StatusOnce},
 		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce},
 		{"recent", e.cfg.Schedules.RecentInterval.Duration, e.recentTrigger, e.RecentOnce},
+	}
+	if e.cfg.Recommendations.Enabled && e.recommendations != nil {
+		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll})
 	}
 	var wg sync.WaitGroup
 	for _, spec := range loops {

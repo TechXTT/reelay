@@ -48,6 +48,36 @@ type SeriesProvider interface {
 	SeriesEpisodes(ctx context.Context, id int) ([]Episode, error)
 }
 
+type DiscoveryItem struct {
+	MediaType      string
+	TMDBID         int
+	Title          string
+	Year           int
+	Overview       string
+	PosterURL      string
+	Genres         []string
+	Keywords       []string
+	People         []string
+	Language       string
+	Country        string
+	RuntimeMinutes int
+	VoteAverage    float64
+	VoteCount      int
+	IMDBID         string
+	TVDBID         int
+}
+
+type RecommendationProvider interface {
+	Recommendations(ctx context.Context, mediaType string, tmdbID int) ([]DiscoveryItem, error)
+	Similar(ctx context.Context, mediaType string, tmdbID int) ([]DiscoveryItem, error)
+	Discover(ctx context.Context, mediaType string) ([]DiscoveryItem, error)
+	DiscoveryDetails(ctx context.Context, mediaType string, tmdbID int) (DiscoveryItem, error)
+}
+
+type ExternalSeriesProvider interface {
+	LookupSeries(ctx context.Context, tvdbID int, imdbID string) (Series, error)
+}
+
 type Cache interface {
 	Get(ctx context.Context, provider, key string, now time.Time) ([]byte, bool, error)
 	Put(ctx context.Context, provider, key string, payload []byte, fetchedAt time.Time, ttl time.Duration) error

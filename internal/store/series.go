@@ -52,11 +52,11 @@ func (r *SeriesRepository) Create(ctx context.Context, in model.Series) (model.S
 }
 
 func (r *SeriesRepository) Get(ctx context.Context, id int64) (model.Series, error) {
-	s, err := scanSeries(r.s.ro.QueryRowContext(ctx, selectSeriesSQL+" WHERE id = ?", id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return s, fmt.Errorf("series %d: %w", id, ErrNotFound)
-	}
-	return s, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectSeriesSQL+" WHERE id = ?", id), scanSeries, fmt.Sprintf("series %d", id))
+}
+
+func (r *SeriesRepository) GetByTMDBID(ctx context.Context, id int) (model.Series, error) {
+	return findOne(r.s.ro.QueryRowContext(ctx, selectSeriesSQL+" WHERE tmdb_id = ?", id), scanSeries, fmt.Sprintf("series tmdb %d", id))
 }
 
 func (r *SeriesRepository) List(ctx context.Context) ([]model.Series, error) {
@@ -64,16 +64,7 @@ func (r *SeriesRepository) List(ctx context.Context) ([]model.Series, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list series: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Series
-	for rows.Next() {
-		v, err := scanSeries(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanSeries)
 }
 
 func (r *SeriesRepository) ListFollowing(ctx context.Context, limit int) ([]model.Series, error) {
@@ -85,16 +76,7 @@ func (r *SeriesRepository) ListFollowing(ctx context.Context, limit int) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("list followed series: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Series
-	for rows.Next() {
-		v, err := scanSeries(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanSeries)
 }
 
 func (r *SeriesRepository) Update(ctx context.Context, in model.Series) (model.Series, error) {
@@ -121,14 +103,7 @@ func (r *SeriesRepository) Update(ctx context.Context, in model.Series) (model.S
 }
 
 func (r *SeriesRepository) Delete(ctx context.Context, id int64) error {
-	res, err := r.s.rw.ExecContext(ctx, "DELETE FROM series WHERE id=?", id)
-	if err != nil {
-		return fmt.Errorf("delete series %d: %w", id, err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return fmt.Errorf("series %d: %w", id, ErrNotFound)
-	}
-	return nil
+	return r.s.deleteOne(ctx, "DELETE FROM series WHERE id=?", "series", id)
 }
 
 func (r *SeriesRepository) MarkRefreshed(ctx context.Context, id int64, at time.Time) error {

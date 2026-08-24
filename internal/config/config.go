@@ -41,17 +41,18 @@ func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 func Dur(d time.Duration) Duration { return Duration{d} }
 
 type Config struct {
-	Server     Server     `yaml:"server"`
-	Database   Database   `yaml:"database"`
-	Logging    Logging    `yaml:"logging"`
-	Runtime    Runtime    `yaml:"runtime"`
-	Indexers   []Indexer  `yaml:"indexers"`
-	Downloader Downloader `yaml:"downloader"`
-	Metadata   Metadata   `yaml:"metadata"`
-	Library    Library    `yaml:"library"`
-	Schedules  Schedules  `yaml:"schedules"`
-	Profiles   []Profile  `yaml:"profiles"`
-	Scoring    Scoring    `yaml:"scoring"`
+	Server          Server          `yaml:"server"`
+	Database        Database        `yaml:"database"`
+	Logging         Logging         `yaml:"logging"`
+	Runtime         Runtime         `yaml:"runtime"`
+	Indexers        []Indexer       `yaml:"indexers"`
+	Downloader      Downloader      `yaml:"downloader"`
+	Metadata        Metadata        `yaml:"metadata"`
+	Library         Library         `yaml:"library"`
+	Schedules       Schedules       `yaml:"schedules"`
+	Profiles        []Profile       `yaml:"profiles"`
+	Scoring         Scoring         `yaml:"scoring"`
+	Recommendations Recommendations `yaml:"recommendations"`
 }
 
 type Server struct {
@@ -187,6 +188,22 @@ type Scoring struct {
 	SeasonPackWeight   int `yaml:"season_pack_weight"`
 	AgePenaltyPerDay   int `yaml:"age_penalty_per_day"`
 	AgePenaltyMax      int `yaml:"age_penalty_max"`
+}
+
+type Recommendations struct {
+	Enabled          bool     `yaml:"enabled" json:"enabled"`
+	RefreshInterval  Duration `yaml:"refresh_interval" json:"refresh_interval"`
+	CandidateLimit   int      `yaml:"candidate_limit" json:"candidate_limit"`
+	ResultLimit      int      `yaml:"result_limit" json:"result_limit"`
+	SeedLimit        int      `yaml:"seed_limit" json:"seed_limit"`
+	Expiry           Duration `yaml:"expiry" json:"expiry"`
+	ProviderWeight   int      `yaml:"provider_weight" json:"provider_weight"`
+	AffinityWeight   int      `yaml:"affinity_weight" json:"affinity_weight"`
+	PeopleWeight     int      `yaml:"people_weight" json:"people_weight"`
+	MultiSeedWeight  int      `yaml:"multi_seed_weight" json:"multi_seed_weight"`
+	RatingWeight     int      `yaml:"rating_weight" json:"rating_weight"`
+	PreferenceWeight int      `yaml:"preference_weight" json:"preference_weight"`
+	NoveltyWeight    int      `yaml:"novelty_weight" json:"novelty_weight"`
 }
 
 // Load reads path, applies REELAY_* environment overrides, then validates.

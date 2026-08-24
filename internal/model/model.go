@@ -209,6 +209,66 @@ type Series struct {
 	EpisodesRefreshedAt time.Time    `json:"episodes_refreshed_at,omitempty"`
 }
 
+type Recommendation struct {
+	ID             int64              `json:"id"`
+	ServerID       string             `json:"server_id"`
+	UserID         string             `json:"user_id"`
+	MediaType      string             `json:"media_type"`
+	TMDBID         int                `json:"tmdb_id"`
+	Title          string             `json:"title"`
+	Year           int                `json:"year,omitempty"`
+	Overview       string             `json:"overview,omitempty"`
+	PosterURL      string             `json:"poster_url,omitempty"`
+	Score          float64            `json:"score"`
+	Reasons        []string           `json:"reasons"`
+	Components     map[string]float64 `json:"components,omitempty"`
+	Genres         []string           `json:"genres,omitempty"`
+	Keywords       []string           `json:"keywords,omitempty"`
+	People         []string           `json:"people,omitempty"`
+	Language       string             `json:"language,omitempty"`
+	Country        string             `json:"country,omitempty"`
+	RuntimeMinutes int                `json:"runtime_minutes,omitempty"`
+	Status         string             `json:"status"`
+	GeneratedAt    time.Time          `json:"generated_at"`
+	ExpiresAt      time.Time          `json:"expires_at"`
+}
+
+type JellyfinUser struct {
+	ServerID    string    `json:"server_id"`
+	UserID      string    `json:"user_id"`
+	DisplayName string    `json:"display_name"`
+	Enabled     bool      `json:"enabled"`
+	LastSynced  time.Time `json:"last_synced_at,omitempty"`
+}
+
+type JellyfinItem struct {
+	ServerID       string   `json:"server_id"`
+	ItemID         string   `json:"item_id"`
+	MediaType      string   `json:"media_type"`
+	TMDBID         int      `json:"tmdb_id,omitempty"`
+	TVDBID         int      `json:"tvdb_id,omitempty"`
+	IMDBID         string   `json:"imdb_id,omitempty"`
+	Title          string   `json:"title"`
+	Year           int      `json:"year,omitempty"`
+	Genres         []string `json:"genres,omitempty"`
+	Keywords       []string `json:"keywords,omitempty"`
+	People         []string `json:"people,omitempty"`
+	Language       string   `json:"language,omitempty"`
+	Country        string   `json:"country,omitempty"`
+	RuntimeMinutes int      `json:"runtime_minutes,omitempty"`
+	Present        bool     `json:"present"`
+}
+
+type JellyfinActivity struct {
+	EventID    string    `json:"event_id"`
+	ServerID   string    `json:"server_id"`
+	UserID     string    `json:"user_id"`
+	ItemID     string    `json:"item_id"`
+	EventType  string    `json:"event_type"`
+	Progress   float64   `json:"progress"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
 type Episode struct {
 	ID              int64      `json:"id"`
 	SeriesID        int64      `json:"series_id"`

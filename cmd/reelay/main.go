@@ -24,6 +24,7 @@ import (
 	"github.com/TechXTT/reelay/internal/indexer/tpb"
 	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 )
 
@@ -186,14 +187,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	recommendations := recommendation.NewService(st, tmdb, cfg.Recommendations, time.Now, log)
 	eng, err := engine.New(engine.Options{Store: st, Config: cfg, Indexers: indexers,
 		Downloader: dl, TVmaze: tvmaze, Importer: mediaImporter, Clock: clock.Real{},
-		Logger: log, PathMapper: pathMapperFor(cfg)})
+		Logger: log, PathMapper: pathMapperFor(cfg), Recommendations: recommendations})
 	if err != nil {
 		return err
 	}
 	srv := api.New(api.Options{Config: cfg, Store: st, Logger: log, Clock: clock.Real{},
-		Engine: eng, Movies: tmdb, Series: tvmaze, Indexers: indexers, Downloader: dl})
+		Engine: eng, Movies: tmdb, Series: tvmaze, Indexers: indexers, Downloader: dl,
+		Recommendations: recommendations, ExternalSeries: tvmaze, Discovery: tmdb})
 	registerHardlinkProbes(srv, cfg, log)
 	registerIndexerHealth(srv, indexers)
 	registerDownloaderHealth(srv, dl, cfg)

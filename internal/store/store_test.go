@@ -49,8 +49,8 @@ func TestOpenCreatesDirectoryAndMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Errorf("schema version = %d, want 3", v)
+	if v != 4 {
+		t.Errorf("schema version = %d, want 4", v)
 	}
 
 	// Every table 0001 promises must exist.
@@ -84,8 +84,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 3 {
-		t.Errorf("schema_migrations has %d rows after 3 runs, want 3", n)
+	if n != 4 {
+		t.Errorf("schema_migrations has %d rows after 3 runs, want 4", n)
 	}
 }
 

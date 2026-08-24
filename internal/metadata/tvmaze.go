@@ -65,6 +65,7 @@ type tvmazeShow struct {
 	Summary        string `json:"summary"`
 	Externals      struct {
 		IMDB string `json:"imdb"`
+		TVDB int    `json:"thetvdb"`
 	} `json:"externals"`
 	Image *struct {
 		Medium   string `json:"medium"`
@@ -189,3 +190,36 @@ func stripHTML(s string) string {
 }
 
 var _ SeriesProvider = (*TVmaze)(nil)
+var _ ExternalSeriesProvider = (*TVmaze)(nil)
+
+func (t *TVmaze) LookupSeries(ctx context.Context, tvdbID int, imdbID string) (Series, error) {
+	q := url.Values{}
+	key := ""
+	if tvdbID > 0 {
+		q.Set("thetvdb", strconv.Itoa(tvdbID))
+		key = "tvdb:" + strconv.Itoa(tvdbID)
+	} else if imdbID != "" {
+		q.Set("imdb", imdbID)
+		key = "imdb:" + imdbID
+	} else {
+		return Series{}, fmt.Errorf("tvmaze: lookup requires a TVDB or IMDb id")
+	}
+	var payload tvmazeShow
+	_, hit, err := cacheLoad(ctx, t.cache, "tvmaze", "lookup:"+key, t.now(), &payload)
+	if err != nil {
+		return Series{}, err
+	}
+	if !hit {
+		if err := t.limiter.Wait(ctx); err != nil {
+			return Series{}, fmt.Errorf("tvmaze: rate limit wait: %w", err)
+		}
+		raw, err := t.http.get(ctx, "/lookup/shows", q, &payload)
+		if err != nil {
+			return Series{}, err
+		}
+		if err := cacheStore(ctx, t.cache, "tvmaze", "lookup:"+key, raw, t.now(), t.ttl); err != nil {
+			return Series{}, err
+		}
+	}
+	return convertTVmazeShow(payload), nil
+}

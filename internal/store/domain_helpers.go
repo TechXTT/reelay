@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,38 @@ func scanNullTime(v sql.NullString) (*time.Time, error) {
 func requiredText(field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is required", field)
+	}
+	return nil
+}
+
+func collectRows[T any](rows *sql.Rows, scan func(scanner) (T, error)) ([]T, error) {
+	defer rows.Close()
+	var values []T
+	for rows.Next() {
+		value, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func findOne[T any](row scanner, scan func(scanner) (T, error), label string) (T, error) {
+	value, err := scan(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return value, fmt.Errorf("%s: %w", label, ErrNotFound)
+	}
+	return value, err
+}
+
+func (s *Store) deleteOne(ctx context.Context, query, label string, id int64) error {
+	result, err := s.rw.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete %s %d: %w", label, id, err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("%s %d: %w", label, id, ErrNotFound)
 	}
 	return nil
 }

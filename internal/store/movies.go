@@ -66,11 +66,11 @@ func (r *MovieRepository) Create(ctx context.Context, in model.Movie, reason str
 }
 
 func (r *MovieRepository) Get(ctx context.Context, id int64) (model.Movie, error) {
-	v, err := scanMovie(r.s.ro.QueryRowContext(ctx, selectMovieSQL+" WHERE id = ?", id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("movie %d: %w", id, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectMovieSQL+" WHERE id = ?", id), scanMovie, fmt.Sprintf("movie %d", id))
+}
+
+func (r *MovieRepository) GetByTMDBID(ctx context.Context, id int) (model.Movie, error) {
+	return findOne(r.s.ro.QueryRowContext(ctx, selectMovieSQL+" WHERE tmdb_id = ?", id), scanMovie, fmt.Sprintf("movie tmdb %d", id))
 }
 
 func (r *MovieRepository) List(ctx context.Context) ([]model.Movie, error) {
@@ -78,16 +78,7 @@ func (r *MovieRepository) List(ctx context.Context) ([]model.Movie, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list movies: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Movie
-	for rows.Next() {
-		v, err := scanMovie(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanMovie)
 }
 
 func (r *MovieRepository) WantedDue(ctx context.Context, now time.Time, limit int) ([]model.Movie, error) {
@@ -100,16 +91,7 @@ func (r *MovieRepository) WantedDue(ctx context.Context, now time.Time, limit in
 	if err != nil {
 		return nil, fmt.Errorf("list wanted movies: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Movie
-	for rows.Next() {
-		v, err := scanMovie(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanMovie)
 }
 
 func (r *MovieRepository) Update(ctx context.Context, in model.Movie) (model.Movie, error) {
@@ -130,14 +112,7 @@ func (r *MovieRepository) Update(ctx context.Context, in model.Movie) (model.Mov
 }
 
 func (r *MovieRepository) Delete(ctx context.Context, id int64) error {
-	res, err := r.s.rw.ExecContext(ctx, "DELETE FROM movies WHERE id=?", id)
-	if err != nil {
-		return fmt.Errorf("delete movie %d: %w", id, err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return fmt.Errorf("movie %d: %w", id, ErrNotFound)
-	}
-	return nil
+	return r.s.deleteOne(ctx, "DELETE FROM movies WHERE id=?", "movie", id)
 }
 
 const selectMovieSQL = `SELECT id, title, sort_title, year, tmdb_id, imdb_id,

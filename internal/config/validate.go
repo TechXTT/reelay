@@ -68,12 +68,42 @@ func (c *Config) Validate() ([]string, error) {
 	c.validateSchedules(ck)
 	c.validateProfiles(ck)
 	c.validateScoring(ck)
+	c.validateRecommendations(ck)
 
 	sort.Strings(ck.problems)
 	if len(ck.problems) > 0 {
 		return ck.warnings, &Problems{Items: ck.problems}
 	}
 	return ck.warnings, nil
+}
+
+func (c *Config) validateRecommendations(ck *checker) {
+	r := c.Recommendations
+	if !r.Enabled {
+		return
+	}
+	if c.Metadata.TMDBAPIKey == "" {
+		ck.bad("recommendations.enabled", "requires metadata.tmdb_api_key")
+	}
+	if r.RefreshInterval.Duration <= 0 {
+		ck.bad("recommendations.refresh_interval", "must be greater than zero")
+	}
+	if r.Expiry.Duration < r.RefreshInterval.Duration {
+		ck.bad("recommendations.expiry", "must be at least refresh_interval")
+	}
+	if r.SeedLimit < 1 || r.SeedLimit > 50 {
+		ck.bad("recommendations.seed_limit", "must be between 1 and 50")
+	}
+	if r.CandidateLimit < 10 || r.CandidateLimit > 1000 {
+		ck.bad("recommendations.candidate_limit", "must be between 10 and 1000")
+	}
+	if r.ResultLimit < 1 || r.ResultLimit > r.CandidateLimit {
+		ck.bad("recommendations.result_limit", "must be positive and no greater than candidate_limit")
+	}
+	total := r.ProviderWeight + r.AffinityWeight + r.PeopleWeight + r.MultiSeedWeight + r.RatingWeight + r.PreferenceWeight + r.NoveltyWeight
+	if total != 100 {
+		ck.bad("recommendations", "weights must sum to 100 (got %d)", total)
+	}
 }
 
 func (c *Config) validateServer(ck *checker) {

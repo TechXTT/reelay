@@ -1,0 +1,61 @@
+package store
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/TechXTT/reelay/internal/model"
+)
+
+func TestRecommendationSyncAndEventsAreIdempotent(t *testing.T) {
+	s := migratedDomainStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	user := model.JellyfinUser{ServerID: "server", UserID: "user", DisplayName: "Alex", Enabled: true, LastSynced: now}
+	if err := s.Recommendations().UpsertUser(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	item := model.JellyfinItem{ServerID: "server", ItemID: "item", MediaType: "movie", TMDBID: 42, Title: "Arrival", Genres: []string{"Science Fiction"}, Present: true}
+	if err := s.Recommendations().UpsertItems(ctx, []model.JellyfinItem{item}, "sync-1"); err != nil {
+		t.Fatal(err)
+	}
+	event := model.JellyfinActivity{EventID: "event-1", ServerID: "server", UserID: "user", ItemID: "item", EventType: "completed", Progress: 1, OccurredAt: now}
+	if n, err := s.Recommendations().AddActivities(ctx, []model.JellyfinActivity{event, event}); err != nil || n != 1 {
+		t.Fatalf("inserted=%d err=%v", n, err)
+	}
+	seeds, err := s.Recommendations().PositiveSeeds(ctx, "server", "user", "movie", 12)
+	if err != nil || len(seeds) != 1 || seeds[0].TMDBID != 42 {
+		t.Fatalf("seeds=%+v err=%v", seeds, err)
+	}
+	if removed, err := s.Recommendations().CompleteSync(ctx, "server", "sync-2"); err != nil || removed != 1 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	owned, err := s.Recommendations().OwnedTMDBIDs(ctx, "server", "movie")
+	if err != nil || owned[42] {
+		t.Fatalf("owned=%v err=%v", owned, err)
+	}
+}
+
+func TestRecommendationActionIsIdempotent(t *testing.T) {
+	s := migratedDomainStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = s.Recommendations().UpsertUser(ctx, model.JellyfinUser{ServerID: "s", UserID: "u", DisplayName: "U", Enabled: true})
+	err := s.Recommendations().Replace(ctx, "s", "u", "movie", []model.Recommendation{{TMDBID: 5, Title: "Five", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, _ := s.Recommendations().List(ctx, "s", "u", "movie", "active", 10, 0)
+	if len(values) != 1 {
+		t.Fatalf("values=%+v", values)
+	}
+	_, inserted, err := s.Recommendations().RecordAction(ctx, values[0].ID, "action", "dismiss")
+	if err != nil || !inserted {
+		t.Fatalf("first inserted=%v err=%v", inserted, err)
+	}
+	_, inserted, err = s.Recommendations().RecordAction(ctx, values[0].ID, "action", "dismiss")
+	if err != nil || inserted {
+		t.Fatalf("second inserted=%v err=%v", inserted, err)
+	}
+}

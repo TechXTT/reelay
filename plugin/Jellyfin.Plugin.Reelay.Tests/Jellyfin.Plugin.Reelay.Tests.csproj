@@ -13,5 +13,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Jellyfin.Plugin.Reelay\Jellyfin.Plugin.Reelay.csproj" />
+    <EmbeddedResource Include="..\Jellyfin.Plugin.Reelay\Configuration\configPage.html" Link="Configuration\configPage.html" LogicalName="Jellyfin.Plugin.Reelay.Tests.Configuration.configPage.html" />
   </ItemGroup>
 </Project>

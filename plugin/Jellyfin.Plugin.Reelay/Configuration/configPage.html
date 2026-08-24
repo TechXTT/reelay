@@ -2,43 +2,49 @@
 <html>
 <head><title>Reelay</title></head>
 <body>
-<div id="ReelayConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+<div id="ReelayConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
   <div data-role="content"><div class="content-primary">
-    <form id="ReelayConfigForm">
+    <form id="ReelayConfigForm" autocomplete="off">
       <div class="sectionTitleContainer flex align-items-center"><h2 class="sectionTitle">Reelay</h2></div>
       <label class="checkboxContainer"><input id="Enabled" is="emby-checkbox" type="checkbox"><span>Enable recommendation sync</span></label>
-      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="ReelayUrl">Reelay URL</label><input id="ReelayUrl" is="emby-input" type="url" required></div>
-      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="AuthToken">Bearer token</label><input id="AuthToken" is="emby-input" type="password"></div>
-      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="VirtualRoot">Virtual library root</label><input id="VirtualRoot" is="emby-input" type="text" required><div class="fieldDescription">Add the movies and series folders below each user ID as separate Jellyfin libraries, then grant only that user access.</div></div>
-      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="RecommendationLimit">Recommendations per type</label><input id="RecommendationLimit" is="emby-input" type="number" min="1" max="100" required></div>
+      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="ReelayUrl">Reelay URL</label><input id="ReelayUrl" name="ReelayUrl" is="emby-input" type="url" autocomplete="off" autocapitalize="none" spellcheck="false" required></div>
+      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="AuthToken">Bearer token</label><input id="AuthToken" name="ReelayBearerToken" is="emby-input" type="password" autocomplete="new-password"></div>
+      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="VirtualRoot">Virtual library root</label><input id="VirtualRoot" name="VirtualRoot" is="emby-input" type="text" autocomplete="off" required><div class="fieldDescription">Add the movies and series folders below each user ID as separate Jellyfin libraries, then grant only that user access.</div></div>
+      <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="RecommendationLimit">Recommendations per type</label><input id="RecommendationLimit" name="RecommendationLimit" is="emby-input" type="number" min="1" max="100" autocomplete="off" required></div>
       <div class="verticalSection"><h3>Enabled users</h3><div id="EnabledUsers"></div></div>
       <div class="verticalSection"><h3>Discover library paths</h3><div id="LibraryPaths" class="fieldDescription"></div></div>
       <button is="emby-button" type="button" id="TestConnection" class="raised block"><span>Test connection</span></button>
       <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
     </form>
   </div></div>
-</div>
 <script type="text/javascript">
   (() => {
     const pluginId = 'd704b447-e6e7-48df-8f45-01b42e97a741';
     const page = document.querySelector('#ReelayConfigPage');
     let users = [];
+    const normaliseId = value => String(value || '').replace(/-/g, '');
+    const escapeHTML = value => String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+    const showError = (prefix, error) => {
+      Dashboard.hideLoadingMsg();
+      Dashboard.alert(`${prefix}: ${error && error.message ? error.message : error}`);
+    };
     page.addEventListener('pageshow', () => { Dashboard.showLoadingMsg(); Promise.all([ApiClient.getPluginConfiguration(pluginId), ApiClient.getUsers()]).then(([c, values]) => {
-      users = values;
+      users = Array.isArray(values) ? values : [];
       page.querySelector('#Enabled').checked = !!c.Enabled;
       page.querySelector('#ReelayUrl').value = c.ReelayUrl || '';
       page.querySelector('#AuthToken').value = c.AuthToken || '';
       page.querySelector('#VirtualRoot').value = c.VirtualRoot || '';
       page.querySelector('#RecommendationLimit').value = c.RecommendationLimit || 40;
-      const enabled = new Set(c.EnabledUserIds || []);
-      page.querySelector('#EnabledUsers').innerHTML = users.map(u => `<label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" value="${u.Id}" ${!enabled.size || enabled.has(u.Id.replaceAll('-', '')) ? 'checked' : ''}><span>${u.Name}</span></label>`).join('');
+      const enabled = new Set((c.EnabledUserIds || []).map(normaliseId));
+      page.querySelector('#EnabledUsers').innerHTML = users.map(u => `<label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" value="${escapeHTML(normaliseId(u.Id))}" ${!enabled.size || enabled.has(normaliseId(u.Id)) ? 'checked' : ''}><span>${escapeHTML(u.Name)}</span></label>`).join('');
       renderPaths();
       Dashboard.hideLoadingMsg();
-    }); });
+    }).catch(error => showError('Unable to load Reelay settings', error)); });
     const renderPaths = () => {
-      const root = page.querySelector('#VirtualRoot').value.trim();
-      page.querySelector('#LibraryPaths').innerHTML = users.filter((_, i) => page.querySelectorAll('#EnabledUsers input')[i]?.checked).map(u => {
-        const id = u.Id.replaceAll('-', ''); return `<p><strong>${u.Name}</strong><br><code>${root}/${id}/movies</code><br><code>${root}/${id}/series</code></p>`;
+      const root = page.querySelector('#VirtualRoot').value.trim().replace(/[\\/]+$/, '');
+      const inputs = page.querySelectorAll('#EnabledUsers input');
+      page.querySelector('#LibraryPaths').innerHTML = users.filter((_, i) => inputs[i] && inputs[i].checked).map(u => {
+        const id = normaliseId(u.Id); return `<p><strong>${escapeHTML(u.Name)}</strong><br><code>${escapeHTML(root)}/${escapeHTML(id)}/movies</code><br><code>${escapeHTML(root)}/${escapeHTML(id)}/series</code></p>`;
       }).join('');
     };
     page.querySelector('#VirtualRoot').addEventListener('input', renderPaths);
@@ -62,12 +68,14 @@
         c.AuthToken = page.querySelector('#AuthToken').value.trim();
         c.VirtualRoot = page.querySelector('#VirtualRoot').value.trim();
         c.RecommendationLimit = Number(page.querySelector('#RecommendationLimit').value);
-        c.EnabledUserIds = Array.from(page.querySelectorAll('#EnabledUsers input:checked')).map(input => input.value.replaceAll('-', ''));
+        c.EnabledUserIds = Array.from(page.querySelectorAll('#EnabledUsers input:checked')).map(input => normaliseId(input.value));
         return ApiClient.updatePluginConfiguration(pluginId, c);
-      }).then(Dashboard.processPluginConfigurationUpdateResult);
+      }).then(result => Dashboard.processPluginConfigurationUpdateResult(result))
+        .catch(error => showError('Unable to save Reelay settings', error));
       return false;
     });
   })();
 </script>
+</div>
 </body>
 </html>

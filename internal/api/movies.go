@@ -104,36 +104,9 @@ func (s *Server) handleMoviePatch(w http.ResponseWriter, r *http.Request) error 
 }
 
 func (s *Server) handleMovieDelete(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	deleteFiles, err := queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false)
-	if err != nil {
-		return err
-	}
-	deleteDownloads, err := queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
-	if err != nil {
-		return err
-	}
-	if err := s.deleteMovieCollection(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
-		return err
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+	return s.handleCollectionDelete(w, r, s.deleteMovieCollection)
 }
 
 func (s *Server) handleMovieSearch(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	if s.engine == nil {
-		return Unavailable("engine is unavailable")
-	}
-	if err := s.engine.ForceSearch(r.Context(), model.SubjectMovie, id); err != nil {
-		return Conflict("movie cannot be searched now").WithCause(err)
-	}
-	writeJSON(w, s.logFor(r), http.StatusAccepted, map[string]any{"queued": true})
-	return nil
+	return s.handleForceSearch(w, r, model.SubjectMovie, "movie")
 }

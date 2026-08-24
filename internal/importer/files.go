@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -138,7 +139,7 @@ func copyVerified(source, dest string) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("verify copied file %s: %w", dest, err)
 	}
-	if !equalBytes(want, got) {
+	if !bytes.Equal(want, got) {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("verify copied file %s: checksum mismatch", dest)
 	}
@@ -159,8 +160,6 @@ func fileHash(path string) ([]byte, error) {
 	_, err = io.Copy(h, f)
 	return h.Sum(nil), err
 }
-
-func equalBytes(a, b []byte) bool { return string(a) == string(b) }
 
 func isUnsupportedLink(err error) bool {
 	text := strings.ToLower(err.Error())

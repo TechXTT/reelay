@@ -54,20 +54,13 @@ func (r *EpisodeRepository) Create(ctx context.Context, in model.Episode, reason
 }
 
 func (r *EpisodeRepository) Get(ctx context.Context, id int64) (model.Episode, error) {
-	v, err := scanEpisode(r.s.ro.QueryRowContext(ctx, selectEpisodeSQL+" WHERE id = ?", id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("episode %d: %w", id, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectEpisodeSQL+" WHERE id = ?", id), scanEpisode, fmt.Sprintf("episode %d", id))
 }
 
 func (r *EpisodeRepository) BySeriesNumber(ctx context.Context, seriesID int64, season, number int) (model.Episode, error) {
-	v, err := scanEpisode(r.s.ro.QueryRowContext(ctx, selectEpisodeSQL+
-		" WHERE series_id=? AND season=? AND number=?", seriesID, season, number))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("series %d S%02dE%02d: %w", seriesID, season, number, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectEpisodeSQL+
+		" WHERE series_id=? AND season=? AND number=?", seriesID, season, number), scanEpisode,
+		fmt.Sprintf("series %d S%02dE%02d", seriesID, season, number))
 }
 
 func (r *EpisodeRepository) ListBySeries(ctx context.Context, seriesID int64) ([]model.Episode, error) {
@@ -76,16 +69,7 @@ func (r *EpisodeRepository) ListBySeries(ctx context.Context, seriesID int64) ([
 	if err != nil {
 		return nil, fmt.Errorf("list series %d episodes: %w", seriesID, err)
 	}
-	defer rows.Close()
-	var out []model.Episode
-	for rows.Next() {
-		v, err := scanEpisode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanEpisode)
 }
 
 func (r *EpisodeRepository) WantedDue(ctx context.Context, now time.Time, limit int) ([]model.Episode, error) {
@@ -98,16 +82,7 @@ func (r *EpisodeRepository) WantedDue(ctx context.Context, now time.Time, limit 
 	if err != nil {
 		return nil, fmt.Errorf("list wanted episodes: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Episode
-	for rows.Next() {
-		v, err := scanEpisode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanEpisode)
 }
 
 // UpsertMetadata refreshes provider-owned fields without overwriting lifecycle

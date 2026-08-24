@@ -17,18 +17,8 @@ import (
 type ctxKey int
 
 const (
-	ctxRequestID ctxKey = iota
-	ctxLogger
+	ctxLogger ctxKey = iota
 )
-
-// RequestID pulls the per-request id out of the context. Every log line and
-// every 5xx response can be correlated through it.
-func RequestID(ctx context.Context) string {
-	if v, ok := ctx.Value(ctxRequestID).(string); ok {
-		return v
-	}
-	return ""
-}
 
 // logFor returns the request-scoped logger, falling back to the server logger.
 func (s *Server) logFor(r *http.Request) *slog.Logger {
@@ -68,8 +58,7 @@ func requestContext(log *slog.Logger) middleware {
 				id = newRequestID()
 			}
 			rl := log.With("request_id", id)
-			ctx := context.WithValue(r.Context(), ctxRequestID, id)
-			ctx = context.WithValue(ctx, ctxLogger, rl)
+			ctx := context.WithValue(r.Context(), ctxLogger, rl)
 			w.Header().Set("X-Request-ID", id)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

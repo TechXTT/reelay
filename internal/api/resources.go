@@ -151,23 +151,7 @@ func (s *Server) handleSeriesPatch(w http.ResponseWriter, r *http.Request) error
 }
 
 func (s *Server) handleSeriesDelete(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	deleteFiles, err := queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false)
-	if err != nil {
-		return err
-	}
-	deleteDownloads, err := queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
-	if err != nil {
-		return err
-	}
-	if err := s.deleteSeriesCollection(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
-		return err
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+	return s.handleCollectionDelete(w, r, s.deleteSeriesCollection)
 }
 
 func (s *Server) handleSeriesSearch(w http.ResponseWriter, r *http.Request) error {

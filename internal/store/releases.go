@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -50,20 +49,13 @@ ON CONFLICT (indexer, info_hash) DO UPDATE SET
 }
 
 func (r *ReleaseRepository) Get(ctx context.Context, id int64) (model.StoredRelease, error) {
-	v, err := scanRelease(r.s.ro.QueryRowContext(ctx, selectReleaseSQL+" WHERE id = ?", id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("release %d: %w", id, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectReleaseSQL+" WHERE id = ?", id), scanRelease, fmt.Sprintf("release %d", id))
 }
 
 func (r *ReleaseRepository) ByIndexerHash(ctx context.Context, indexer, hash string) (model.StoredRelease, error) {
-	v, err := scanRelease(r.s.ro.QueryRowContext(ctx, selectReleaseSQL+
-		" WHERE indexer = ? AND info_hash = ?", indexer, strings.ToLower(hash)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("release %s/%s: %w", indexer, hash, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectReleaseSQL+
+		" WHERE indexer = ? AND info_hash = ?", indexer, strings.ToLower(hash)), scanRelease,
+		fmt.Sprintf("release %s/%s", indexer, hash))
 }
 
 const selectReleaseSQL = `SELECT id, indexer, raw_title, info_hash, magnet,

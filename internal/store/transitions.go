@@ -122,45 +122,6 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 	return out, err
 }
 
-func (r *TransitionRepository) GrabbedLocked(ctx context.Context, lock *ItemLock, releaseID int64, reason string) (model.StateTransition, error) {
-	if lock == nil || releaseID <= 0 {
-		return model.StateTransition{}, errors.New("grab transition requires an item lock and release")
-	}
-	now := r.s.nowUTC()
-	var out model.StateTransition
-	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
-		from, err := itemState(ctx, tx, lock.Subject, lock.ID)
-		if err != nil {
-			return err
-		}
-		if from != model.StateSearching {
-			return fmt.Errorf("%s:%d %s -> grabbed: %w", lock.Subject, lock.ID, from, ErrInvalidTransition)
-		}
-		table := "episodes"
-		if lock.Subject == model.SubjectMovie {
-			table = "movies"
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET state='grabbed',
- chosen_release_id=?, next_search_at=NULL, last_error='' WHERE id=? AND state=?`,
-			releaseID, lock.ID, from)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			return ErrConflict
-		}
-		if err := insertTransition(ctx, tx, lock.Subject, lock.ID, from,
-			model.StateGrabbed, reason, fmt.Sprintf("release_id=%d", releaseID), now); err != nil {
-			return err
-		}
-		out = model.StateTransition{SubjectType: lock.Subject, SubjectID: lock.ID,
-			From: from, To: model.StateGrabbed, Reason: reason,
-			Detail: fmt.Sprintf("release_id=%d", releaseID), At: now}
-		return nil
-	})
-	return out, err
-}
-
 // MarkImportedLocked records the library path and lifecycle transition in one
 // transaction, so a file cannot be visible on disk while the item remains
 // indefinitely stuck in importing after a process restart.

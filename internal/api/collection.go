@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,8 @@ type collectionTarget struct {
 	grabs []model.Grab
 }
 
+type collectionDeleteFunc func(context.Context, int64, bool, bool) error
+
 func queryBool(rValue, name string, fallback bool) (bool, error) {
 	if strings.TrimSpace(rValue) == "" {
 		return fallback, nil
@@ -30,6 +33,30 @@ func queryBool(rValue, name string, fallback bool) (bool, error) {
 		return false, BadRequest("%s must be true or false", name)
 	}
 	return value, nil
+}
+
+func collectionDeleteOptions(r *http.Request) (deleteFiles, deleteDownloads bool, err error) {
+	if deleteFiles, err = queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false); err != nil {
+		return false, false, err
+	}
+	deleteDownloads, err = queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
+	return deleteFiles, deleteDownloads, err
+}
+
+func (s *Server) handleCollectionDelete(w http.ResponseWriter, r *http.Request, remove collectionDeleteFunc) error {
+	id, err := pathID(r)
+	if err != nil {
+		return err
+	}
+	deleteFiles, deleteDownloads, err := collectionDeleteOptions(r)
+	if err != nil {
+		return err
+	}
+	if err := remove(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (s *Server) deleteMovieCollection(ctx context.Context, id int64, deleteFiles, deleteDownloads bool) error {

@@ -145,11 +145,7 @@ func (r *GrabRepository) Update(ctx context.Context, in model.Grab) error {
 }
 
 func (r *GrabRepository) Get(ctx context.Context, id int64) (model.Grab, error) {
-	v, err := scanGrab(r.s.ro.QueryRowContext(ctx, selectGrabSQL+" WHERE id=?", id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("grab %d: %w", id, ErrNotFound)
-	}
-	return v, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectGrabSQL+" WHERE id=?", id), scanGrab, fmt.Sprintf("grab %d", id))
 }
 
 func (r *GrabRepository) Active(ctx context.Context) ([]model.Grab, error) {
@@ -158,16 +154,7 @@ func (r *GrabRepository) Active(ctx context.Context) ([]model.Grab, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list active grabs: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Grab
-	for rows.Next() {
-		v, err := scanGrab(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanGrab)
 }
 
 func (r *GrabRepository) History(ctx context.Context, limit, offset int) ([]model.Grab, error) {
@@ -182,16 +169,7 @@ func (r *GrabRepository) History(ctx context.Context, limit, offset int) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("grab history: %w", err)
 	}
-	defer rows.Close()
-	var out []model.Grab
-	for rows.Next() {
-		value, err := scanGrab(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, value)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanGrab)
 }
 
 func (r *GrabRepository) BySubject(ctx context.Context, subject model.SubjectType, id int64) ([]model.Grab, error) {
@@ -203,16 +181,7 @@ func (r *GrabRepository) BySubject(ctx context.Context, subject model.SubjectTyp
 	if err != nil {
 		return nil, fmt.Errorf("list grabs for %s:%d: %w", subject, id, err)
 	}
-	defer rows.Close()
-	var out []model.Grab
-	for rows.Next() {
-		value, err := scanGrab(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, value)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanGrab)
 }
 
 const selectGrabSQL = `SELECT id, subject_type, subject_id, release_id,

@@ -59,21 +59,11 @@ func (r *ProfileRepository) Seed(ctx context.Context, profiles []model.QualityPr
 }
 
 func (r *ProfileRepository) Get(ctx context.Context, id int64) (model.QualityProfile, error) {
-	row := r.s.ro.QueryRowContext(ctx, selectProfileSQL+" WHERE id = ?", id)
-	p, err := scanProfile(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, fmt.Errorf("profile %d: %w", id, ErrNotFound)
-	}
-	return p, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectProfileSQL+" WHERE id = ?", id), scanProfile, fmt.Sprintf("profile %d", id))
 }
 
 func (r *ProfileRepository) Default(ctx context.Context) (model.QualityProfile, error) {
-	row := r.s.ro.QueryRowContext(ctx, selectProfileSQL+" ORDER BY is_default DESC, id LIMIT 1")
-	p, err := scanProfile(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, fmt.Errorf("default profile: %w", ErrNotFound)
-	}
-	return p, err
+	return findOne(r.s.ro.QueryRowContext(ctx, selectProfileSQL+" ORDER BY is_default DESC, id LIMIT 1"), scanProfile, "default profile")
 }
 
 func (r *ProfileRepository) List(ctx context.Context) ([]model.QualityProfile, error) {
@@ -81,16 +71,8 @@ func (r *ProfileRepository) List(ctx context.Context) ([]model.QualityProfile, e
 	if err != nil {
 		return nil, fmt.Errorf("list profiles: %w", err)
 	}
-	defer rows.Close()
-	var out []model.QualityProfile
-	for rows.Next() {
-		p, err := scanProfile(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := collectRows(rows, scanProfile)
+	if err != nil {
 		return nil, fmt.Errorf("list profiles: %w", err)
 	}
 	return out, nil

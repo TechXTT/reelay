@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/model"
@@ -95,6 +96,26 @@ func TestCollectionDeleteRequiresExplicitActiveDownloadRemoval(t *testing.T) {
 	got, err := st.Grabs().Get(context.Background(), grab.ID)
 	if err != nil || got.State != model.GrabRemoved {
 		t.Fatalf("grab after collection delete=%+v err=%v", got, err)
+	}
+}
+
+func TestCollectionDeleteRejectsMovieLockedBySearch(t *testing.T) {
+	srv, st := newTestServer(t, nil)
+	srv.downloader = &removalDownloader{}
+	movie, _ := managedMovieFixture(t, st, model.StateWanted, model.GrabRemoved)
+	lock, err := st.Locks().Acquire(context.Background(), model.SubjectMovie, movie.ID,
+		"engine-search", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release(context.Background()) }()
+
+	rec := do(t, srv.Handler(), "DELETE", "/api/v1/movies/"+itoa(movie.ID), authed())
+	if rec.Code != 409 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := st.Movies().Get(context.Background(), movie.ID); err != nil {
+		t.Fatalf("locked delete removed movie: %v", err)
 	}
 }
 

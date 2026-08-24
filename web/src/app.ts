@@ -91,9 +91,11 @@ async function dashboard(): Promise<void> {
     api<Item>("/api/v1/movies")
   ]);
   const active = queue.items ?? [];
-  const recent = (history.items ?? []).slice(0, 8);
   const components = health.components ?? [];
-  const movieNames = new Map<number, string>((movies.items ?? []).map((movie: Item) => [movie.id, movie.title]));
+  const movieByID = new Map<number, Item>((movies.items ?? []).map((movie: Item) => [movie.id, movie]));
+  const movieNames = new Map<number, string>(Array.from(movieByID, ([id, movie]) => [id, movie.title]));
+  const recent = (history.items ?? []).filter((grab: Item) => grab.state !== "removed" &&
+    (grab.subject_type !== "movie" || movieByID.has(grab.subject_id))).slice(0, 8);
   content(`<div class="page-head"><div><h1>Dashboard</h1><p>${active.length} active downloads</p></div>
     <button class="command" id="refresh-search">↻ <span>Run search</span></button></div>
     <section><h2>Active downloads</h2><div class="downloads">${active.length ? active.map((g: Item) => `
@@ -101,7 +103,8 @@ async function dashboard(): Promise<void> {
       <small>${esc(g.subject_type)} #${esc(g.subject_id)}</small></div>${state(g.state)}
       <div class="progress"><i style="width:${Math.max(0, Math.min(100, g.progress * 100))}%"></i></div>
       <small class="progress-label">${(g.progress * 100).toFixed(1)}%</small>
-      <button class="command danger cancel-grab" data-grab="${g.id}">Cancel</button></article>`).join("") : `<div class="empty">No active downloads</div>`}</div></section>
+      <div class="row-actions"><button class="command compact danger cancel-grab" data-grab="${g.id}">Cancel download</button>
+      ${g.subject_type === "movie" && movieByID.has(g.subject_id) ? `<button class="command compact danger delete-active-movie" data-movie="${g.subject_id}">Delete movie</button>` : ""}</div></article>`).join("") : `<div class="empty">No active downloads</div>`}</div></section>
     <section><h2>System health</h2><div class="health-grid">${components.map((c: Item) => `<div class="health-row">
       <span class="health-dot ${esc(c.status)}"></span><div><strong>${esc(c.name)}</strong><small>${esc(c.detail || c.kind)}</small></div>${state(c.status)}</div>`).join("")}</div></section>
     <section><h2>Recent activity</h2>${table(["Subject", "State", "Progress", "Updated"], recent.map((g: Item) => [
@@ -113,6 +116,10 @@ async function dashboard(): Promise<void> {
   document.querySelectorAll<HTMLButtonElement>(".cancel-grab").forEach(button => button.onclick = () => {
     const grab = active.find((item: Item) => item.id === Number(button.dataset.grab));
     if (grab) void cancelGrab(grab, downloadLabel(grab, movieNames));
+  });
+  document.querySelectorAll<HTMLButtonElement>(".delete-active-movie").forEach(button => button.onclick = () => {
+    const movie = movieByID.get(Number(button.dataset.movie));
+    if (movie) void deleteCollection("movies", movie.id, movie.title, true, Boolean(movie.imported_path));
   });
   setConnection(health.status);
 }

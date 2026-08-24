@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/store"
 )
 
 type collectionTarget struct {
@@ -35,6 +37,15 @@ func (s *Server) deleteMovieCollection(ctx context.Context, id int64, deleteFile
 	if err != nil {
 		return NotFound("movie %d not found", id)
 	}
+	lock, err := s.store.Locks().Acquire(ctx, model.SubjectMovie, id, "api-delete", 5*time.Minute)
+	if errors.Is(err, store.ErrLocked) {
+		return Conflict("movie is currently being processed; retry deletion shortly")
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
+
 	grabs, err := s.store.Grabs().BySubject(ctx, model.SubjectMovie, id)
 	if err != nil {
 		return err
@@ -58,6 +69,27 @@ func (s *Server) deleteSeriesCollection(ctx context.Context, id int64, deleteFil
 	if err != nil {
 		return err
 	}
+	locks := make([]*store.ItemLock, 0, len(episodes))
+	releaseLocks := func() {
+		for _, lock := range locks {
+			_ = lock.Release(context.WithoutCancel(ctx))
+		}
+	}
+	for _, episode := range episodes {
+		lock, lockErr := s.store.Locks().Acquire(ctx, model.SubjectEpisode, episode.ID,
+			"api-delete-series", 5*time.Minute)
+		if errors.Is(lockErr, store.ErrLocked) {
+			releaseLocks()
+			return Conflict("series has an episode currently being processed; retry deletion shortly")
+		}
+		if lockErr != nil {
+			releaseLocks()
+			return lockErr
+		}
+		locks = append(locks, lock)
+	}
+	defer releaseLocks()
+
 	target := collectionTarget{root: series.RootFolder}
 	for _, episode := range episodes {
 		if episode.ImportedPath != "" {

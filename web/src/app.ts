@@ -9,6 +9,8 @@ let current: View = "dashboard";
 let eventSource: EventSource | null = null;
 let refreshTimer = 0;
 
+type DialogCheck = { id: string; label: string; detail: string; checked?: boolean; required?: boolean };
+
 const nav: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◫" },
   { id: "series", label: "Series", icon: "▤" },
@@ -84,18 +86,22 @@ function authGate(message: string): void {
 }
 
 async function dashboard(): Promise<void> {
-  const [health, queue, history] = await Promise.all([
-    api<Item>("/api/v1/health"), api<Item>("/api/v1/queue"), api<Item>("/api/v1/history?page=1")
+  const [health, queue, history, movies] = await Promise.all([
+    api<Item>("/api/v1/health"), api<Item>("/api/v1/queue"), api<Item>("/api/v1/history?page=1"),
+    api<Item>("/api/v1/movies")
   ]);
   const active = queue.items ?? [];
   const recent = (history.items ?? []).slice(0, 8);
   const components = health.components ?? [];
+  const movieNames = new Map<number, string>((movies.items ?? []).map((movie: Item) => [movie.id, movie.title]));
   content(`<div class="page-head"><div><h1>Dashboard</h1><p>${active.length} active downloads</p></div>
     <button class="command" id="refresh-search">↻ <span>Run search</span></button></div>
     <section><h2>Active downloads</h2><div class="downloads">${active.length ? active.map((g: Item) => `
-      <article class="download"><div><strong>${esc(g.torrent_hash.slice(0, 10))}</strong>${state(g.state)}</div>
+      <article class="download"><div class="download-title"><strong title="${esc(g.content_path)}">${esc(downloadLabel(g, movieNames))}</strong>
+      <small>${esc(g.subject_type)} #${esc(g.subject_id)}</small></div>${state(g.state)}
       <div class="progress"><i style="width:${Math.max(0, Math.min(100, g.progress * 100))}%"></i></div>
-      <small>${(g.progress * 100).toFixed(1)}%</small></article>`).join("") : `<div class="empty">No active downloads</div>`}</div></section>
+      <small class="progress-label">${(g.progress * 100).toFixed(1)}%</small>
+      <button class="command danger cancel-grab" data-grab="${g.id}">Cancel</button></article>`).join("") : `<div class="empty">No active downloads</div>`}</div></section>
     <section><h2>System health</h2><div class="health-grid">${components.map((c: Item) => `<div class="health-row">
       <span class="health-dot ${esc(c.status)}"></span><div><strong>${esc(c.name)}</strong><small>${esc(c.detail || c.kind)}</small></div>${state(c.status)}</div>`).join("")}</div></section>
     <section><h2>Recent activity</h2>${table(["Subject", "State", "Progress", "Updated"], recent.map((g: Item) => [
@@ -104,6 +110,10 @@ async function dashboard(): Promise<void> {
   document.querySelector<HTMLButtonElement>("#refresh-search")!.onclick = async () => {
     await api("/api/v1/system/trigger/search", { method: "POST" }); showToast("Search triggered");
   };
+  document.querySelectorAll<HTMLButtonElement>(".cancel-grab").forEach(button => button.onclick = () => {
+    const grab = active.find((item: Item) => item.id === Number(button.dataset.grab));
+    if (grab) void cancelGrab(grab, downloadLabel(grab, movieNames));
+  });
   setConnection(health.status);
 }
 
@@ -121,14 +131,27 @@ async function seriesView(): Promise<void> {
 }
 
 async function seriesDetail(id: number): Promise<void> {
-  const payload = await api<Item>(`/api/v1/series/${id}`);
+  const [payload, profilesPayload, queuePayload] = await Promise.all([
+    api<Item>(`/api/v1/series/${id}`), api<Item>("/api/v1/profiles"), api<Item>("/api/v1/queue")
+  ]);
   const item = payload.series, episodes = payload.episodes ?? [];
+  const profiles = profilesPayload.items ?? [];
+  const episodeIDs = new Set<number>(episodes.map((episode: Item) => episode.id));
+  const hasActive = (queuePayload.items ?? []).some((grab: Item) => grab.subject_type === "episode" && episodeIDs.has(grab.subject_id));
+  const hasFiles = episodes.some((episode: Item) => Boolean(episode.imported_path));
   const detail = document.querySelector<HTMLElement>("#series-detail")!;
   detail.innerHTML = `<div class="section-head"><div><h2>${esc(item.title)}</h2><p>${esc(item.monitor_mode)} monitoring</p></div>
-    <button class="icon-button" id="series-search" title="Search now">↻</button></div>
+    <div class="row-actions"><button class="command" id="series-search">Search</button>
+    <button class="command danger" id="series-delete">Delete</button></div></div>
+    <div class="manage-bar"><label>Profile<select id="series-profile">${profileOptions(profiles, item.quality_profile_id)}</select></label>
+    <label>Monitoring<select id="series-monitor">
+      ${option("future_only", "Future only", item.monitor_mode)}${option("all", "All episodes", item.monitor_mode)}
+      ${option("latest_season", "Latest season", item.monitor_mode)}${option("none", "None", item.monitor_mode)}</select></label>
+    <label>Status<select id="series-status">${option("following", "Following", item.status)}
+      ${option("paused", "Paused", item.status)}${option("ended", "Ended", item.status)}</select></label></div>
     ${table(["Episode", "Title", "Air date", "State", ""], episodes.map((e: Item) => [
       `S${pad(e.season)}E${pad(e.number)}`, esc(e.title || "Untitled"), date(e.air_date), state(e.state),
-      `<button class="icon-button episode-search" data-id="${e.id}" title="Search now">↻</button>`
+      `<button class="command compact episode-search" data-id="${e.id}">Search</button>`
     ]))}`;
   detail.querySelector<HTMLButtonElement>("#series-search")!.onclick = async () => {
     await api(`/api/v1/series/${id}/search`, { method: "POST" }); showToast("Series search started");
@@ -136,18 +159,52 @@ async function seriesDetail(id: number): Promise<void> {
   detail.querySelectorAll<HTMLButtonElement>(".episode-search").forEach(button => button.onclick = async () => {
     await api(`/api/v1/episodes/${button.dataset.id}/search`, { method: "POST" }); showToast("Episode search started");
   });
+  detail.querySelector<HTMLSelectElement>("#series-profile")!.onchange = event =>
+    patchSeries(id, { profile_id: Number((event.currentTarget as HTMLSelectElement).value) });
+  detail.querySelector<HTMLSelectElement>("#series-monitor")!.onchange = event =>
+    patchSeries(id, { monitor_mode: (event.currentTarget as HTMLSelectElement).value });
+  detail.querySelector<HTMLSelectElement>("#series-status")!.onchange = event =>
+    patchSeries(id, { status: (event.currentTarget as HTMLSelectElement).value });
+  detail.querySelector<HTMLButtonElement>("#series-delete")!.onclick = () =>
+    void deleteCollection("series", id, item.title, hasActive, hasFiles);
 }
 
 async function moviesView(): Promise<void> {
-  const payload = await api<Item>("/api/v1/movies");
+  const [payload, profilesPayload, queuePayload] = await Promise.all([
+    api<Item>("/api/v1/movies"), api<Item>("/api/v1/profiles"), api<Item>("/api/v1/queue")
+  ]);
   const items = payload.items ?? [];
+  const profiles = profilesPayload.items ?? [];
+  const activeByMovie = new Map<number, Item>((queuePayload.items ?? [])
+    .filter((grab: Item) => grab.subject_type === "movie").map((grab: Item) => [grab.subject_id, grab]));
   const node = content(`<div class="page-head"><div><h1>Movies</h1><p>${items.length} tracked</p></div>
     <button class="command" data-view="add">+ <span>Add movie</span></button></div>
-    ${table(["Title", "Year", "State", "Attempts", ""], items.map((m: Item) => [esc(m.title), esc(m.year), state(m.state), esc(m.search_attempts),
-      `<button class="icon-button movie-search" data-id="${m.id}" title="Search now">↻</button>`]))}`);
+    <div class="collection-list">${items.length ? items.map((m: Item) => `<article class="collection-row">
+      <div class="collection-title"><strong>${esc(m.title)}</strong><small>${esc(m.year)}</small></div>
+      <div class="collection-field"><span>State</span>${state(m.state)}</div>
+      <div class="collection-field"><span>Quality</span><strong>${esc(m.imported_quality || "Not imported")}</strong></div>
+      <label class="collection-field">Profile<select class="table-select movie-profile" data-id="${m.id}">${profileOptions(profiles, m.quality_profile_id)}</select></label>
+      <div class="row-actions"><button class="command compact movie-search" data-id="${m.id}">Search</button>
+      ${activeByMovie.has(m.id) ? `<button class="command compact danger movie-cancel" data-id="${m.id}">Cancel</button>` : ""}
+      <button class="command compact danger movie-delete" data-id="${m.id}">Delete</button></div></article>`).join("") : `<div class="empty">No tracked movies</div>`}</div>`);
   node.querySelector<HTMLElement>("[data-view=add]")!.onclick = () => navigate("add");
   node.querySelectorAll<HTMLButtonElement>(".movie-search").forEach(button => button.onclick = async () => {
     await api(`/api/v1/movies/${button.dataset.id}/search`, { method: "POST" }); showToast("Movie search started");
+  });
+  node.querySelectorAll<HTMLSelectElement>(".movie-profile").forEach(select => select.onchange = async () => {
+    await api(`/api/v1/movies/${select.dataset.id}`, { method: "PATCH",
+      body: JSON.stringify({ profile_id: Number(select.value) }) });
+    showToast("Movie profile updated");
+  });
+  node.querySelectorAll<HTMLButtonElement>(".movie-cancel").forEach(button => button.onclick = () => {
+    const grab = activeByMovie.get(Number(button.dataset.id));
+    const movie = items.find((item: Item) => item.id === Number(button.dataset.id));
+    if (grab && movie) void cancelGrab(grab, movie.title);
+  });
+  node.querySelectorAll<HTMLButtonElement>(".movie-delete").forEach(button => button.onclick = () => {
+    const movie = items.find((item: Item) => item.id === Number(button.dataset.id));
+    if (movie) void deleteCollection("movies", movie.id, movie.title,
+      activeByMovie.has(movie.id), Boolean(movie.imported_path));
   });
 }
 
@@ -206,6 +263,102 @@ async function settingsView(): Promise<void> {
   };
   node.querySelectorAll<HTMLButtonElement>(".trigger").forEach(button => button.onclick = async () => {
     await api(`/api/v1/system/trigger/${button.dataset.loop}`, { method: "POST" }); showToast(`${button.dataset.loop} triggered`);
+  });
+}
+
+function option(value: string, label: string, selected: string): string {
+  return `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(label)}</option>`;
+}
+
+function profileOptions(profiles: Item[], selected: number): string {
+  return profiles.map(profile => option(String(profile.id), profile.name, String(selected))).join("");
+}
+
+async function patchSeries(id: number, body: Item): Promise<void> {
+  try {
+    await api(`/api/v1/series/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+    showToast("Series updated");
+  } catch (error) {
+    showError(error);
+    await seriesDetail(id);
+  }
+}
+
+function downloadLabel(grab: Item, movieNames: Map<number, string>): string {
+  if (grab.subject_type === "movie" && movieNames.has(grab.subject_id)) return movieNames.get(grab.subject_id)!;
+  const parts = String(grab.content_path || "").replaceAll("\\", "/").split("/").filter(Boolean);
+  return parts.at(-1) || `${grab.subject_type} #${grab.subject_id}`;
+}
+
+async function cancelGrab(grab: Item, label: string): Promise<void> {
+  const values = await confirmDialog({
+    title: "Cancel download",
+    message: `Stop ${label} and return it to the wanted queue?`,
+    confirmLabel: "Cancel download",
+    checks: [
+      { id: "deleteData", label: "Delete downloaded data", detail: "Removes partial or completed source data from the download folder.", checked: true },
+      { id: "blacklist", label: "Blacklist this release", detail: "Prevents Reelay from selecting the same release on its next search.", checked: true }
+    ]
+  });
+  if (!values) return;
+  try {
+    await api(`/api/v1/queue/${grab.id}?deleteData=${values.deleteData}&blacklist=${values.blacklist}`,
+      { method: "DELETE" });
+    showToast("Download canceled");
+    await navigate(current);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteCollection(kind: "movies" | "series", id: number, label: string,
+  hasActive: boolean, hasFiles: boolean): Promise<void> {
+  const checks: DialogCheck[] = [
+    { id: "deleteDownloads", label: "Remove download-client data",
+      detail: hasActive ? "Required because this collection has an active download." : "Removes Reelay torrents and their source data.",
+      checked: hasActive, required: hasActive }
+  ];
+  if (hasFiles) checks.push({ id: "deleteFiles", label: "Delete imported library files",
+    detail: "Removes only Reelay's imported files and matching subtitles inside the configured library root." });
+  const values = await confirmDialog({
+    title: `Delete ${kind === "movies" ? "movie" : "series"}`,
+    message: `Remove ${label} from Reelay? Unselected files remain on disk.`,
+    confirmLabel: "Delete",
+    checks
+  });
+  if (!values) return;
+  try {
+    await api(`/api/v1/${kind}/${id}?deleteFiles=${Boolean(values.deleteFiles)}&deleteDownloads=${Boolean(values.deleteDownloads)}`,
+      { method: "DELETE" });
+    showToast(`${label} deleted`);
+    await navigate(kind === "movies" ? "movies" : "series");
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function confirmDialog(options: { title: string; message: string; confirmLabel: string; checks: DialogCheck[] }): Promise<Record<string, boolean> | null> {
+  return new Promise(resolve => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    dialog.innerHTML = `<form method="dialog"><header><h2>${esc(options.title)}</h2><p>${esc(options.message)}</p></header>
+      <div class="dialog-options">${options.checks.map(check => `<label class="dialog-option">
+        <input type="checkbox" name="${esc(check.id)}" ${check.checked ? "checked" : ""} ${check.required ? "required" : ""}>
+        <span><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></span></label>`).join("")}</div>
+      <footer><button class="command" value="cancel" formnovalidate>Keep</button>
+      <button class="command danger" value="confirm">${esc(options.confirmLabel)}</button></footer></form>`;
+    document.body.append(dialog);
+    dialog.addEventListener("close", () => {
+      const confirmed = dialog.returnValue === "confirm";
+      const values: Record<string, boolean> = {};
+      options.checks.forEach(check => {
+        values[check.id] = dialog.querySelector<HTMLInputElement>(`[name="${check.id}"]`)!.checked;
+      });
+      dialog.remove();
+      resolve(confirmed ? values : null);
+    }, { once: true });
+    dialog.addEventListener("cancel", () => { dialog.returnValue = "cancel"; });
+    dialog.showModal();
   });
 }
 

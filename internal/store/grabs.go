@@ -194,6 +194,27 @@ func (r *GrabRepository) History(ctx context.Context, limit, offset int) ([]mode
 	return out, rows.Err()
 }
 
+func (r *GrabRepository) BySubject(ctx context.Context, subject model.SubjectType, id int64) ([]model.Grab, error) {
+	if !subject.ValidItem() || id <= 0 {
+		return nil, errors.New("list subject grabs: invalid subject or id")
+	}
+	rows, err := r.s.ro.QueryContext(ctx, selectGrabSQL+
+		" WHERE subject_type=? AND subject_id=? ORDER BY created_at DESC, id DESC", subject, id)
+	if err != nil {
+		return nil, fmt.Errorf("list grabs for %s:%d: %w", subject, id, err)
+	}
+	defer rows.Close()
+	var out []model.Grab
+	for rows.Next() {
+		value, err := scanGrab(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 const selectGrabSQL = `SELECT id, subject_type, subject_id, release_id,
  torrent_hash, category, state, progress, content_path, attempts, last_error,
  created_at, updated_at, progressed_at FROM grabs`

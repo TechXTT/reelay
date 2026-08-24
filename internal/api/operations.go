@@ -114,11 +114,22 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return NotFound("grab %d not found", id)
 	}
-	if err := s.downloader.Remove(r.Context(), grab.TorrentHash, true); err != nil &&
+	deleteData, err := queryBool(r.URL.Query().Get("deleteData"), "deleteData", true)
+	if err != nil {
+		return err
+	}
+	blacklist, err := queryBool(r.URL.Query().Get("blacklist"), "blacklist", true)
+	if err != nil {
+		return err
+	}
+	if s.downloader == nil {
+		return Unavailable("download client is unavailable")
+	}
+	if err := s.downloader.Remove(r.Context(), grab.TorrentHash, deleteData); err != nil &&
 		!errors.Is(err, downloader.ErrNotFound) {
 		return Conflict("torrent could not be removed").WithCause(err)
 	}
-	if r.URL.Query().Get("blacklist") != "false" {
+	if blacklist {
 		release, releaseErr := s.store.Releases().Get(r.Context(), grab.ReleaseID)
 		if releaseErr == nil {
 			_ = s.store.Decisions().Blacklist(r.Context(), grab.SubjectType, grab.SubjectID,

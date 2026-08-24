@@ -155,11 +155,16 @@ func (s *Server) handleSeriesDelete(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if r.URL.Query().Get("deleteFiles") == "true" {
-		return BadRequest("file deletion is not supported; remove library files explicitly")
+	deleteFiles, err := queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false)
+	if err != nil {
+		return err
 	}
-	if err := s.store.Series().Delete(r.Context(), id); err != nil {
-		return NotFound("series %d not found", id)
+	deleteDownloads, err := queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
+	if err != nil {
+		return err
+	}
+	if err := s.deleteSeriesCollection(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
+		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil

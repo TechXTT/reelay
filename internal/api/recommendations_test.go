@@ -45,17 +45,17 @@ func TestRecommendationRequestCreatesMovieIdempotently(t *testing.T) {
 	root := t.TempDir()
 	srv, st := newTestServer(t, func(cfg *config.Config) { cfg.Library.MovieRoot = root })
 	srv.movies = recommendationMovieProvider{}
-	if _, err := st.Profiles().Seed(t.Context(), []model.QualityProfile{{Name: "Default", IsDefault: true, AllowedResolutions: []string{"1080p"}, AllowedSources: []string{"webdl"}, MinSeeders: 1}}); err != nil {
+	if _, err := st.Profiles().Seed(context.Background(), []model.QualityProfile{{Name: "Default", IsDefault: true, AllowedResolutions: []string{"1080p"}, AllowedSources: []string{"webdl"}, MinSeeders: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	if err := st.Recommendations().UpsertUser(t.Context(), model.JellyfinUser{ServerID: "server", UserID: "user", DisplayName: "User", Enabled: true}); err != nil {
+	if err := st.Recommendations().UpsertUser(context.Background(), model.JellyfinUser{ServerID: "server", UserID: "user", DisplayName: "User", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Recommendations().Replace(t.Context(), "server", "user", "movie", []model.Recommendation{{TMDBID: 99, Title: "Candidate", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}}); err != nil {
+	if err := st.Recommendations().Replace(context.Background(), "server", "user", "movie", []model.Recommendation{{TMDBID: 99, Title: "Candidate", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
-	values, err := st.Recommendations().List(t.Context(), "server", "user", "movie", "active", 10, 0)
+	values, err := st.Recommendations().List(context.Background(), "server", "user", "movie", "active", 10, 0)
 	if err != nil || len(values) != 1 {
 		t.Fatalf("values=%+v err=%v", values, err)
 	}
@@ -66,7 +66,7 @@ func TestRecommendationRequestCreatesMovieIdempotently(t *testing.T) {
 			t.Fatalf("request %d status=%d body=%s", i, response.Code, response.Body.String())
 		}
 	}
-	movies, err := st.Movies().List(t.Context())
+	movies, err := st.Movies().List(context.Background())
 	if err != nil || len(movies) != 1 || movies[0].TMDBID != 99 || movies[0].State != model.StateWanted {
 		t.Fatalf("movies=%+v err=%v", movies, err)
 	}
@@ -84,7 +84,7 @@ func TestJellyfinSyncEventsAndRecommendationDismissal(t *testing.T) {
 	if rec := doJSON(t, handler, http.MethodPost, "/api/v1/integrations/jellyfin/events", events); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"duplicates":1`)) {
 		t.Fatalf("events status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if err := st.Recommendations().Replace(t.Context(), "server", "user", "movie", []model.Recommendation{{TMDBID: 99, Title: "Candidate", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}}); err != nil {
+	if err := st.Recommendations().Replace(context.Background(), "server", "user", "movie", []model.Recommendation{{TMDBID: 99, Title: "Candidate", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
 	list := do(t, handler, http.MethodGet, "/api/v1/recommendations?server_id=server&user_id=user&media_type=movie", authed())

@@ -36,7 +36,7 @@ func (recommendationProviderFake) DiscoveryDetails(_ context.Context, _ string, 
 }
 
 func TestServiceGeneratesAndPersistsEnrichedRecommendations(t *testing.T) {
-	ctx := t.Context()
+	ctx := context.Background()
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	db, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "recommendations.db"), Now: func() time.Time { return now }})
 	if err != nil {

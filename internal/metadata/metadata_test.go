@@ -154,11 +154,11 @@ func TestTMDBDiscoveryAndTVmazeExternalLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	values, err := tmdb.Recommendations(t.Context(), "movie", 42)
+	values, err := tmdb.Recommendations(context.Background(), "movie", 42)
 	if err != nil || len(values) != 1 || values[0].Genres[0] != "Science Fiction" {
 		t.Fatalf("recommendations=%+v err=%v", values, err)
 	}
-	detail, err := tmdb.DiscoveryDetails(t.Context(), "movie", 99)
+	detail, err := tmdb.DiscoveryDetails(context.Background(), "movie", 99)
 	if err != nil || detail.IMDBID != "tt0000099" || detail.RuntimeMinutes != 121 || len(detail.People) != 2 || len(detail.Keywords) != 1 {
 		t.Fatalf("detail=%+v err=%v", detail, err)
 	}
@@ -175,7 +175,7 @@ func TestTMDBDiscoveryAndTVmazeExternalLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	series, err := tvmaze.LookupSeries(t.Context(), 81189, "")
+	series, err := tvmaze.LookupSeries(context.Background(), 81189, "")
 	if err != nil || series.TVmazeID != 1396 || series.Year != 2008 {
 		t.Fatalf("series=%+v err=%v", series, err)
 	}

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Jellyfin.Plugin.Reelay</AssemblyName>
+    <RootNamespace>Jellyfin.Plugin.Reelay</RootNamespace>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" ExcludeAssets="runtime" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+  </ItemGroup>
+</Project>

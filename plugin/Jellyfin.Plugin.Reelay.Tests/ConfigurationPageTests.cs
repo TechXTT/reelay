@@ -23,5 +23,6 @@ public sealed class ConfigurationPageTests
         Assert.True(scriptStart < scriptEnd && scriptEnd < pageEnd);
         Assert.Contains("data-require=\"emby-input,emby-button,emby-checkbox\"", html, StringComparison.Ordinal);
         Assert.Contains("autocomplete=\"new-password\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("${", html, StringComparison.Ordinal);
     }
 }

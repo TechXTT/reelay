@@ -26,7 +26,7 @@
     const escapeHTML = value => String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
     const showError = (prefix, error) => {
       Dashboard.hideLoadingMsg();
-      Dashboard.alert(`${prefix}: ${error && error.message ? error.message : error}`);
+      Dashboard.alert(prefix + ': ' + (error && error.message ? error.message : error));
     };
     page.addEventListener('pageshow', () => { Dashboard.showLoadingMsg(); Promise.all([ApiClient.getPluginConfiguration(pluginId), ApiClient.getUsers()]).then(([c, values]) => {
       users = Array.isArray(values) ? values : [];
@@ -36,7 +36,7 @@
       page.querySelector('#VirtualRoot').value = c.VirtualRoot || '';
       page.querySelector('#RecommendationLimit').value = c.RecommendationLimit || 40;
       const enabled = new Set((c.EnabledUserIds || []).map(normaliseId));
-      page.querySelector('#EnabledUsers').innerHTML = users.map(u => `<label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" value="${escapeHTML(normaliseId(u.Id))}" ${!enabled.size || enabled.has(normaliseId(u.Id)) ? 'checked' : ''}><span>${escapeHTML(u.Name)}</span></label>`).join('');
+      page.querySelector('#EnabledUsers').innerHTML = users.map(u => '<label class="checkboxContainer"><input is="emby-checkbox" type="checkbox" value="' + escapeHTML(normaliseId(u.Id)) + '" ' + (!enabled.size || enabled.has(normaliseId(u.Id)) ? 'checked' : '') + '><span>' + escapeHTML(u.Name) + '</span></label>').join('');
       renderPaths();
       Dashboard.hideLoadingMsg();
     }).catch(error => showError('Unable to load Reelay settings', error)); });
@@ -44,7 +44,7 @@
       const root = page.querySelector('#VirtualRoot').value.trim().replace(/[\\/]+$/, '');
       const inputs = page.querySelectorAll('#EnabledUsers input');
       page.querySelector('#LibraryPaths').innerHTML = users.filter((_, i) => inputs[i] && inputs[i].checked).map(u => {
-        const id = normaliseId(u.Id); return `<p><strong>${escapeHTML(u.Name)}</strong><br><code>${escapeHTML(root)}/${escapeHTML(id)}/movies</code><br><code>${escapeHTML(root)}/${escapeHTML(id)}/series</code></p>`;
+        const id = normaliseId(u.Id); return '<p><strong>' + escapeHTML(u.Name) + '</strong><br><code>' + escapeHTML(root) + '/' + escapeHTML(id) + '/movies</code><br><code>' + escapeHTML(root) + '/' + escapeHTML(id) + '/series</code></p>';
       }).join('');
     };
     page.querySelector('#VirtualRoot').addEventListener('input', renderPaths);
@@ -55,9 +55,9 @@
         const url = ApiClient.getUrl('Reelay/Test');
         const token = page.querySelector('#AuthToken').value.trim();
         const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Emby-Token': ApiClient.accessToken() }, body: JSON.stringify({ url: page.querySelector('#ReelayUrl').value.trim(), token }) });
-        if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || `${response.status} ${response.statusText}`); }
+        if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || response.status + ' ' + response.statusText); }
         Dashboard.alert('Connected to Reelay.');
-      } catch (error) { Dashboard.alert(`Reelay connection failed: ${error.message}`); }
+      } catch (error) { Dashboard.alert('Reelay connection failed: ' + error.message); }
       finally { Dashboard.hideLoadingMsg(); }
     });
     page.querySelector('#ReelayConfigForm').addEventListener('submit', e => {

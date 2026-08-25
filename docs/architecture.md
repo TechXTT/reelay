@@ -15,13 +15,16 @@ a filesystem/API bridge and does not contain recommendation or download logic.
    SQLite advisory lock.
 3. Parser output passes through hard filters before accepted releases receive a
    weighted score. All accepted and rejected decisions are persisted.
-4. The winner is added to the downloader with a Reelay-owned category. The grab
-   and `searching -> grabbed` transition are committed together.
+4. The winner is added to the downloader with a Reelay-owned category. Only one
+   torrent may be active for a series. A season or multi-episode pack creates
+   one grab row and atomically reserves every wanted episode it covers; the
+   remaining episode searches stop until that grab finishes.
 5. The status loop advances progress, detects no-progress stalls, blacklists a
    failed info hash, and returns the item to `wanted` with backoff.
 6. At completion the importer maps the client path, discovers media files,
-   hardlinks or checksum-copies them into the library, carries subtitles, and
-   commits `importing -> imported` with the final path.
+   hardlinks or checksum-copies only the reserved episodes into the library,
+   carries subtitles, and commits every covered `importing -> imported`
+   transition with its own final path.
 7. Each transition and progress update is published to the bounded SSE bus. The
    database remains authoritative if a browser misses an event.
 

@@ -113,6 +113,12 @@ Two settings are security-relevant:
   only ever acts on torrents carrying one of its own categories, so the other
   torrents in your client are invisible to it. Neither may be empty.
 
+Series downloads are serialized per series. Reelay starts at most one torrent
+for a series at a time. A selected season or multi-episode pack appears once in
+the queue, reserves all wanted episodes it contains, and imports only those
+reserved episodes. Multi-season packs receive an over-fetch penalty so a
+bounded season pack wins when both can satisfy the current season.
+
 ## Storage
 
 SQLite, one file, WAL mode. Timestamps are stored as fixed-width RFC3339 UTC so

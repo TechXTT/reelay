@@ -194,6 +194,7 @@ discovery and request surface without changing the import pipeline. Reelay owns
 recommendations and requests; the plugin synchronizes library activity, creates
 per-user virtual libraries, and treats Favorite as Request and Dislike as
 Dismiss inside those virtual libraries. Playback never requests a title.
+Currently owned and previously watched titles are excluded before ranking.
 
 Point one library at each root, with the matching content type:
 
@@ -240,6 +241,12 @@ dislikes are checked every minute and written to a durable retry outbox before
 being sent. Movie requests enter the wanted queue immediately. Series requests
 use `future_only` monitoring by default; change the series to `all` in Reelay if
 you want its aired back catalogue.
+
+Use the 1-5 selector on Reelay's Discover view to rate a suggestion without
+requesting it. The suggestion is removed, high ratings become recommendation
+seeds, and low ratings subtract from matching genres, keywords, and people.
+The plugin also synchronizes Jellyfin's native per-user rating field when the
+active Jellyfin client exposes a personal-rating control.
 
 Jellyfin `10.11.11` is the stable target. The Jellyfin 12 artifact tracks the
 exact prerelease ABI and should be used only with the matching preview server

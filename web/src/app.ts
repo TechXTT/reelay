@@ -146,7 +146,9 @@ async function discoverView(selectedUser = "", mediaType = "movie"): Promise<voi
       ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
       <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}</small></div><strong>${Number(item.score).toFixed(0)}</strong></div>
       <p>${esc(item.overview || "")}</p><ul>${(item.reasons ?? []).map((reason: string) => `<li>${esc(reason)}</li>`).join("")}</ul>
-      <div class="row-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button><button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
+      <div class="row-actions recommendation-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button>
+      <label class="rating-field"><span>Rating</span><select class="rec-rating" aria-label="Rating for ${esc(item.title)}"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option></select></label>
+      <button class="command compact rec-rate" data-id="${item.id}">Rate</button><button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
     </article>`).join("") : `<div class="empty">No active recommendations</div>`}</div>`);
   node.querySelector<HTMLSelectElement>("#discover-user")!.onchange = event => void discoverView((event.currentTarget as HTMLSelectElement).value, mediaType);
   node.querySelectorAll<HTMLInputElement>("[name=discover-type]").forEach(input => input.onchange = () => void discoverView(key, input.value));
@@ -157,6 +159,11 @@ async function discoverView(selectedUser = "", mediaType = "movie"): Promise<voi
   for (const action of ["dismiss", "request"]) node.querySelectorAll<HTMLButtonElement>(`.rec-${action}`).forEach(button => button.onclick = async () => {
     await api(`/api/v1/recommendations/${button.dataset.id}/actions`, { method: "POST", body: JSON.stringify({ action_id: crypto.randomUUID(), action }) });
     showToast(action === "request" ? "Added to Reelay" : "Recommendation dismissed"); await discoverView(key, mediaType);
+  });
+  node.querySelectorAll<HTMLButtonElement>(".rec-rate").forEach(button => button.onclick = async () => {
+    const rating = Number(button.parentElement?.querySelector<HTMLSelectElement>(".rec-rating")?.value);
+    await api(`/api/v1/recommendations/${button.dataset.id}/actions`, { method: "POST", body: JSON.stringify({ action_id: crypto.randomUUID(), action: "rate", rating }) });
+    showToast(`Rated ${rating} of 5`); await discoverView(key, mediaType);
   });
 }
 

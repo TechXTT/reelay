@@ -65,7 +65,7 @@ falls back to a verified copy.
    current inventory.
 2. Reelay selects at most 12 recent positive seeds and asks TMDB for recommended
    and similar candidates. Cold-start profiles use TMDB Discover.
-3. Owned, requested, dismissed, and duplicate titles are removed before a
+3. Owned, watched, requested, dismissed, rated, and duplicate titles are removed before a
    bounded set of at most 300 candidates is ranked.
 4. The deterministic scorer combines TMDB confidence, content and people
    affinity, multi-seed evidence, rating confidence, user preferences, and a
@@ -76,6 +76,8 @@ falls back to a verified copy.
 6. Favoriting a virtual item creates an idempotent Reelay request; disliking it
    dismisses it. A durable plugin outbox retries failures. The item disappears
    from Discover after success or once the real media enters the library.
+7. A 1-5 rating is durable per user and title. Ratings above neutral add
+   recommendation seeds; ratings below neutral reduce matching taste signals.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
 10.11.11 (`net9.0`) and Jellyfin 12 preview (`net10.0`). ABI-specific package

@@ -85,6 +85,33 @@ func (r *EpisodeRepository) WantedDue(ctx context.Context, now time.Time, limit 
 	return collectRows(rows, scanEpisode)
 }
 
+func (r *EpisodeRepository) SeriesHasActive(ctx context.Context, seriesID int64) (bool, error) {
+	if seriesID <= 0 {
+		return false, errors.New("active series check requires a series id")
+	}
+	var active bool
+	err := r.s.ro.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM episodes WHERE series_id=? AND state IN ('grabbed','downloading','importing')
+)`, seriesID).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("check active series %d: %w", seriesID, err)
+	}
+	return active, nil
+}
+
+func (r *EpisodeRepository) ActiveByRelease(ctx context.Context, releaseID int64) ([]model.Episode, error) {
+	if releaseID <= 0 {
+		return nil, errors.New("active release lookup requires a release id")
+	}
+	rows, err := r.s.ro.QueryContext(ctx, selectEpisodeSQL+`
+ WHERE chosen_release_id=? AND state IN ('grabbed','downloading','importing')
+ ORDER BY series_id, season, number`, releaseID)
+	if err != nil {
+		return nil, fmt.Errorf("list active episodes for release %d: %w", releaseID, err)
+	}
+	return collectRows(rows, scanEpisode)
+}
+
 // UpsertMetadata refreshes provider-owned fields without overwriting lifecycle
 // state. It returns created=true only when this episode was newly announced.
 func (r *EpisodeRepository) UpsertMetadata(ctx context.Context, in model.Episode, initial model.ItemState, reason string) (model.Episode, bool, error) {

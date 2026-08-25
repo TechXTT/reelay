@@ -156,6 +156,15 @@ func (r *TransitionRepository) MarkImportedLocked(ctx context.Context, lock *Ite
 	})
 }
 
+func (r *TransitionRepository) MarkImported(ctx context.Context, subject model.SubjectType, id int64, path, quality, reason string) error {
+	lock, err := r.s.Locks().Acquire(ctx, subject, id, "mark-imported", 10*time.Minute)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
+	return r.MarkImportedLocked(ctx, lock, path, quality, reason)
+}
+
 func (r *TransitionRepository) RetryNow(ctx context.Context, subject model.SubjectType, id int64, reason string) error {
 	return r.retryNow(ctx, subject, id, reason, true)
 }

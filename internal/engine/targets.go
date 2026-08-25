@@ -14,7 +14,9 @@ import (
 type searchTarget struct {
 	subject     model.SubjectType
 	id          int64
+	seriesID    int64
 	want        model.Wanted
+	episodes    []model.Episode
 	profile     model.QualityProfile
 	runtime     int
 	attempts    int
@@ -58,6 +60,7 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 			savePath: e.cfg.Downloader.SavePathMovies, imported: importedQuality(movie.ImportedQuality)})
 	}
 	seriesCache := map[int64]model.Series{}
+	episodeCache := map[int64][]model.Episode{}
 	for _, episode := range episodes {
 		series, ok := seriesCache[episode.SeriesID]
 		if !ok {
@@ -71,11 +74,32 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, searchTarget{subject: model.SubjectEpisode, id: episode.ID,
+		seriesEpisodes, ok := episodeCache[series.ID]
+		if !ok {
+			seriesEpisodes, err = e.store.Episodes().ListBySeries(ctx, series.ID)
+			if err != nil {
+				return nil, err
+			}
+			episodeCache[series.ID] = seriesEpisodes
+		}
+		wantedNumbers := make([]int, 0, len(seriesEpisodes))
+		wantedEpisodes := make([]model.Episode, 0, len(seriesEpisodes))
+		for _, candidate := range seriesEpisodes {
+			if candidate.State != model.StateWanted {
+				continue
+			}
+			wantedEpisodes = append(wantedEpisodes, candidate)
+			if candidate.Season == episode.Season {
+				wantedNumbers = append(wantedNumbers, candidate.Number)
+			}
+		}
+		out = append(out, searchTarget{subject: model.SubjectEpisode, id: episode.ID, seriesID: series.ID,
 			want: model.Wanted{Kind: model.SubjectEpisode, Title: series.Title,
 				Aliases: series.Aliases, Season: episode.Season, Episode: episode.Number,
-				AbsoluteEp: episode.AbsoluteNumber, IsAnime: series.IsAnime},
-			profile: p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
+				AbsoluteEp: episode.AbsoluteNumber, IsAnime: series.IsAnime,
+				WantedEpisodes: wantedNumbers},
+			episodes: wantedEpisodes,
+			profile:  p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
 			firstWanted: episode.FirstWantedAt, category: e.cfg.Downloader.CategoryTV,
 			savePath: e.cfg.Downloader.SavePathTV, imported: importedQuality(episode.ImportedQuality)})
 	}

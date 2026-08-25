@@ -66,11 +66,8 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 		if err := e.store.Grabs().Update(ctx, grab); err != nil {
 			return err
 		}
-		if state, err := e.itemState(ctx, grab); err == nil && state == model.StateGrabbed {
-			if _, err := e.store.Transitions().Transition(ctx, grab.SubjectType, grab.SubjectID,
-				model.StateDownloading, "download started", status.State); err != nil {
-				return err
-			}
+		if err := e.advanceGrabItems(ctx, grab, model.StateDownloading, "download started", status.State); err != nil {
+			return err
 		}
 		e.events.Publish(Event{Type: "progress", At: now, SubjectType: string(grab.SubjectType),
 			SubjectID: grab.SubjectID, Data: map[string]any{"grab_id": grab.ID,
@@ -80,6 +77,9 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 }
 
 func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
+	if grab.SubjectType == model.SubjectEpisode {
+		return e.completeEpisodeGrab(ctx, grab)
+	}
 	state, err := e.itemState(ctx, grab)
 	if err != nil {
 		return err
@@ -131,6 +131,91 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 	return e.store.Grabs().Update(ctx, grab)
 }
 
+func (e *Engine) completeEpisodeGrab(ctx context.Context, grab model.Grab) error {
+	episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
+	if err != nil {
+		return err
+	}
+	if len(episodes) == 0 {
+		anchor, getErr := e.store.Episodes().Get(ctx, grab.SubjectID)
+		if getErr == nil && anchor.State == model.StateImported {
+			grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""
+			return e.store.Grabs().Update(ctx, grab)
+		}
+		return fmt.Errorf("completed episode grab has no active covered episodes")
+	}
+	if err := e.advanceGrabItems(ctx, grab, model.StateImporting,
+		"download completed", grab.ContentPath); err != nil {
+		return err
+	}
+	grab.State = model.GrabImporting
+	if err := e.store.Grabs().Update(ctx, grab); err != nil {
+		return err
+	}
+	if e.importer == nil {
+		return errors.New("no importer configured")
+	}
+	if err := e.importer.ImportCompleted(ctx, grab.ID); err != nil {
+		grab.State, grab.LastError = model.GrabFailed, err.Error()
+		_ = e.store.Grabs().Update(context.WithoutCancel(ctx), grab)
+		for _, episode := range episodes {
+			current, getErr := e.store.Episodes().Get(context.WithoutCancel(ctx), episode.ID)
+			if getErr == nil && current.State == model.StateImporting {
+				_, _ = e.store.Transitions().Transition(context.WithoutCancel(ctx), model.SubjectEpisode,
+					episode.ID, model.StateImportFailed, "import failed", err.Error())
+			}
+		}
+		return err
+	}
+	grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""
+	return e.store.Grabs().Update(ctx, grab)
+}
+
+func (e *Engine) advanceGrabItems(ctx context.Context, grab model.Grab, to model.ItemState, reason, detail string) error {
+	if grab.SubjectType == model.SubjectMovie {
+		state, err := e.itemState(ctx, grab)
+		if err != nil || state == to || state == model.StateImported {
+			return err
+		}
+		if to == model.StateImporting && state == model.StateGrabbed {
+			if _, err := e.store.Transitions().Transition(ctx, model.SubjectMovie, grab.SubjectID,
+				model.StateDownloading, reason, detail); err != nil {
+				return err
+			}
+		}
+		_, err = e.store.Transitions().Transition(ctx, model.SubjectMovie, grab.SubjectID, to, reason, detail)
+		return err
+	}
+	episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
+	if err != nil {
+		return err
+	}
+	for _, episode := range episodes {
+		state := episode.State
+		if state == to {
+			continue
+		}
+		if to == model.StateImporting && state == model.StateGrabbed {
+			if _, err := e.store.Transitions().Transition(ctx, model.SubjectEpisode, episode.ID,
+				model.StateDownloading, reason, detail); err != nil {
+				return err
+			}
+			state = model.StateDownloading
+		}
+		if to == model.StateDownloading && state != model.StateGrabbed {
+			continue
+		}
+		if to == model.StateImporting && state != model.StateDownloading {
+			continue
+		}
+		if _, err := e.store.Transitions().Transition(ctx, model.SubjectEpisode,
+			episode.ID, to, reason, detail); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, deleteData bool) error {
 	if err := e.downloader.Remove(ctx, grab.TorrentHash, deleteData); err != nil &&
 		!errors.Is(err, downloader.ErrNotFound) {
@@ -140,12 +225,29 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 	if err != nil {
 		return err
 	}
-	if err := e.store.Decisions().Blacklist(ctx, grab.SubjectType, grab.SubjectID,
-		release.InfoHash, reason); err != nil {
-		return err
-	}
 	grab.State, grab.LastError = model.GrabStalled, reason
 	if err := e.store.Grabs().Update(ctx, grab); err != nil {
+		return err
+	}
+	if grab.SubjectType == model.SubjectEpisode {
+		episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
+		if err != nil {
+			return err
+		}
+		for _, episode := range episodes {
+			if err := e.store.Decisions().Blacklist(ctx, model.SubjectEpisode, episode.ID,
+				release.InfoHash, reason); err != nil {
+				return err
+			}
+			if err := e.store.Transitions().RetryNow(ctx, model.SubjectEpisode,
+				episode.ID, "grab stalled"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := e.store.Decisions().Blacklist(ctx, grab.SubjectType, grab.SubjectID,
+		release.InfoHash, reason); err != nil {
 		return err
 	}
 	state, err := e.itemState(ctx, grab)

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,6 +142,69 @@ func TestQueueCancelCanKeepDataAndSkipBlacklist(t *testing.T) {
 		movie.ID, "0123456789abcdef0123456789abcdef01234567")
 	if err != nil || blacklisted {
 		t.Fatalf("blacklist=%v err=%v", blacklisted, err)
+	}
+}
+
+func TestQueueCancelReturnsEveryCoveredEpisodeToWanted(t *testing.T) {
+	srv, st := newTestServer(t, nil)
+	client := &removalDownloader{}
+	srv.downloader = client
+	ctx := context.Background()
+	if _, err := st.Profiles().Seed(ctx, []model.QualityProfile{{Name: "Test", IsDefault: true,
+		AllowedResolutions: []string{"1080p"}, AllowedSources: []string{"webdl"},
+		MinSizeMB: 1, MaxSizeMB: 12000, MinSeeders: 1,
+		PreferredGroups: map[string]int{}}}); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := st.Profiles().Default(ctx)
+	series, err := st.Series().Create(ctx, model.Series{Title: "Fixture Show", Year: 2020,
+		ProfileID: profile.ID, RootFolder: t.TempDir(), MonitorMode: model.MonitorAll,
+		Status: model.SeriesFollowing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := st.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
+		Number: 1, State: model.StateSearching}, "fixture")
+	second, _ := st.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
+		Number: 2, State: model.StateWanted}, "fixture")
+	release, err := st.Releases().Upsert(ctx, model.StoredRelease{Indexer: "fixture",
+		RawTitle: "Fixture.Show.S01.1080p.WEB-DL.x265-GROUP",
+		InfoHash: "1123456789abcdef0123456789abcdef01234567",
+		Magnet:   "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock1, _ := st.Locks().Acquire(ctx, model.SubjectEpisode, first.ID, "fixture", time.Minute)
+	lock2, _ := st.Locks().Acquire(ctx, model.SubjectEpisode, second.ID, "fixture", time.Minute)
+	grab, err := st.Grabs().CreateGrabbedFor(ctx, []*store.ItemLock{lock1, lock2}, model.Grab{
+		SubjectType: model.SubjectEpisode, SubjectID: first.ID, ReleaseID: release.ID,
+		TorrentHash: release.InfoHash, Category: "reelay-tv"}, "fixture pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lock1.Release(ctx)
+	_ = lock2.Release(ctx)
+	for _, id := range []int64{first.ID, second.ID} {
+		if _, err := st.Transitions().Transition(ctx, model.SubjectEpisode, id,
+			model.StateDownloading, "fixture", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grab.State = model.GrabDownloading
+	if err := st.Grabs().Update(ctx, grab); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv.Handler(), "DELETE", "/api/v1/queue/"+itoa(grab.ID)+
+		"?deleteData=false&blacklist=false", authed())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		episode, err := st.Episodes().Get(ctx, id)
+		if err != nil || episode.State != model.StateWanted {
+			t.Fatalf("episode %d after shared cancel=%+v err=%v", id, episode, err)
+		}
 	}
 }
 

@@ -74,6 +74,9 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 	if len(videos) == 0 {
 		return fmt.Errorf("no qualifying video files under %s", grab.ContentPath)
 	}
+	if grab.SubjectType == model.SubjectEpisode {
+		return s.importEpisodeGrab(ctx, grab, release, parsed, videos)
+	}
 
 	lock, err := s.store.Locks().Acquire(ctx, grab.SubjectType, grab.SubjectID,
 		"importer", 10*time.Minute)
@@ -120,6 +123,87 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 	}
 	s.postWebhook(grab, primaryPath)
 	return nil
+}
+
+type episodeImportResult struct {
+	path    string
+	quality string
+}
+
+func (s *Service) importEpisodeGrab(ctx context.Context, grab model.Grab,
+	release model.StoredRelease, fallback parser.Parsed, videos []string) error {
+	episodes, err := s.store.Episodes().ActiveByRelease(ctx, release.ID)
+	if err != nil {
+		return err
+	}
+	if len(episodes) == 0 {
+		return errors.New("episode grab has no active covered episodes")
+	}
+	results := make(map[int64]episodeImportResult, len(episodes))
+	for _, source := range videos {
+		dest, fileParsed, err := s.destination(ctx, grab, source, fallback)
+		if err != nil {
+			return err
+		}
+		episode, ok := matchingEpisode(fileParsed, episodes)
+		if !ok {
+			// A pack may contain specials or unmonitored episodes. Downloading a
+			// pack never grants permission to add those files to the library.
+			continue
+		}
+		method, replaced, skipped, err := s.land(source, dest, rootFor(s.cfg, grab.SubjectType))
+		if err != nil {
+			return err
+		}
+		if !skipped {
+			info, err := os.Stat(dest)
+			if err != nil {
+				return err
+			}
+			if _, err := s.store.Imports().Create(ctx, model.ImportRecord{GrabID: grab.ID,
+				SubjectType: model.SubjectEpisode, SubjectID: episode.ID, SourcePath: source,
+				DestPath: dest, Method: method, SizeBytes: info.Size(), ReplacedPath: replaced}); err != nil {
+				return err
+			}
+			if err := s.carrySubtitles(source, dest, rootFor(s.cfg, grab.SubjectType)); err != nil {
+				return err
+			}
+		}
+		results[episode.ID] = episodeImportResult{path: dest, quality: qualityLabel(fileParsed)}
+	}
+	for _, episode := range episodes {
+		if results[episode.ID].path == "" {
+			return fmt.Errorf("download contains no matching file for S%02dE%02d",
+				episode.Season, episode.Number)
+		}
+	}
+	for _, episode := range episodes {
+		result := results[episode.ID]
+		if err := s.store.Transitions().MarkImported(ctx, model.SubjectEpisode,
+			episode.ID, result.path, result.quality, "media imported from shared grab"); err != nil {
+			return err
+		}
+	}
+	primary := results[grab.SubjectID].path
+	if primary == "" {
+		primary = results[episodes[0].ID].path
+	}
+	s.postWebhook(grab, primary)
+	return nil
+}
+
+func matchingEpisode(parsed parser.Parsed, episodes []model.Episode) (model.Episode, bool) {
+	if parsed.Season > 0 && parsed.FirstEpisode() > 0 {
+		for _, episode := range episodes {
+			if parsed.CoversEpisode(episode.Season, episode.Number) {
+				return episode, true
+			}
+		}
+	}
+	if len(episodes) == 1 {
+		return episodes[0], true
+	}
+	return model.Episode{}, false
 }
 
 func rootFor(cfg *config.Config, subject model.SubjectType) string {

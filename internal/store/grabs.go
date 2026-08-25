@@ -60,8 +60,29 @@ func (r *GrabRepository) Create(ctx context.Context, in model.Grab) (model.Grab,
 // transaction. A torrent must never exist in the database without its item
 // pointing at the same chosen release.
 func (r *GrabRepository) CreateGrabbed(ctx context.Context, lock *ItemLock, in model.Grab, reason string) (model.Grab, error) {
+	return r.CreateGrabbedFor(ctx, []*ItemLock{lock}, in, reason)
+}
+
+// CreateGrabbedFor records one downloader job for every item supplied by that
+// job. A season pack therefore has one queue row while all covered episodes
+// are reserved atomically and cannot launch competing downloads.
+func (r *GrabRepository) CreateGrabbedFor(ctx context.Context, locks []*ItemLock, in model.Grab, reason string) (model.Grab, error) {
+	if len(locks) == 0 {
+		return in, errors.New("create grabbed requires at least one item lock")
+	}
+	lock := locks[0]
 	if lock == nil || in.SubjectType != lock.Subject || in.SubjectID != lock.ID {
 		return in, errors.New("create grabbed requires the matching item lock")
+	}
+	seen := make(map[int64]bool, len(locks))
+	for _, itemLock := range locks {
+		if itemLock == nil || itemLock.Subject != in.SubjectType || seen[itemLock.ID] {
+			return in, errors.New("create grabbed requires distinct locks for one subject type")
+		}
+		if in.SubjectType == model.SubjectMovie && itemLock.ID != in.SubjectID {
+			return in, errors.New("one movie grab cannot cover another movie")
+		}
+		seen[itemLock.ID] = true
 	}
 	if in.ReleaseID <= 0 || in.TorrentHash == "" || in.Category == "" {
 		return in, errors.New("create grabbed requires release, hash, and category")
@@ -71,15 +92,20 @@ func (r *GrabRepository) CreateGrabbed(ctx context.Context, lock *ItemLock, in m
 	in.CreatedAt = r.s.nowUTC()
 	in.UpdatedAt, in.ProgressedAt = in.CreatedAt, in.CreatedAt
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
-		from, err := itemState(ctx, tx, lock.Subject, lock.ID)
-		if err != nil {
-			return err
-		}
-		if from != model.StateSearching {
-			return fmt.Errorf("create grabbed from %s: %w", from, ErrInvalidTransition)
+		states := make(map[int64]model.ItemState, len(locks))
+		for i, itemLock := range locks {
+			from, err := itemState(ctx, tx, itemLock.Subject, itemLock.ID)
+			if err != nil {
+				return err
+			}
+			if (i == 0 && from != model.StateSearching) || (i > 0 && from != model.StateWanted) {
+				return fmt.Errorf("create grabbed for %s:%d from %s: %w",
+					itemLock.Subject, itemLock.ID, from, ErrInvalidTransition)
+			}
+			states[itemLock.ID] = from
 		}
 		var activeID int64
-		err = tx.QueryRowContext(ctx, `SELECT id FROM grabs
+		err := tx.QueryRowContext(ctx, `SELECT id FROM grabs
  WHERE subject_type=? AND subject_id=?
  AND state IN ('pending','downloading','completed','importing') LIMIT 1`,
 			in.SubjectType, in.SubjectID).Scan(&activeID)
@@ -107,17 +133,23 @@ func (r *GrabRepository) CreateGrabbed(ctx context.Context, lock *ItemLock, in m
 		if lock.Subject == model.SubjectMovie {
 			table = "movies"
 		}
-		res, err = tx.ExecContext(ctx, `UPDATE `+table+` SET state='grabbed',
+		for _, itemLock := range locks {
+			from := states[itemLock.ID]
+			res, err = tx.ExecContext(ctx, `UPDATE `+table+` SET state='grabbed',
  chosen_release_id=?, next_search_at=NULL, last_error='' WHERE id=? AND state=?`,
-			in.ReleaseID, lock.ID, from)
-		if err != nil {
-			return err
+				in.ReleaseID, itemLock.ID, from)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				return ErrConflict
+			}
+			if err := insertTransition(ctx, tx, itemLock.Subject, itemLock.ID, from,
+				model.StateGrabbed, reason, fmt.Sprintf("release_id=%d grab_id=%d", in.ReleaseID, in.ID), in.CreatedAt); err != nil {
+				return err
+			}
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			return ErrConflict
-		}
-		return insertTransition(ctx, tx, lock.Subject, lock.ID, from,
-			model.StateGrabbed, reason, fmt.Sprintf("release_id=%d grab_id=%d", in.ReleaseID, in.ID), in.CreatedAt)
+		return nil
 	})
 	return in, err
 }

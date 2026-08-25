@@ -29,10 +29,12 @@ type fakeDownloader struct {
 	hash     string
 	complete bool
 	added    bool
+	addCalls int
 }
 
 func (f *fakeDownloader) Add(context.Context, downloader.AddRequest) (string, error) {
 	f.added = true
+	f.addCalls++
 	return f.hash, nil
 }
 func (f *fakeDownloader) Status(context.Context, []string) ([]downloader.TorrentStatus, error) {
@@ -166,6 +168,73 @@ func TestImportedQualityParsing(t *testing.T) {
 	}
 	if got := importedQuality(""); got != nil {
 		t.Fatalf("empty quality = %+v, want nil", got)
+	}
+}
+
+func TestSeasonPackCreatesOneGrabAndReservesCoveredEpisodes(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	clk := clock.NewFake(now)
+	db, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "pack.db"),
+		CacheKB: 512, Now: clk.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := store.Migrate(ctx, db, logger); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Profiles().Seed(ctx, []model.QualityProfile{{Name: "test", IsDefault: true,
+		AllowedResolutions: []string{"1080p"}, AllowedSources: []string{"webdl"},
+		MinSizeMB: 100, MaxSizeMB: 10000, MinSeeders: 1,
+		PreferredGroups: map[string]int{}}}); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := db.Profiles().Default(ctx)
+	series, err := db.Series().Create(ctx, model.Series{Title: "Example Show", Year: 2020,
+		ProfileID: profile.ID, RootFolder: t.TempDir(), MonitorMode: model.MonitorAll,
+		Status: model.SeriesFollowing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
+		Number: 1, State: model.StateWanted}, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
+		Number: 2, State: model.StateWanted}, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := "1123456789abcdef0123456789abcdef01234567"
+	client := &fakeDownloader{hash: hash}
+	eng, err := New(Options{Store: db, Config: testConfig(),
+		Indexers: []indexer.Indexer{&fakeIndexer{releases: []indexer.Release{{
+			Title: "Example Show S01 1080p WEB-DL x264-GROUP", InfoHash: hash,
+			Magnet: "magnet:?xt=urn:btih:" + hash, SizeBytes: 8 << 30,
+			Seeders: 25, Indexer: "fixture", Category: indexer.CatTVShowsHD,
+			PublishedAt: now.Add(-time.Hour), Files: 2,
+		}}}}, Downloader: client, Clock: clk, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.SearchOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if client.addCalls != 1 {
+		t.Fatalf("downloader Add calls=%d, want 1", client.addCalls)
+	}
+	grabs, err := db.Grabs().Active(ctx)
+	if err != nil || len(grabs) != 1 {
+		t.Fatalf("active grabs=%d err=%v, want one shared grab", len(grabs), err)
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		episode, err := db.Episodes().Get(ctx, id)
+		if err != nil || episode.State != model.StateGrabbed || episode.ChosenReleaseID == 0 {
+			t.Fatalf("episode %d = %+v err=%v", id, episode, err)
+		}
 	}
 }
 

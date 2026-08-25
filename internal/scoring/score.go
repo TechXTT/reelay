@@ -232,10 +232,19 @@ func seasonPackComponent(c Candidate, in Input) (Component, bool) {
 	isPack := c.Parsed.IsSeasonPack || len(c.Parsed.Episodes) > 1
 
 	if covered >= 2 {
+		points := in.Weights.SeasonPackWeight
+		detail := fmt.Sprintf("covers %d wanted episodes", covered)
+		if span := c.Parsed.SeasonEnd - c.Parsed.Season; span > 0 {
+			// Prefer one bounded season at a time. A complete-series pack can be
+			// useful as a fallback, but it must not beat a season pack merely
+			// because both satisfy the same episodes in the season being scored.
+			points -= span * in.Weights.SeasonPackWeight
+			detail = fmt.Sprintf("covers %d wanted episodes but spans %d extra seasons", covered, span)
+		}
 		return Component{
 			Name:   "season_pack",
-			Points: in.Weights.SeasonPackWeight,
-			Detail: fmt.Sprintf("covers %d wanted episodes", covered),
+			Points: points,
+			Detail: detail,
 		}, true
 	}
 	if !isPack {

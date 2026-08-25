@@ -129,6 +129,13 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) error
 	if s.downloader == nil {
 		return Unavailable("download client is unavailable")
 	}
+	var covered []model.Episode
+	if grab.SubjectType == model.SubjectEpisode {
+		covered, err = s.store.Episodes().ActiveByRelease(r.Context(), grab.ReleaseID)
+		if err != nil {
+			return err
+		}
+	}
 	if err := s.downloader.Remove(r.Context(), grab.TorrentHash, deleteData); err != nil &&
 		!errors.Is(err, downloader.ErrNotFound) {
 		return Conflict("torrent could not be removed").WithCause(err)
@@ -136,15 +143,29 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) error
 	if blacklist {
 		release, releaseErr := s.store.Releases().Get(r.Context(), grab.ReleaseID)
 		if releaseErr == nil {
-			_ = s.store.Decisions().Blacklist(r.Context(), grab.SubjectType, grab.SubjectID,
-				release.InfoHash, "removed from queue")
+			if grab.SubjectType == model.SubjectEpisode {
+				for _, episode := range covered {
+					_ = s.store.Decisions().Blacklist(r.Context(), model.SubjectEpisode,
+						episode.ID, release.InfoHash, "removed from queue")
+				}
+			} else {
+				_ = s.store.Decisions().Blacklist(r.Context(), grab.SubjectType, grab.SubjectID,
+					release.InfoHash, "removed from queue")
+			}
 		}
 	}
 	grab.State = model.GrabRemoved
 	if err := s.store.Grabs().Update(r.Context(), grab); err != nil {
 		return err
 	}
-	if err := s.store.Transitions().RetryNow(r.Context(), grab.SubjectType, grab.SubjectID,
+	if grab.SubjectType == model.SubjectEpisode {
+		for _, episode := range covered {
+			if err := s.store.Transitions().RetryNow(r.Context(), model.SubjectEpisode,
+				episode.ID, "shared grab removed from queue"); err != nil {
+				return Conflict("covered episode cannot return to wanted").WithCause(err)
+			}
+		}
+	} else if err := s.store.Transitions().RetryNow(r.Context(), grab.SubjectType, grab.SubjectID,
 		"grab removed from queue"); err != nil {
 		return Conflict("item cannot return to wanted").WithCause(err)
 	}

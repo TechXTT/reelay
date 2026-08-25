@@ -537,6 +537,16 @@ func TestWinnerSelection(t *testing.T) {
 			because:   "the pack supplies eight wanted episodes",
 		},
 		{
+			name: "a bounded season pack beats a complete-series pack for a missing season",
+			releases: []indexer.Release{
+				packOf("The.Expanse.S01-S06.1080p.BluRay.x265-NOGRP", 100, 140000, 1, 60),
+				packOf("The.Expanse.S01.1080p.WEB-DL.x264-NTb", 100, 20000, 1, 13),
+			},
+			want:      wantEp(1, 1, 1, 2, 3, 4, 5, 6, 7, 8),
+			wantTitle: "S01.1080p",
+			because:   "extra seasons are over-fetching even when the current season is fully wanted",
+		},
+		{
 			name: "HDR preference breaks a tie",
 			releases: []indexer.Release{
 				rel("The.Expanse.S01E01.1080p.WEB-DL.x264-NTb", 100, 2000, 1),

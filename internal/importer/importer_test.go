@@ -103,12 +103,17 @@ func TestSeasonPackAndSubtitleImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	e1, err := db.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
-		Number: 1, Title: "Dulcinea", State: model.StateImporting}, "fixture")
+		Number: 1, Title: "Dulcinea", State: model.StateSearching}, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := db.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
+		Number: 2, Title: "The Big Empty", State: model.StateWanted}, "fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.Episodes().Create(ctx, model.Episode{SeriesID: series.ID, Season: 1,
-		Number: 2, Title: "The Big Empty", State: model.StateWanted}, "fixture")
+		Number: 3, Title: "Remember the Cant", State: model.StateUnmonitored}, "fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,16 +129,44 @@ func TestSeasonPackAndSubtitleImport(t *testing.T) {
 	_ = os.Mkdir(download, 0o755)
 	one := filepath.Join(download, "The.Expanse.S01E01.1080p.WEB-DL.x264-GROUP.mkv")
 	two := filepath.Join(download, "The.Expanse.S01E02.1080p.WEB-DL.x264-GROUP.mkv")
+	three := filepath.Join(download, "The.Expanse.S01E03.1080p.WEB-DL.x264-GROUP.mkv")
 	writeSized(t, one, 1024*1024)
 	writeSized(t, two, 1024*1024)
+	writeSized(t, three, 1024*1024)
 	if err := os.WriteFile(filepath.Join(download,
 		"The.Expanse.S01E01.1080p.WEB-DL.x264-GROUP.en.srt"), []byte("subtitle"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	grab, err := db.Grabs().Create(ctx, model.Grab{SubjectType: model.SubjectEpisode,
-		SubjectID: e1.ID, ReleaseID: release.ID, TorrentHash: "abc123", Category: "reelay-tv",
-		State: model.GrabImporting, Progress: 1, ContentPath: download, ProgressedAt: time.Now()})
+	lock1, err := db.Locks().Acquire(ctx, model.SubjectEpisode, e1.ID, "fixture", time.Minute)
 	if err != nil {
+		t.Fatal(err)
+	}
+	lock2, err := db.Locks().Acquire(ctx, model.SubjectEpisode, e2.ID, "fixture", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grab, err := db.Grabs().CreateGrabbedFor(ctx, []*store.ItemLock{lock1, lock2}, model.Grab{SubjectType: model.SubjectEpisode,
+		SubjectID: e1.ID, ReleaseID: release.ID, TorrentHash: "abc123", Category: "reelay-tv",
+		ContentPath: download, ProgressedAt: time.Now()}, "fixture pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lock1.Release(ctx)
+	_ = lock2.Release(ctx)
+	for _, id := range []int64{e1.ID, e2.ID} {
+		if _, err := db.Transitions().Transition(ctx, model.SubjectEpisode, id,
+			model.StateDownloading, "fixture", ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Transitions().Transition(ctx, model.SubjectEpisode, id,
+			model.StateImporting, "fixture", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grab.State = model.GrabImporting
+	grab.Progress = 1
+	grab.ContentPath = download
+	if err := db.Grabs().Update(ctx, grab); err != nil {
 		t.Fatal(err)
 	}
 	service, err := New(Options{Store: db, Config: cfg, Logger: logger})
@@ -149,11 +182,15 @@ func TestSeasonPackAndSubtitleImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 3 {
-		t.Fatalf("destination entries=%d, want two videos and one subtitle", len(entries))
+		t.Fatalf("destination entries=%d, want two reserved videos and one subtitle", len(entries))
 	}
 	e1, _ = db.Episodes().Get(ctx, e1.ID)
 	if e1.State != model.StateImported || e1.ImportedPath == "" {
 		t.Fatalf("episode state=%s path=%q", e1.State, e1.ImportedPath)
+	}
+	e2, _ = db.Episodes().Get(ctx, e2.ID)
+	if e2.State != model.StateImported || e2.ImportedPath == "" {
+		t.Fatalf("second episode state=%s path=%q", e2.State, e2.ImportedPath)
 	}
 }
 

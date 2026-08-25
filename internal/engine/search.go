@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -123,6 +124,22 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		return err
 	}
 	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
+	if target.subject == model.SubjectEpisode {
+		active, err := e.store.Episodes().SeriesHasActive(ctx, target.seriesID)
+		if err != nil {
+			return err
+		}
+		if active {
+			return nil
+		}
+		episode, err := e.store.Episodes().Get(ctx, target.id)
+		if err != nil {
+			return err
+		}
+		if episode.State != model.StateWanted {
+			return nil
+		}
+	}
 	if _, err := e.store.Transitions().TransitionLocked(ctx, lock, model.StateSearching,
 		"search_started", fmt.Sprintf("candidates=%d", len(releases))); err != nil {
 		return err
@@ -151,12 +168,40 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	if err != nil {
 		return e.retrySearch(ctx, lock, target, "release_lookup_error", err.Error())
 	}
+	locks := []*store.ItemLock{lock}
+	if target.subject == model.SubjectEpisode {
+		covered := make([]model.Episode, 0, len(target.episodes))
+		for _, episode := range target.episodes {
+			if episode.ID != target.id && best.Parsed.CoversEpisode(episode.Season, episode.Number) {
+				covered = append(covered, episode)
+			}
+		}
+		sort.Slice(covered, func(i, j int) bool { return covered[i].ID < covered[j].ID })
+		for _, episode := range covered {
+			current, getErr := e.store.Episodes().Get(ctx, episode.ID)
+			if getErr != nil {
+				releaseItemLocks(locks[1:])
+				return e.retrySearch(ctx, lock, target, "pack_coordination_error", getErr.Error())
+			}
+			if current.State != model.StateWanted {
+				continue
+			}
+			coveredLock, lockErr := e.store.Locks().Acquire(ctx, model.SubjectEpisode,
+				episode.ID, "engine-season-pack", 5*time.Minute)
+			if lockErr != nil {
+				releaseItemLocks(locks[1:])
+				return e.retrySearch(ctx, lock, target, "pack_coordination_busy", lockErr.Error())
+			}
+			locks = append(locks, coveredLock)
+		}
+		defer releaseItemLocks(locks[1:])
+	}
 	hash, err := e.downloader.Add(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
 		Category: target.category, SavePath: target.savePath, Paused: e.cfg.Downloader.AddPaused})
 	if err != nil {
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
-	grab, err := e.store.Grabs().CreateGrabbed(ctx, lock, model.Grab{SubjectType: target.subject,
+	grab, err := e.store.Grabs().CreateGrabbedFor(ctx, locks, model.Grab{SubjectType: target.subject,
 		SubjectID: target.id, ReleaseID: stored.ID, TorrentHash: hash, Category: target.category},
 		fmt.Sprintf("selected %s with score %d", best.Release.Title, best.Score))
 	if err != nil {
@@ -164,8 +209,15 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		return fmt.Errorf("record grab: %w", err)
 	}
 	e.publish("state_transition", target, map[string]any{"state": model.StateGrabbed,
-		"grab_id": grab.ID, "release": best.Release.Title, "score": best.Score})
+		"grab_id": grab.ID, "release": best.Release.Title, "score": best.Score,
+		"covered_items": len(locks)})
 	return nil
+}
+
+func releaseItemLocks(locks []*store.ItemLock) {
+	for _, lock := range locks {
+		_ = lock.Release(context.Background())
+	}
 }
 
 func (e *Engine) persistCandidates(ctx context.Context, target searchTarget, result scoring.Result) error {

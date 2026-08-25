@@ -35,6 +35,17 @@ func TestRecommendationSyncAndEventsAreIdempotent(t *testing.T) {
 	if err != nil || owned[42] {
 		t.Fatalf("owned=%v err=%v", owned, err)
 	}
+	excluded, err := s.Recommendations().ExcludedTMDBIDs(ctx, "server", "user", "movie")
+	if err != nil || !excluded[42] {
+		t.Fatalf("excluded=%v err=%v", excluded, err)
+	}
+	rating := model.JellyfinActivity{EventID: "rating-1", ServerID: "server", UserID: "user", ItemID: "item", EventType: "rating", Progress: .2, OccurredAt: now.Add(time.Minute)}
+	if _, err := s.Recommendations().AddActivities(ctx, []model.JellyfinActivity{rating}); err != nil {
+		t.Fatal(err)
+	}
+	if seeds, err = s.Recommendations().PositiveSeeds(ctx, "server", "user", "movie", 12); err != nil || len(seeds) != 0 {
+		t.Fatalf("low rating should override completed seed: seeds=%+v err=%v", seeds, err)
+	}
 }
 
 func TestRecommendationActionIsIdempotent(t *testing.T) {
@@ -57,5 +68,28 @@ func TestRecommendationActionIsIdempotent(t *testing.T) {
 	_, inserted, err = s.Recommendations().RecordAction(ctx, values[0].ID, "action", "dismiss")
 	if err != nil || inserted {
 		t.Fatalf("second inserted=%v err=%v", inserted, err)
+	}
+}
+
+func TestRecommendationRatingReplacesPriorValue(t *testing.T) {
+	s := migratedDomainStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = s.Recommendations().UpsertUser(ctx, model.JellyfinUser{ServerID: "s", UserID: "u", DisplayName: "U", Enabled: true})
+	_ = s.Recommendations().Replace(ctx, "s", "u", "movie", []model.Recommendation{{TMDBID: 7, Title: "Seven", Score: 80, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}})
+	values, _ := s.Recommendations().List(ctx, "s", "u", "movie", "active", 10, 0)
+	if _, err := s.Recommendations().RecordRating(ctx, values[0].ID, "rating-1", 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Recommendations().RecordRating(ctx, values[0].ID, "rating-2", 5); err != nil {
+		t.Fatal(err)
+	}
+	ratings, err := s.Recommendations().Ratings(ctx, "s", "u", "movie")
+	if err != nil || len(ratings) != 1 || ratings[0].Rating != 5 {
+		t.Fatalf("ratings=%+v err=%v", ratings, err)
+	}
+	excluded, err := s.Recommendations().ExcludedTMDBIDs(ctx, "s", "u", "movie")
+	if err != nil || !excluded[7] {
+		t.Fatalf("excluded=%+v err=%v", excluded, err)
 	}
 }

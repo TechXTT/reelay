@@ -269,6 +269,15 @@ type JellyfinActivity struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
+type RecommendationRating struct {
+	ServerID  string    `json:"server_id"`
+	UserID    string    `json:"user_id"`
+	MediaType string    `json:"media_type"`
+	TMDBID    int       `json:"tmdb_id"`
+	Rating    int       `json:"rating"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Episode struct {
 	ID              int64      `json:"id"`
 	SeriesID        int64      `json:"series_id"`

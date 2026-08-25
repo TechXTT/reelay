@@ -40,10 +40,11 @@ public sealed class SyncService
         var now = DateTime.UtcNow;
         var syncToken = Guid.NewGuid().ToString("N");
         var syncUsers = users.Select(user => new SyncUser(config.ServerId, user.Id.ToString("N"), user.Username, true, now)).ToList();
-        var source = _libraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series }, Recursive = true })
-            .Where(item => !_virtual.IsManagedPath(item.Path)).ToDictionary(item => item.Id.ToString("N"));
+        var scanned = _libraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series }, Recursive = true });
+        var source = scanned.Where(item => !_virtual.IsManagedPath(item.Path)).ToDictionary(item => item.Id.ToString("N"));
         var items = source.Values
             .Select(item => ToSyncItem(config.ServerId, item)).Where(static item => item.TmdbId > 0).ToList();
+        _logger.LogInformation("Found {ScannedCount} Jellyfin movies and series; synchronizing {ItemCount} real items with TMDB IDs", scanned.Count, items.Count);
 
         await _client.SyncAsync(new SyncRequest(config.ServerId, syncToken, false, syncUsers, Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
         for (var offset = 0; offset < items.Count; offset += 400)
@@ -87,6 +88,7 @@ public sealed class SyncService
             if (data.IsFavorite) events.Add(ActivityFor(serverId, user.Id, item.ItemId, "favorite", 1, now));
             if (data.Likes == true) events.Add(ActivityFor(serverId, user.Id, item.ItemId, "like", 1, now));
             if (data.Likes == false) events.Add(ActivityFor(serverId, user.Id, item.ItemId, "dislike", 0, now));
+            if (data.Rating is > 0) events.Add(ActivityFor(serverId, user.Id, item.ItemId, "rating", Math.Clamp(data.Rating.Value / 10d, 0, 1), now));
         }
         return events;
     }

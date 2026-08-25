@@ -114,13 +114,68 @@ func (r *RecommendationRepository) PositiveSeeds(ctx context.Context, serverID, 
 		limit = 12
 	}
 	rows, err := r.s.ro.QueryContext(ctx, `SELECT i.server_id,i.item_id,i.media_type,i.tmdb_id,i.tvdb_id,i.imdb_id,i.title,i.year,i.genres_json,i.keywords_json,i.people_json,i.language,i.country,i.runtime_minutes,i.present
-FROM jellyfin_items i JOIN jellyfin_activity a ON a.server_id=i.server_id AND a.item_id=i.item_id
-WHERE a.server_id=? AND a.user_id=? AND i.media_type=? AND i.present=1 AND i.tmdb_id>0 AND a.event_type IN ('favorite','like','completed')
-GROUP BY i.server_id,i.item_id ORDER BY MAX(a.occurred_at) DESC LIMIT ?`, serverID, userID, mediaType, limit)
+FROM jellyfin_items i
+WHERE i.server_id=? AND i.media_type=? AND i.tmdb_id>0
+  AND EXISTS (SELECT 1 FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?
+      AND (a.event_type IN ('favorite','like','completed') OR (a.event_type='rating' AND a.progress>=0.6)))
+  AND NOT EXISTS (SELECT 1 FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?
+      AND (a.event_type='dislike' OR (a.event_type='rating' AND a.progress<0.6)))
+ORDER BY (SELECT MAX(a.occurred_at) FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?) DESC
+LIMIT ?`, serverID, mediaType, userID, userID, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list recommendation seeds: %w", err)
 	}
 	return collectRows(rows, scanJellyfinItem)
+}
+
+func (r *RecommendationRepository) ExcludedTMDBIDs(ctx context.Context, serverID, userID, mediaType string) (map[int]bool, error) {
+	rows, err := r.s.ro.QueryContext(ctx, `SELECT tmdb_id FROM jellyfin_items WHERE server_id=? AND media_type=? AND present=1 AND tmdb_id>0
+UNION SELECT i.tmdb_id FROM jellyfin_items i JOIN jellyfin_activity a ON a.server_id=i.server_id AND a.item_id=i.item_id
+  WHERE i.server_id=? AND i.media_type=? AND i.tmdb_id>0 AND a.user_id=? AND a.event_type IN ('played','completed')
+UNION SELECT tmdb_id FROM recommendation_feedback WHERE server_id=? AND user_id=? AND media_type=?
+UNION SELECT tmdb_id FROM recommendation_ratings WHERE server_id=? AND user_id=? AND media_type=?`,
+		serverID, mediaType, serverID, mediaType, userID, serverID, userID, mediaType, serverID, userID, mediaType)
+	if err != nil {
+		return nil, fmt.Errorf("list excluded recommendation ids: %w", err)
+	}
+	defer rows.Close()
+	out := map[int]bool{}
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+func (r *RecommendationRepository) Ratings(ctx context.Context, serverID, userID, mediaType string) ([]model.RecommendationRating, error) {
+	rows, err := r.s.ro.QueryContext(ctx, `WITH rating_values(server_id,user_id,media_type,tmdb_id,rating,updated_at) AS (
+  SELECT server_id,user_id,media_type,tmdb_id,rating,updated_at FROM recommendation_ratings
+  WHERE server_id=? AND user_id=? AND media_type=?
+  UNION ALL
+  SELECT i.server_id,a.user_id,i.media_type,i.tmdb_id,CAST(ROUND(a.progress*5) AS INTEGER),a.occurred_at
+  FROM jellyfin_activity a JOIN jellyfin_items i ON i.server_id=a.server_id AND i.item_id=a.item_id
+  WHERE a.server_id=? AND a.user_id=? AND i.media_type=? AND i.tmdb_id>0 AND a.event_type='rating'
+    AND NOT EXISTS (SELECT 1 FROM jellyfin_activity newer WHERE newer.server_id=a.server_id AND newer.user_id=a.user_id
+      AND newer.item_id=a.item_id AND newer.event_type='rating' AND newer.occurred_at>a.occurred_at)
+)
+SELECT server_id,user_id,media_type,tmdb_id,rating,updated_at FROM rating_values ORDER BY updated_at DESC LIMIT 50`,
+		serverID, userID, mediaType, serverID, userID, mediaType)
+	if err != nil {
+		return nil, fmt.Errorf("list recommendation ratings: %w", err)
+	}
+	return collectRows(rows, func(row scanner) (model.RecommendationRating, error) {
+		var value model.RecommendationRating
+		var updated string
+		if err := row.Scan(&value.ServerID, &value.UserID, &value.MediaType, &value.TMDBID, &value.Rating, &updated); err != nil {
+			return value, err
+		}
+		parsed, parseErr := ParseTime(updated)
+		value.UpdatedAt = parsed
+		return value, parseErr
+	})
 }
 
 func (r *RecommendationRepository) OwnedTMDBIDs(ctx context.Context, serverID, mediaType string) (map[int]bool, error) {
@@ -206,6 +261,28 @@ func (r *RecommendationRepository) RecordAction(ctx context.Context, id int64, a
 		return err
 	})
 	return v, inserted, err
+}
+
+func (r *RecommendationRepository) RecordRating(ctx context.Context, id int64, actionID string, rating int) (model.Recommendation, error) {
+	v, err := r.Get(ctx, id)
+	if err != nil {
+		return v, err
+	}
+	if strings.TrimSpace(actionID) == "" || rating < 1 || rating > 5 {
+		return v, errors.New("recommendation rating requires an action id and a value from 1 to 5")
+	}
+	now := FormatTime(r.s.nowUTC())
+	err = r.s.InTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO recommendation_ratings(action_id,server_id,user_id,media_type,tmdb_id,rating,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET action_id=excluded.action_id,rating=excluded.rating,updated_at=excluded.updated_at`,
+			actionID, v.ServerID, v.UserID, v.MediaType, v.TMDBID, rating, now, now)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE recommendations SET status='dismissed' WHERE id=?`, id)
+		return err
+	})
+	return v, err
 }
 
 func scanJellyfinItem(row scanner) (model.JellyfinItem, error) {

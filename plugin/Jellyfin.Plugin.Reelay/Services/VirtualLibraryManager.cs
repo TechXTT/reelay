@@ -63,12 +63,18 @@ public sealed class VirtualLibraryManager
         try
         {
             var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
-            return relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            return IsRelativeInside(relative);
         }
         catch (Exception)
         {
             return false;
         }
     }
+
+    internal static bool IsRelativeInside(string relative)
+        => !Path.IsPathRooted(relative)
+            && relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
 
 }

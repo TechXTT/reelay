@@ -41,9 +41,9 @@ public sealed class ReelayClient
         await PostAsync("/api/v1/recommendations/generate", new { server_id = config.ServerId, user_id = userId, media_type = mediaType }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task ActAsync(long recommendationId, string actionId, string action, CancellationToken cancellationToken)
+    public async Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)
     {
-        await PostAsync($"/api/v1/recommendations/{recommendationId}/actions", new RecommendationAction(actionId, action), cancellationToken).ConfigureAwait(false);
+        await PostAsync($"/api/v1/recommendations/{recommendationId}/actions", new RecommendationAction(actionId, action, rating), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task TestAsync(string url, string token, CancellationToken cancellationToken)

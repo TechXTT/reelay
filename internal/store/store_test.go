@@ -49,8 +49,8 @@ func TestOpenCreatesDirectoryAndMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 4 {
-		t.Errorf("schema version = %d, want 4", v)
+	if v != 5 {
+		t.Errorf("schema version = %d, want 5", v)
 	}
 
 	// Every table 0001 promises must exist.
@@ -58,7 +58,7 @@ func TestOpenCreatesDirectoryAndMigrates(t *testing.T) {
 		"kv", "metadata_cache", "indexer_health", "schema_migrations",
 		"quality_profiles", "series", "episodes", "movies", "releases",
 		"candidate_evaluations", "grabs", "release_blacklist", "imports",
-		"state_transitions", "item_locks",
+		"state_transitions", "item_locks", "recommendation_ratings",
 	} {
 		var name string
 		err := s.Reader().QueryRowContext(ctx,
@@ -84,8 +84,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 4 {
-		t.Errorf("schema_migrations has %d rows after 3 runs, want 4", n)
+	if n != 5 {
+		t.Errorf("schema_migrations has %d rows after 3 runs, want 5", n)
 	}
 }
 

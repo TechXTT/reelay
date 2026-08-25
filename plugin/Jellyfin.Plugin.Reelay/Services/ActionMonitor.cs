@@ -61,10 +61,11 @@ public sealed class ActionMonitor : BackgroundService
                     if (tmdb == 0 || !byTmdb.TryGetValue(tmdb, out var recommendation)) continue;
                     var data = _userDataManager.GetUserData(user, item);
                     if (data is null) continue;
-                    var action = data.IsFavorite ? "request" : data.Likes == false ? "dismiss" : string.Empty;
+                    var rating = data.Rating is > 0 ? Math.Clamp((int)Math.Ceiling(data.Rating.Value / 2d), 1, 5) : (int?)null;
+                    var action = data.IsFavorite ? "request" : rating.HasValue ? "rate" : data.Likes == false ? "dismiss" : string.Empty;
                     if (action == string.Empty) continue;
-                    var actionId = JellyfinIdentity.StableId($"{config.ServerId}:{userId}:{recommendation.Id}:{action}");
-                    var pending = new PendingAction(recommendation.Id, actionId, action);
+                    var actionId = JellyfinIdentity.StableId($"{config.ServerId}:{userId}:{recommendation.Id}:{action}:{rating}");
+                    var pending = new PendingAction(recommendation.Id, actionId, action, rating);
                     _outbox.Enqueue(pending);
                     await SendAsync(pending, cancellationToken).ConfigureAwait(false);
                     _logger.LogInformation("Sent {Action} for {Title} on behalf of Jellyfin user {User}", action, recommendation.Title, user.Username);
@@ -82,7 +83,7 @@ public sealed class ActionMonitor : BackgroundService
 
     private async Task SendAsync(PendingAction action, CancellationToken cancellationToken)
     {
-        await _client.ActAsync(action.RecommendationId, action.ActionId, action.Action, cancellationToken).ConfigureAwait(false);
+        await _client.ActAsync(action.RecommendationId, action.ActionId, action.Action, action.Rating, cancellationToken).ConfigureAwait(false);
         _outbox.Complete(action.ActionId);
     }
 }

@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Jellyfin.Plugin.Reelay.Services;
 
-public sealed record PendingAction(long RecommendationId, string ActionId, string Action);
+public sealed record PendingAction(long RecommendationId, string ActionId, string Action, int? Rating = null);
 
 public sealed class ActionOutbox
 {

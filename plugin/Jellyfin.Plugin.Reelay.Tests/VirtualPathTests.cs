@@ -40,4 +40,10 @@ public sealed class VirtualPathTests
         Assert.False(VirtualLibraryManager.IsInside(root, root + "-backup"));
         Assert.False(VirtualLibraryManager.IsInside(root, Path.Combine(root, "..", "library", "reelay-virtual-name.mkv")));
     }
+
+    [Fact]
+    public void ManagedPathRejectsTargetsOnAnotherRoot()
+    {
+        Assert.False(VirtualLibraryManager.IsRelativeInside(Path.DirectorySeparatorChar + "remote-library"));
+    }
 }

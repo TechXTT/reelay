@@ -70,4 +70,5 @@ public sealed class Recommendation
 
 public sealed record RecommendationAction(
     [property: JsonPropertyName("action_id")] string ActionId,
-    [property: JsonPropertyName("action")] string Action);
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("rating")] int? Rating = null);

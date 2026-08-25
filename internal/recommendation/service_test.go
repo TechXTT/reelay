@@ -17,7 +17,20 @@ import (
 type recommendationProviderFake struct{}
 
 func (recommendationProviderFake) Recommendations(context.Context, string, int) ([]metadata.DiscoveryItem, error) {
-	return []metadata.DiscoveryItem{{MediaType: "movie", TMDBID: 99, Title: "Candidate", VoteAverage: 8, VoteCount: 1000}}, nil
+	return []metadata.DiscoveryItem{{MediaType: "movie", TMDBID: 42, Title: "Already owned"}, {MediaType: "movie", TMDBID: 99, Title: "Candidate", VoteAverage: 8, VoteCount: 1000}}, nil
+}
+
+func TestTasteProfileUsesSignedRatings(t *testing.T) {
+	profile := tasteProfile([]tasteSignal{
+		{item: model.JellyfinItem{Genres: []string{"Science Fiction"}, People: []string{"Director A"}}, weight: 1},
+		{item: model.JellyfinItem{Genres: []string{"Comedy"}, People: []string{"Director B"}}, weight: -1},
+	})
+	if profile.Genres["science fiction"] <= 0 || profile.Genres["comedy"] >= 0 {
+		t.Fatalf("signed profile=%+v", profile.Genres)
+	}
+	if overlap([]string{"Comedy"}, profile.Genres) != 0 {
+		t.Fatalf("disliked genre should not earn affinity")
+	}
 }
 
 func (recommendationProviderFake) Similar(context.Context, string, int) ([]metadata.DiscoveryItem, error) {

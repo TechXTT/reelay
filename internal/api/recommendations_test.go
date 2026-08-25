@@ -106,3 +106,22 @@ func TestJellyfinSyncEventsAndRecommendationDismissal(t *testing.T) {
 		t.Fatalf("active list=%s", empty.Body.String())
 	}
 }
+
+func TestRecommendationRatingValidatesAndPersists(t *testing.T) {
+	srv, st := newTestServer(t, nil)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	_ = st.Recommendations().UpsertUser(context.Background(), model.JellyfinUser{ServerID: "server", UserID: "user", DisplayName: "User", Enabled: true})
+	_ = st.Recommendations().Replace(context.Background(), "server", "user", "movie", []model.Recommendation{{TMDBID: 88, Title: "Rated", Score: 70, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}})
+	values, _ := st.Recommendations().List(context.Background(), "server", "user", "movie", "active", 10, 0)
+	path := "/api/v1/recommendations/" + strconv.FormatInt(values[0].ID, 10) + "/actions"
+	if rec := doJSON(t, srv.Handler(), http.MethodPost, path, map[string]any{"action_id": "bad", "action": "rate", "rating": 6}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid rating status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, srv.Handler(), http.MethodPost, path, map[string]any{"action_id": "rating", "action": "rate", "rating": 4}); rec.Code != http.StatusOK {
+		t.Fatalf("rating status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	ratings, err := st.Recommendations().Ratings(context.Background(), "server", "user", "movie")
+	if err != nil || len(ratings) != 1 || ratings[0].Rating != 4 {
+		t.Fatalf("ratings=%+v err=%v", ratings, err)
+	}
+}

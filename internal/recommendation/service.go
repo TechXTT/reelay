@@ -63,7 +63,11 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	if err != nil {
 		return err
 	}
-	owned, err := s.store.Recommendations().OwnedTMDBIDs(ctx, serverID, mediaType)
+	excluded, err := s.store.Recommendations().ExcludedTMDBIDs(ctx, serverID, userID, mediaType)
+	if err != nil {
+		return err
+	}
+	ratings, err := s.store.Recommendations().Ratings(ctx, serverID, userID, mediaType)
 	if err != nil {
 		return err
 	}
@@ -73,10 +77,36 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		matches  int
 	}
 	pool := map[int]*aggregate{}
-	tasteSeeds := append([]model.JellyfinItem(nil), seeds...)
+	signals := make([]tasteSignal, 0, len(seeds)+len(ratings))
+	searchSeeds := make([]model.JellyfinItem, 0, len(seeds)+len(ratings))
+	for _, seed := range seeds {
+		if detail, detailErr := s.provider.DiscoveryDetails(ctx, mediaType, seed.TMDBID); detailErr == nil {
+			seed = tasteItem(detail)
+		}
+		signals = append(signals, tasteSignal{item: seed, weight: 1})
+		searchSeeds = append(searchSeeds, seed)
+	}
+	rated := map[int]bool{}
+	for _, rating := range ratings {
+		if rated[rating.TMDBID] {
+			continue
+		}
+		rated[rating.TMDBID] = true
+		detail, detailErr := s.provider.DiscoveryDetails(ctx, mediaType, rating.TMDBID)
+		if detailErr != nil {
+			continue
+		}
+		weight := float64(rating.Rating-3) / 2
+		if weight != 0 {
+			signals = append(signals, tasteSignal{item: tasteItem(detail), weight: weight})
+		}
+		if rating.Rating >= 4 {
+			searchSeeds = append(searchSeeds, tasteItem(detail))
+		}
+	}
 	add := func(values []metadata.DiscoveryItem) {
 		for rank, item := range values {
-			if item.TMDBID <= 0 || owned[item.TMDBID] {
+			if item.TMDBID <= 0 || excluded[item.TMDBID] {
 				continue
 			}
 			score := 1 - float64(rank)/float64(max(1, len(values)))
@@ -91,22 +121,19 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			a.matches++
 		}
 	}
-	if len(seeds) == 0 {
+	if len(searchSeeds) == 0 {
 		values, err := s.provider.Discover(ctx, mediaType)
 		if err != nil {
 			return err
 		}
 		add(values)
 	} else {
-		for i, seed := range seeds {
-			if detail, detailErr := s.provider.DiscoveryDetails(ctx, mediaType, seed.TMDBID); detailErr == nil {
-				tasteSeeds[i].Genres = detail.Genres
-				tasteSeeds[i].Keywords = detail.Keywords
-				tasteSeeds[i].People = detail.People
-				tasteSeeds[i].Language = detail.Language
-				tasteSeeds[i].Country = detail.Country
-				tasteSeeds[i].RuntimeMinutes = detail.RuntimeMinutes
+		queried := map[int]bool{}
+		for _, seed := range searchSeeds {
+			if queried[seed.TMDBID] {
+				continue
 			}
+			queried[seed.TMDBID] = true
 			values, err := s.provider.Recommendations(ctx, mediaType, seed.TMDBID)
 			if err != nil {
 				return fmt.Errorf("recommendations for %s: %w", seed.Title, err)
@@ -120,7 +147,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			}
 		}
 	}
-	profile := tasteProfile(tasteSeeds)
+	profile := tasteProfile(signals)
 	candidates := make([]Candidate, 0, min(len(pool), s.cfg.CandidateLimit))
 	for _, a := range pool {
 		candidates = append(candidates, Candidate{Item: toModel(a.item), ProviderScore: a.provider, SeedMatches: a.matches, VoteAverage: a.item.VoteAverage, VoteCount: a.item.VoteCount})
@@ -151,36 +178,46 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	if err := s.store.Recommendations().Replace(ctx, serverID, userID, mediaType, values); err != nil {
 		return err
 	}
-	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(seeds), "candidates", len(candidates), "results", len(values))
+	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
 	return nil
 }
 
-func tasteProfile(seeds []model.JellyfinItem) Profile {
+type tasteSignal struct {
+	item   model.JellyfinItem
+	weight float64
+}
+
+func tasteProfile(signals []tasteSignal) Profile {
 	p := Profile{Genres: map[string]float64{}, Keywords: map[string]float64{}, People: map[string]float64{}, Languages: map[string]float64{}, Countries: map[string]float64{}}
-	for _, seed := range seeds {
+	for _, signal := range signals {
+		seed, weight := signal.item, signal.weight
 		for _, v := range seed.Genres {
-			p.Genres[strings.ToLower(v)] += 3
+			p.Genres[strings.ToLower(v)] += 3 * weight
 		}
 		for _, v := range seed.Keywords {
-			p.Keywords[strings.ToLower(v)] += 3
+			p.Keywords[strings.ToLower(v)] += 3 * weight
 		}
 		for _, v := range seed.People {
-			p.People[strings.ToLower(v)] += 3
+			p.People[strings.ToLower(v)] += 3 * weight
 		}
 		if seed.Language != "" {
-			p.Languages[strings.ToLower(seed.Language)]++
+			p.Languages[strings.ToLower(seed.Language)] += weight
 		}
 		if seed.Country != "" {
-			p.Countries[strings.ToLower(seed.Country)]++
+			p.Countries[strings.ToLower(seed.Country)] += weight
 		}
-		if seed.Year > 0 {
+		if weight > 0 && seed.Year > 0 {
 			p.Years = append(p.Years, seed.Year)
 		}
-		if seed.RuntimeMinutes > 0 {
+		if weight > 0 && seed.RuntimeMinutes > 0 {
 			p.Runtimes = append(p.Runtimes, seed.RuntimeMinutes)
 		}
 	}
 	return p
+}
+
+func tasteItem(item metadata.DiscoveryItem) model.JellyfinItem {
+	return model.JellyfinItem{MediaType: item.MediaType, TMDBID: item.TMDBID, Title: item.Title, Year: item.Year, Genres: item.Genres, Keywords: item.Keywords, People: item.People, Language: item.Language, Country: item.Country, RuntimeMinutes: item.RuntimeMinutes, Present: true}
 }
 
 func toModel(item metadata.DiscoveryItem) model.Recommendation {

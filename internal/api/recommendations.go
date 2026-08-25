@@ -136,6 +136,7 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		ActionID string `json:"action_id"`
 		Action   string `json:"action"`
+		Rating   int    `json:"rating"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		return err
@@ -143,8 +144,11 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	if strings.TrimSpace(req.ActionID) == "" {
 		return BadRequest("action_id is required")
 	}
-	if req.Action != "request" && req.Action != "dismiss" {
-		return BadRequest("action must be request or dismiss")
+	if req.Action != "request" && req.Action != "dismiss" && req.Action != "rate" {
+		return BadRequest("action must be request, dismiss, or rate")
+	}
+	if req.Action == "rate" && (req.Rating < 1 || req.Rating > 5) {
+		return BadRequest("rating must be from 1 to 5")
 	}
 	rec, err := s.store.Recommendations().Get(r.Context(), id)
 	if err != nil {
@@ -157,14 +161,23 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 			return Conflict("recommendation could not be requested").WithCause(err)
 		}
 	}
-	_, inserted, err := s.store.Recommendations().RecordAction(r.Context(), id, req.ActionID, req.Action)
+	inserted := true
+	if req.Action == "rate" {
+		_, err = s.store.Recommendations().RecordRating(r.Context(), id, req.ActionID, req.Rating)
+	} else {
+		_, inserted, err = s.store.Recommendations().RecordAction(r.Context(), id, req.ActionID, req.Action)
+	}
 	if err != nil {
 		return err
 	}
-	if s.engine != nil && req.Action == "request" {
-		_ = s.engine.Trigger("search")
+	if s.engine != nil {
+		if req.Action == "request" {
+			_ = s.engine.Trigger("search")
+		} else if req.Action == "rate" {
+			_ = s.engine.Trigger("recommendations")
+		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"recommendation": rec, "subject": subject, "created": inserted})
+	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"recommendation": rec, "subject": subject, "created": inserted, "rating": req.Rating})
 	return nil
 }
 

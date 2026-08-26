@@ -24,6 +24,10 @@
     let users = [];
     const normaliseId = value => String(value || '').replace(/-/g, '');
     const escapeHTML = value => String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+    const libraryPath = (root, userId, mediaType) => {
+      const separator = root.includes('\\') ? '\\' : '/';
+      return [root.replace(/[\\/]+$/, ''), userId, mediaType].join(separator);
+    };
     const showError = (prefix, error) => {
       Dashboard.hideLoadingMsg();
       Dashboard.alert(prefix + ': ' + (error && error.message ? error.message : error));
@@ -44,7 +48,7 @@
       const root = page.querySelector('#VirtualRoot').value.trim().replace(/[\\/]+$/, '');
       const inputs = page.querySelectorAll('#EnabledUsers input');
       page.querySelector('#LibraryPaths').innerHTML = users.filter((_, i) => inputs[i] && inputs[i].checked).map(u => {
-        const id = normaliseId(u.Id); return '<p><strong>' + escapeHTML(u.Name) + '</strong><br><code>' + escapeHTML(root) + '/' + escapeHTML(id) + '/movies</code><br><code>' + escapeHTML(root) + '/' + escapeHTML(id) + '/series</code></p>';
+        const id = normaliseId(u.Id); return '<p><strong>' + escapeHTML(u.Name) + '</strong><br><code>' + escapeHTML(libraryPath(root, id, 'movies')) + '</code><br><code>' + escapeHTML(libraryPath(root, id, 'series')) + '</code></p>';
       }).join('');
     };
     page.querySelector('#VirtualRoot').addEventListener('input', renderPaths);

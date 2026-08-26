@@ -93,3 +93,46 @@ func TestRecommendationRatingReplacesPriorValue(t *testing.T) {
 		t.Fatalf("excluded=%+v err=%v", excluded, err)
 	}
 }
+
+func TestRecommendationReplacePreservesActiveIDs(t *testing.T) {
+	s := migratedDomainStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := s.Recommendations().UpsertUser(ctx, model.JellyfinUser{ServerID: "s", UserID: "u", DisplayName: "U", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	recommendation := func(tmdbID int, title string, score float64) model.Recommendation {
+		return model.Recommendation{TMDBID: tmdbID, Title: title, Score: score, Reasons: []string{"reason"}, GeneratedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	if err := s.Recommendations().Replace(ctx, "s", "u", "movie", []model.Recommendation{
+		recommendation(1, "One", 90), recommendation(2, "Two", 80),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Recommendations().List(ctx, "s", "u", "movie", "active", 10, 0)
+	if err != nil || len(before) != 2 {
+		t.Fatalf("before=%+v err=%v", before, err)
+	}
+	ids := map[int]int64{}
+	for _, value := range before {
+		ids[value.TMDBID] = value.ID
+	}
+	if _, err := s.Recommendations().RecordRating(ctx, ids[1], "rating-1", 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Recommendations().Replace(ctx, "s", "u", "movie", []model.Recommendation{
+		recommendation(2, "Two", 85), recommendation(3, "Three", 75),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Recommendations().List(ctx, "s", "u", "movie", "active", 10, 0)
+	if err != nil || len(after) != 2 {
+		t.Fatalf("after=%+v err=%v", after, err)
+	}
+	if after[0].TMDBID != 2 || after[0].ID != ids[2] {
+		t.Fatalf("unchanged recommendation ID changed: before=%d after=%+v", ids[2], after[0])
+	}
+	if _, err := s.Recommendations().RecordRating(ctx, ids[2], "rating-2", 5); err != nil {
+		t.Fatalf("second action with pre-refresh ID failed: %v", err)
+	}
+}

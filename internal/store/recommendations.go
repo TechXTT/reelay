@@ -197,9 +197,6 @@ func (r *RecommendationRepository) OwnedTMDBIDs(ctx context.Context, serverID, m
 
 func (r *RecommendationRepository) Replace(ctx context.Context, serverID, userID, mediaType string, values []model.Recommendation) error {
 	return r.s.InTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`, serverID, userID, mediaType); err != nil {
-			return err
-		}
 		for _, value := range values {
 			reasons, _ := encodeJSON(value.Reasons)
 			features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes})
@@ -209,6 +206,18 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmd
 			if err != nil {
 				return fmt.Errorf("store recommendation %d: %w", value.TMDBID, err)
 			}
+		}
+		query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`
+		args := []any{serverID, userID, mediaType}
+		if len(values) > 0 {
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")
+			query += ` AND tmdb_id NOT IN (` + placeholders + `)`
+			for _, value := range values {
+				args = append(args, value.TMDBID)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("prune stale recommendations: %w", err)
 		}
 		return nil
 	})

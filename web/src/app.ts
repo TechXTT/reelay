@@ -8,6 +8,10 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 let current: View = "dashboard";
 let eventSource: EventSource | null = null;
 let refreshTimer = 0;
+const discoverUserKey = "reelay.discover-user";
+const discoverTypeKey = "reelay.discover-type";
+let discoverUser = localStorage.getItem(discoverUserKey) ?? "";
+let discoverType = localStorage.getItem(discoverTypeKey) === "series" ? "series" : "movie";
 
 type DialogCheck = { id: string; label: string; detail: string; checked?: boolean; required?: boolean };
 
@@ -126,7 +130,7 @@ async function dashboard(): Promise<void> {
   setConnection(health.status);
 }
 
-async function discoverView(selectedUser = "", mediaType = "movie"): Promise<void> {
+async function discoverView(selectedUser = discoverUser, mediaType = discoverType): Promise<void> {
   const users = (await api<Item>("/api/v1/integrations/jellyfin/users")).items ?? [];
   if (!users.length) {
     content(`<div class="page-head"><div><h1>Discover</h1><p>Personalized from Jellyfin activity</p></div></div>
@@ -135,6 +139,10 @@ async function discoverView(selectedUser = "", mediaType = "movie"): Promise<voi
   }
   const user = users.find((value: Item) => `${value.server_id}:${value.user_id}` === selectedUser) ?? users[0];
   const key = `${user.server_id}:${user.user_id}`;
+  discoverUser = key;
+  discoverType = mediaType;
+  localStorage.setItem(discoverUserKey, key);
+  localStorage.setItem(discoverTypeKey, mediaType);
   const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&media_type=${mediaType}`;
   const values = (await api<Item>(`/api/v1/recommendations?${query}`)).items ?? [];
   const node = content(`<div class="page-head"><div><h1>Discover</h1><p>Recommendations for ${esc(user.display_name)}</p></div>
@@ -156,15 +164,36 @@ async function discoverView(selectedUser = "", mediaType = "movie"): Promise<voi
     await api("/api/v1/recommendations/generate", { method: "POST", body: JSON.stringify({ server_id: user.server_id, user_id: user.user_id, media_type: mediaType }) });
     showToast("Recommendations refreshed"); await discoverView(key, mediaType);
   };
-  for (const action of ["dismiss", "request"]) node.querySelectorAll<HTMLButtonElement>(`.rec-${action}`).forEach(button => button.onclick = async () => {
-    await api(`/api/v1/recommendations/${button.dataset.id}/actions`, { method: "POST", body: JSON.stringify({ action_id: crypto.randomUUID(), action }) });
-    showToast(action === "request" ? "Added to Reelay" : "Recommendation dismissed"); await discoverView(key, mediaType);
+  for (const action of ["dismiss", "request"] as const) {
+    node.querySelectorAll<HTMLButtonElement>(`.rec-${action}`).forEach(button => {
+      button.onclick = () => void recommendationAction(button, action);
+    });
+  }
+  node.querySelectorAll<HTMLButtonElement>(".rec-rate").forEach(button => {
+    button.onclick = () => void recommendationAction(button, "rate");
   });
-  node.querySelectorAll<HTMLButtonElement>(".rec-rate").forEach(button => button.onclick = async () => {
-    const rating = Number(button.parentElement?.querySelector<HTMLSelectElement>(".rec-rating")?.value);
-    await api(`/api/v1/recommendations/${button.dataset.id}/actions`, { method: "POST", body: JSON.stringify({ action_id: crypto.randomUUID(), action: "rate", rating }) });
-    showToast(`Rated ${rating} of 5`); await discoverView(key, mediaType);
-  });
+}
+
+async function recommendationAction(button: HTMLButtonElement, action: "dismiss" | "request" | "rate"): Promise<void> {
+  const card = button.closest<HTMLElement>(".recommendation-card");
+  if (!card) return;
+  const controls = Array.from(card.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select"));
+  const rating = action === "rate" ? Number(card.querySelector<HTMLSelectElement>(".rec-rating")?.value) : undefined;
+  controls.forEach(control => control.disabled = true);
+  try {
+    await api(`/api/v1/recommendations/${button.dataset.id}/actions`, {
+      method: "POST",
+      body: JSON.stringify({ action_id: crypto.randomUUID(), action, ...(rating ? { rating } : {}) })
+    });
+    const message = action === "request" ? "Added to Reelay" : action === "rate" ? `Rated ${rating} of 5` : "Recommendation dismissed";
+    showToast(message);
+    card.remove();
+    const grid = document.querySelector<HTMLElement>(".recommendation-grid");
+    if (grid && !grid.querySelector(".recommendation-card")) grid.innerHTML = `<div class="empty">No active recommendations</div>`;
+  } catch (error) {
+    controls.forEach(control => control.disabled = false);
+    showError(error);
+  }
 }
 
 async function seriesView(): Promise<void> {
@@ -422,6 +451,6 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const date = (value: string) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: value.includes("T") ? "short" : undefined }).format(new Date(value)) : "—";
 function showToast(message: string): void { const toast = document.querySelector<HTMLElement>("#toast")!; toast.textContent = message; toast.className = "show"; setTimeout(() => toast.className = "", 3000); }
 function setConnection(status: string): void { const el = document.querySelector<HTMLElement>("#connection"); if (el) { el.textContent = status === "ok" ? "Connected" : status; el.className = `connection ${status}`; } }
-function connect(): void { eventSource?.close(); eventSource = connectEvents(() => { clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => navigate(current), 350); }); eventSource.onopen = () => setConnection("ok"); eventSource.onerror = () => setConnection("offline"); }
+function connect(): void { eventSource?.close(); eventSource = connectEvents(() => { if (current === "discover") return; clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => navigate(current), 350); }); eventSource.onopen = () => setConnection("ok"); eventSource.onerror = () => setConnection("offline"); }
 
 shell(); connect(); navigate("dashboard");

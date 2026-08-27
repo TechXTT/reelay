@@ -53,7 +53,12 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 	if status.Failed() {
 		return e.failGrab(ctx, grab, "download client error: "+status.ErrorMessage, true)
 	}
-	if status.Progress < 0.01 && !grab.ProgressedAt.IsZero() &&
+	if status.State == downloader.StatePaused {
+		// A deliberate pause is not a stall. Refreshing the progress timestamp
+		// also gives a resumed torrent the full configured timeout to move.
+		grab.ProgressedAt = now
+	}
+	if status.State != downloader.StatePaused && status.Progress < 0.01 && !grab.ProgressedAt.IsZero() &&
 		now.Sub(grab.ProgressedAt) >= e.cfg.Downloader.StallTimeout.Duration {
 		return e.failGrab(ctx, grab, "torrent made no progress before stall timeout", true)
 	}

@@ -339,6 +339,60 @@ func (c *Client) Remove(ctx context.Context, hash string, deleteData bool) error
 	return nil
 }
 
+// SetPaused pauses or resumes only torrents that Status confirms belong to
+// one of Reelay's categories. qBittorrent 5 renamed pause/resume to stop/start;
+// the legacy endpoint fallback keeps older supported clients working.
+func (c *Client) SetPaused(ctx context.Context, hashes []string, paused bool) error {
+	requested := make([]string, 0, len(hashes))
+	requestedSet := make(map[string]bool, len(hashes))
+	for _, hash := range hashes {
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if hash != "" && !requestedSet[hash] {
+			requestedSet[hash] = true
+			requested = append(requested, hash)
+		}
+	}
+	// Status with an empty hash list intentionally means "list all". Returning
+	// here prevents an empty queue operation from broadening into every owned
+	// torrent in the client.
+	if len(requested) == 0 {
+		return nil
+	}
+	statuses, err := c.Status(ctx, requested)
+	if err != nil {
+		return fmt.Errorf("qbittorrent: verify torrents before changing pause state: %w", err)
+	}
+	owned := make([]string, 0, len(statuses))
+	seen := make(map[string]bool, len(statuses))
+	for _, status := range statuses {
+		hash := strings.ToLower(strings.TrimSpace(status.Hash))
+		if hash != "" && !seen[hash] {
+			seen[hash] = true
+			owned = append(owned, hash)
+		}
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+
+	path, legacyPath := "/api/v2/torrents/start", "/api/v2/torrents/resume"
+	if paused {
+		path, legacyPath = "/api/v2/torrents/stop", "/api/v2/torrents/pause"
+	}
+	req := request{method: http.MethodPost, path: path,
+		form: url.Values{"hashes": {strings.Join(owned, "|")}}}
+	if _, err := c.do(ctx, req); errors.Is(err, downloader.ErrNotFound) {
+		req.path = legacyPath
+		if _, err = c.do(ctx, req); err != nil {
+			return fmt.Errorf("qbittorrent: set paused=%t: %w", paused, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("qbittorrent: set paused=%t: %w", paused, err)
+	}
+	c.log.Info("torrent pause state changed", "paused", paused, "count", len(owned))
+	return nil
+}
+
 func multipartBody(fields map[string]string) (io.Reader, string, error) {
 	var buf strings.Builder
 	w := multipart.NewWriter(&buf)

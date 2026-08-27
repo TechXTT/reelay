@@ -196,7 +196,7 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		}
 		defer releaseItemLocks(locks[1:])
 	}
-	hash, err := e.downloader.Add(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
+	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
 		Category: target.category, SavePath: target.savePath, Paused: e.cfg.Downloader.AddPaused})
 	if err != nil {
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())

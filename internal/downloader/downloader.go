@@ -118,5 +118,10 @@ type Downloader interface {
 	// ErrNotOurs otherwise.
 	Remove(ctx context.Context, hash string, deleteData bool) error
 
+	// SetPaused changes transfer state for the requested torrents. Concrete
+	// clients must filter the hashes through Reelay's owned categories before
+	// issuing the mutation.
+	SetPaused(ctx context.Context, hashes []string, paused bool) error
+
 	Healthy(ctx context.Context) error
 }

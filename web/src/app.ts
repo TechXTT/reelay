@@ -97,13 +97,16 @@ async function dashboard(): Promise<void> {
     api<Item>("/api/v1/movies")
   ]);
   const active = queue.items ?? [];
+  const downloadsPaused = Boolean(queue.paused);
   const components = health.components ?? [];
   const movieByID = new Map<number, Item>((movies.items ?? []).map((movie: Item) => [movie.id, movie]));
   const movieNames = new Map<number, string>(Array.from(movieByID, ([id, movie]) => [id, movie.title]));
   const recent = (history.items ?? []).filter((grab: Item) => grab.state !== "removed" &&
     (grab.subject_type !== "movie" || movieByID.has(grab.subject_id))).slice(0, 8);
-  content(`<div class="page-head"><div><h1>Dashboard</h1><p>${active.length} active downloads</p></div>
-    <button class="command" id="refresh-search">↻ <span>Run search</span></button></div>
+  content(`<div class="page-head"><div><h1>Dashboard</h1><p>${active.length} active downloads${downloadsPaused ? " · paused" : ""}</p></div>
+    <div class="row-actions"><button class="command" id="pause-downloads" title="Pause all downloads" ${downloadsPaused ? "disabled" : ""}>Ⅱ <span>Pause all</span></button>
+    <button class="command" id="resume-downloads" title="Resume all downloads" ${downloadsPaused ? "" : "disabled"}>▶ <span>Resume all</span></button>
+    <button class="command" id="refresh-search">↻ <span>Run search</span></button></div></div>
     <section><h2>Active downloads</h2><div class="downloads">${active.length ? active.map((g: Item) => `
       <article class="download"><div class="download-title"><strong title="${esc(g.content_path)}">${esc(downloadLabel(g, movieNames))}</strong>
       <small>${esc(g.subject_type)} #${esc(g.subject_id)}</small></div>${state(g.state)}
@@ -119,6 +122,20 @@ async function dashboard(): Promise<void> {
   document.querySelector<HTMLButtonElement>("#refresh-search")!.onclick = async () => {
     await api("/api/v1/system/trigger/search", { method: "POST" }); showToast("Search triggered");
   };
+  const setPaused = async (paused: boolean): Promise<void> => {
+    const button = document.querySelector<HTMLButtonElement>(paused ? "#pause-downloads" : "#resume-downloads")!;
+    button.disabled = true;
+    try {
+      await api(`/api/v1/queue/${paused ? "pause" : "resume"}`, { method: "POST" });
+      showToast(paused ? "All downloads paused" : "All downloads resumed");
+      await dashboard();
+    } catch (error) {
+      showError(error);
+      button.disabled = false;
+    }
+  };
+  document.querySelector<HTMLButtonElement>("#pause-downloads")!.onclick = () => void setPaused(true);
+  document.querySelector<HTMLButtonElement>("#resume-downloads")!.onclick = () => void setPaused(false);
   document.querySelectorAll<HTMLButtonElement>(".cancel-grab").forEach(button => button.onclick = () => {
     const grab = active.find((item: Item) => item.id === Number(button.dataset.grab));
     if (grab) void cancelGrab(grab, downloadLabel(grab, movieNames));

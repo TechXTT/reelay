@@ -56,6 +56,6 @@ export function connectEvents(onEvent: () => void): EventSource {
   const token = authToken();
   const url = `/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   const source = new EventSource(url);
-  ["state_transition", "progress"].forEach(type => source.addEventListener(type, onEvent));
+  ["state_transition", "progress", "queue_control"].forEach(type => source.addEventListener(type, onEvent));
   return source;
 }

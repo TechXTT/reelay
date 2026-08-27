@@ -49,13 +49,17 @@ type fakeQB struct {
 	infoBody []byte
 
 	// Recorded for assertions.
-	Logins    atomic.Int32
-	Adds      atomic.Int32
-	Deletes   atomic.Int32
-	Infos     atomic.Int32
-	LastAdd   map[string]string
-	LastQuery string
-	addMu     sync.Mutex
+	Logins            atomic.Int32
+	Adds              atomic.Int32
+	Deletes           atomic.Int32
+	Controls          atomic.Int32
+	Infos             atomic.Int32
+	LastAdd           map[string]string
+	LastQuery         string
+	LastControlPath   string
+	LastControlHashes string
+	LegacyControlOnly bool
+	addMu             sync.Mutex
 }
 
 func newFakeQB(t *testing.T, infoBody []byte) (*fakeQB, *httptest.Server) {
@@ -191,6 +195,24 @@ func (f *fakeQB) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		_, _ = io.WriteString(w, "")
 
+	case "/api/v2/torrents/stop", "/api/v2/torrents/start":
+		if !f.authorised(r) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if f.LegacyControlOnly {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.recordControl(r)
+
+	case "/api/v2/torrents/pause", "/api/v2/torrents/resume":
+		if !f.authorised(r) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		f.recordControl(r)
+
 	case "/api/v2/torrents/createCategory":
 		if !f.authorised(r) {
 			w.WriteHeader(http.StatusForbidden)
@@ -206,6 +228,15 @@ func (f *fakeQB) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (f *fakeQB) recordControl(r *http.Request) {
+	f.Controls.Add(1)
+	_ = r.ParseForm()
+	f.addMu.Lock()
+	f.LastControlPath = r.URL.Path
+	f.LastControlHashes = r.PostFormValue("hashes")
+	f.addMu.Unlock()
 }
 
 // filterByHashes mimics the real endpoint's hashes= behaviour: an empty filter
@@ -656,6 +687,49 @@ func TestRemoveOurOwnTorrent(t *testing.T) {
 	}
 	if got := fake.Deletes.Load(); got != 1 {
 		t.Errorf("%d deletes issued, want 1", got)
+	}
+}
+
+func TestSetPausedOnlyActsOnOwnedTorrents(t *testing.T) {
+	fake, srv := newFakeQB(t, fixtureBody(t))
+	c := newClient(t, testCfg(srv.URL))
+	ours := ourHashFromFixture(t, fixtureBody(t))
+	foreign := foreignHashFromFixture(t, fixtureBody(t))
+
+	if err := c.SetPaused(context.Background(), []string{ours, foreign}, true); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Controls.Load() != 1 || fake.LastControlPath != "/api/v2/torrents/stop" || fake.LastControlHashes != ours {
+		t.Fatalf("controls=%d path=%q hashes=%q", fake.Controls.Load(), fake.LastControlPath, fake.LastControlHashes)
+	}
+	if err := c.SetPaused(context.Background(), []string{foreign}, false); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Controls.Load() != 1 {
+		t.Fatal("foreign torrent reached a pause/resume endpoint")
+	}
+}
+
+func TestSetPausedWithNoHashesDoesNotFetchOrMutateAll(t *testing.T) {
+	fake, srv := newFakeQB(t, fixtureBody(t))
+	c := newClient(t, testCfg(srv.URL))
+	if err := c.SetPaused(context.Background(), nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Infos.Load() != 0 || fake.Controls.Load() != 0 {
+		t.Fatalf("empty pause fetched=%d controlled=%d", fake.Infos.Load(), fake.Controls.Load())
+	}
+}
+
+func TestSetPausedFallsBackForOlderQBittorrent(t *testing.T) {
+	fake, srv := newFakeQB(t, fixtureBody(t))
+	fake.LegacyControlOnly = true
+	c := newClient(t, testCfg(srv.URL))
+	if err := c.SetPaused(context.Background(), []string{ourHashFromFixture(t, fixtureBody(t))}, false); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Controls.Load() != 1 || fake.LastControlPath != "/api/v2/torrents/resume" {
+		t.Fatalf("controls=%d path=%q", fake.Controls.Load(), fake.LastControlPath)
 	}
 }
 

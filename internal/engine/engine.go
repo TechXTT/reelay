@@ -36,17 +36,18 @@ type Options struct {
 }
 
 type Engine struct {
-	store      *store.Store
-	cfg        *config.Config
-	indexers   []indexer.Indexer
-	downloader downloader.Downloader
-	tvmaze     metadata.SeriesProvider
-	importer   Importer
-	pathMapper *downloader.PathMapper
-	clock      clock.Clock
-	log        *slog.Logger
-	events     *EventBus
-	searchSem  chan struct{}
+	store             *store.Store
+	cfg               *config.Config
+	indexers          []indexer.Indexer
+	downloader        downloader.Downloader
+	tvmaze            metadata.SeriesProvider
+	importer          Importer
+	pathMapper        *downloader.PathMapper
+	clock             clock.Clock
+	log               *slog.Logger
+	events            *EventBus
+	searchSem         chan struct{}
+	downloadControlMu sync.Mutex
 
 	searchTrigger         chan struct{}
 	statusTrigger         chan struct{}

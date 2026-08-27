@@ -26,19 +26,28 @@ func (f *fakeIndexer) Search(context.Context, indexer.Query) ([]indexer.Release,
 }
 
 type fakeDownloader struct {
-	hash     string
-	complete bool
-	added    bool
-	addCalls int
+	hash         string
+	complete     bool
+	added        bool
+	addCalls     int
+	lastAdd      downloader.AddRequest
+	pauseCalls   int
+	paused       bool
+	pausedHashes []string
+	pausedState  bool
 }
 
-func (f *fakeDownloader) Add(context.Context, downloader.AddRequest) (string, error) {
+func (f *fakeDownloader) Add(_ context.Context, req downloader.AddRequest) (string, error) {
 	f.added = true
 	f.addCalls++
+	f.lastAdd = req
 	return f.hash, nil
 }
 func (f *fakeDownloader) Status(context.Context, []string) ([]downloader.TorrentStatus, error) {
 	progress, state := 0.4, downloader.StateDownloading
+	if f.pausedState {
+		progress, state = 0, downloader.StatePaused
+	}
 	if f.complete {
 		progress, state = 1, downloader.StateCompleted
 	}
@@ -46,7 +55,13 @@ func (f *fakeDownloader) Status(context.Context, []string) ([]downloader.Torrent
 		Category: "reelay-movies", ContentPath: "/downloads/arrival.mkv"}}, nil
 }
 func (f *fakeDownloader) Remove(context.Context, string, bool) error { return nil }
-func (f *fakeDownloader) Healthy(context.Context) error              { return nil }
+func (f *fakeDownloader) SetPaused(_ context.Context, hashes []string, paused bool) error {
+	f.pauseCalls++
+	f.paused = paused
+	f.pausedHashes = append([]string(nil), hashes...)
+	return nil
+}
+func (f *fakeDownloader) Healthy(context.Context) error { return nil }
 
 type fakeImporter struct{ store *store.Store }
 
@@ -117,6 +132,16 @@ func TestWantedToImportedCycle(t *testing.T) {
 	if err := eng.ForceSearch(ctx, model.SubjectMovie, movie.ID); !errors.Is(err, store.ErrItemBusy) {
 		t.Fatalf("repeat search while grabbed = %v, want ErrItemBusy", err)
 	}
+	client.pausedState = true
+	clk.Advance(3 * time.Hour)
+	if err := eng.StatusOnce(ctx); err != nil {
+		t.Fatalf("paused torrent treated as stalled: %v", err)
+	}
+	movie, _ = db.Movies().Get(ctx, movie.ID)
+	if movie.State != model.StateDownloading {
+		t.Fatalf("paused torrent state=%s, want downloading", movie.State)
+	}
+	client.pausedState = false
 
 	clk.Advance(30 * time.Second)
 	if err := eng.StatusOnce(ctx); err != nil {
@@ -158,6 +183,45 @@ func TestWantedToImportedCycle(t *testing.T) {
 	stale, _ = db.Grabs().Get(ctx, stale.ID)
 	if stale.State != model.GrabImported || stale.LastError != "" {
 		t.Fatalf("stale completed grab = %+v", stale)
+	}
+}
+
+func TestDownloadPausePersistsAndAppliesToNewGrabs(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "pause.db"), CacheKB: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := store.Migrate(ctx, db, logger); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeDownloader{hash: "0123456789abcdef0123456789abcdef01234567"}
+	eng, err := New(Options{Store: db, Config: testConfig(), Downloader: client, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := eng.SetDownloadsPaused(ctx, true)
+	if err != nil || count != 0 || client.pauseCalls != 1 || !client.paused {
+		t.Fatalf("pause count=%d calls=%d paused=%t err=%v", count, client.pauseCalls, client.paused, err)
+	}
+	paused, err := eng.DownloadsPaused(ctx)
+	if err != nil || !paused {
+		t.Fatalf("persisted pause=%t err=%v", paused, err)
+	}
+	if _, err := eng.addDownload(ctx, downloader.AddRequest{Magnet: "magnet:?xt=urn:btih:" + client.hash}); err != nil {
+		t.Fatal(err)
+	}
+	if !client.lastAdd.Paused {
+		t.Fatal("new grab did not inherit the global pause state")
+	}
+	if _, err := eng.SetDownloadsPaused(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	paused, err = eng.DownloadsPaused(ctx)
+	if err != nil || paused || client.paused {
+		t.Fatalf("resume persisted=%t client=%t err=%v", paused, client.paused, err)
 	}
 }
 

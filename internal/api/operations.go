@@ -105,7 +105,34 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
+	paused := false
+	if s.engine != nil {
+		paused, err = s.engine.DownloadsPaused(r.Context())
+		if err != nil {
+			return err
+		}
+	}
+	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "paused": paused})
+	return nil
+}
+
+func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) error {
+	return s.handleQueuePauseState(w, r, true)
+}
+
+func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) error {
+	return s.handleQueuePauseState(w, r, false)
+}
+
+func (s *Server) handleQueuePauseState(w http.ResponseWriter, r *http.Request, paused bool) error {
+	if s.engine == nil {
+		return Unavailable("engine is unavailable")
+	}
+	count, err := s.engine.SetDownloadsPaused(r.Context(), paused)
+	if err != nil {
+		return Conflict("download pause state could not be changed").WithCause(err)
+	}
+	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"paused": paused, "count": count})
 	return nil
 }
 

@@ -86,7 +86,7 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 	if subject == model.SubjectMovie {
 		category, savePath = e.cfg.Downloader.CategoryMovies, e.cfg.Downloader.SavePathMovies
 	}
-	hash, err := e.downloader.Add(ctx, downloader.AddRequest{Magnet: release.Magnet,
+	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: release.Magnet,
 		Category: category, SavePath: savePath, Paused: e.cfg.Downloader.AddPaused})
 	if err != nil {
 		_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock, e.clock.Now().Add(15*time.Minute),

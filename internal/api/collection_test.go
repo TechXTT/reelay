@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/downloader"
+	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -20,7 +22,12 @@ type removalCall struct {
 	deleteData bool
 }
 
-type removalDownloader struct{ calls []removalCall }
+type removalDownloader struct {
+	calls        []removalCall
+	pauseCalls   int
+	paused       bool
+	pausedHashes []string
+}
 
 func (f *removalDownloader) Add(context.Context, downloader.AddRequest) (string, error) {
 	return "", errors.New("not implemented")
@@ -30,6 +37,12 @@ func (f *removalDownloader) Status(context.Context, []string) ([]downloader.Torr
 }
 func (f *removalDownloader) Remove(_ context.Context, hash string, deleteData bool) error {
 	f.calls = append(f.calls, removalCall{hash: hash, deleteData: deleteData})
+	return nil
+}
+func (f *removalDownloader) SetPaused(_ context.Context, hashes []string, paused bool) error {
+	f.pauseCalls++
+	f.paused = paused
+	f.pausedHashes = append([]string(nil), hashes...)
 	return nil
 }
 func (f *removalDownloader) Healthy(context.Context) error { return nil }
@@ -142,6 +155,33 @@ func TestQueueCancelCanKeepDataAndSkipBlacklist(t *testing.T) {
 		movie.ID, "0123456789abcdef0123456789abcdef01234567")
 	if err != nil || blacklisted {
 		t.Fatalf("blacklist=%v err=%v", blacklisted, err)
+	}
+}
+
+func TestQueuePauseAndResumeAll(t *testing.T) {
+	srv, st := newTestServer(t, nil)
+	client := &removalDownloader{}
+	eng, err := engine.New(engine.Options{Store: st, Config: srv.cfg, Downloader: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.engine = eng
+	_, grab := managedMovieFixture(t, st, model.StateDownloading, model.GrabDownloading)
+
+	rec := do(t, srv.Handler(), http.MethodPost, "/api/v1/queue/pause", authed())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if client.pauseCalls != 1 || !client.paused || len(client.pausedHashes) != 1 || client.pausedHashes[0] != grab.TorrentHash {
+		t.Fatalf("pause call=%d paused=%t hashes=%v", client.pauseCalls, client.paused, client.pausedHashes)
+	}
+	rec = do(t, srv.Handler(), http.MethodGet, "/api/v1/queue", authed())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"paused":true`) {
+		t.Fatalf("queue after pause status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, srv.Handler(), http.MethodPost, "/api/v1/queue/resume", authed())
+	if rec.Code != http.StatusOK || client.pauseCalls != 2 || client.paused {
+		t.Fatalf("resume status=%d calls=%d paused=%t body=%s", rec.Code, client.pauseCalls, client.paused, rec.Body.String())
 	}
 }
 

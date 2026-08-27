@@ -168,6 +168,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/episodes/{id}/candidates", s.wrap(s.handleCandidates))
 	mux.HandleFunc("POST /api/v1/episodes/{id}/grab", s.wrap(s.handleEpisodeGrab))
 	mux.HandleFunc("GET /api/v1/queue", s.wrap(s.handleQueue))
+	mux.HandleFunc("POST /api/v1/queue/pause", s.wrap(s.handleQueuePause))
+	mux.HandleFunc("POST /api/v1/queue/resume", s.wrap(s.handleQueueResume))
 	mux.HandleFunc("DELETE /api/v1/queue/{id}", s.wrap(s.handleQueueDelete))
 	mux.HandleFunc("GET /api/v1/history", s.wrap(s.handleHistory))
 	mux.HandleFunc("GET /api/v1/profiles", s.wrap(s.handleProfilesList))

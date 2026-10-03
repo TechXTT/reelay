@@ -28,14 +28,25 @@ func (e *Engine) MetadataOnce(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("refresh %s: %w", item.Title, err))
 			continue
 		}
-		latestSeason := 0
+		now := e.clock.Now().UTC()
+		latestKnownSeason := 0
+		latestAiredSeason := 0
 		for _, episode := range episodes {
-			if episode.Season > latestSeason {
-				latestSeason = episode.Season
+			if episode.Season <= 0 {
+				continue
+			}
+			if episode.Season > latestKnownSeason {
+				latestKnownSeason = episode.Season
+			}
+			if episode.AirDate != nil && !episode.AirDate.After(now) && episode.Season > latestAiredSeason {
+				latestAiredSeason = episode.Season
 			}
 		}
+		if latestAiredSeason == 0 {
+			latestAiredSeason = latestKnownSeason
+		}
 		for _, episode := range episodes {
-			wanted := e.monitorEpisode(item, episode.Season, episode.AirDate, latestSeason)
+			wanted := e.monitorEpisode(item, episode.Season, episode.AirDate, latestAiredSeason)
 			initial := model.StateUnmonitored
 			if wanted {
 				initial = model.StateWanted

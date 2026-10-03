@@ -182,6 +182,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/integrations/jellyfin/events", s.wrap(s.handleJellyfinEvents))
 	mux.HandleFunc("GET /api/v1/integrations/jellyfin/users", s.wrap(s.handleJellyfinUsers))
 	mux.HandleFunc("GET /api/v1/recommendations", s.wrap(s.handleRecommendations))
+	mux.HandleFunc("GET /api/v1/requests", s.wrap(s.handleRequests))
 	mux.HandleFunc("POST /api/v1/recommendations/generate", s.wrap(s.handleRecommendationGenerate))
 	mux.HandleFunc("POST /api/v1/recommendations/{id}/actions", s.wrap(s.handleRecommendationAction))
 

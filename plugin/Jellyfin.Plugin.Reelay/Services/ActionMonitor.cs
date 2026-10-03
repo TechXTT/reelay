@@ -55,7 +55,9 @@ public sealed class ActionMonitor : BackgroundService
             {
                 var recommendations = await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false);
                 var byTmdb = recommendations.ToDictionary(item => item.TmdbId);
-                foreach (var item in virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)))
+                var changed = false;
+                foreach (var item in virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)
+                    && (mediaType == "movie" ? item is MediaBrowser.Controller.Entities.Movies.Movie : item is MediaBrowser.Controller.Entities.TV.Series)))
                 {
                     var tmdb = JellyfinIdentity.ProviderId(item, MetadataProvider.Tmdb);
                     if (tmdb == 0 || !byTmdb.TryGetValue(tmdb, out var recommendation)) continue;
@@ -68,9 +70,12 @@ public sealed class ActionMonitor : BackgroundService
                     var pending = new PendingAction(recommendation.Id, actionId, action, rating);
                     _outbox.Enqueue(pending);
                     await SendAsync(pending, cancellationToken).ConfigureAwait(false);
+                    changed = true;
                     _logger.LogInformation("Sent {Action} for {Title} on behalf of Jellyfin user {User}", action, recommendation.Title, user.Username);
                 }
-                var remaining = await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false);
+                var remaining = changed
+                    ? await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false)
+                    : recommendations;
                 _virtual.Refresh(userId, mediaType, remaining);
             }
         }

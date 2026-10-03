@@ -49,7 +49,7 @@ public sealed class SyncService
         await _client.SyncAsync(new SyncRequest(config.ServerId, syncToken, false, syncUsers, Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
         for (var offset = 0; offset < items.Count; offset += 400)
         {
-            await _client.SyncAsync(new SyncRequest(config.ServerId, syncToken, false, Array.Empty<SyncUser>(), items.Skip(offset).Take(400).ToList()), cancellationToken).ConfigureAwait(false);
+            await _client.SyncAsync(new SyncRequest(config.ServerId, syncToken, false, Array.Empty<SyncUser>(), items.GetRange(offset, Math.Min(400, items.Count - offset))), cancellationToken).ConfigureAwait(false);
         }
         await _client.SyncAsync(new SyncRequest(config.ServerId, syncToken, true, Array.Empty<SyncUser>(), Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
         progress?.Report(35);
@@ -57,7 +57,7 @@ public sealed class SyncService
         foreach (var user in users)
         {
             var events = BuildActivities(config.ServerId, user, items, source, now);
-            for (var offset = 0; offset < events.Count; offset += 400) await _client.SendActivitiesAsync(events.Skip(offset).Take(400).ToList(), cancellationToken).ConfigureAwait(false);
+            for (var offset = 0; offset < events.Count; offset += 400) await _client.SendActivitiesAsync(events.GetRange(offset, Math.Min(400, events.Count - offset)), cancellationToken).ConfigureAwait(false);
         }
         progress?.Report(55);
 

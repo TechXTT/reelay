@@ -36,6 +36,8 @@ var (
 // the engine's state machine never has to know which client it is talking to.
 const (
 	StateDownloading = "downloading"
+	StateQueued      = "queued"
+	StateMaintenance = "maintenance"
 	StateSeeding     = "seeding"
 	StateCompleted   = "completed"
 	StateStalled     = "stalled"

@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
@@ -393,18 +392,18 @@ func (c *Client) SetPaused(ctx context.Context, hashes []string, paused bool) er
 	return nil
 }
 
-func multipartBody(fields map[string]string) (io.Reader, string, error) {
+func multipartBody(fields map[string]string) (string, string, error) {
 	var buf strings.Builder
 	w := multipart.NewWriter(&buf)
 	for k, v := range fields {
 		if err := w.WriteField(k, v); err != nil {
-			return nil, "", fmt.Errorf("qbittorrent: build multipart field %q: %w", k, err)
+			return "", "", fmt.Errorf("qbittorrent: build multipart field %q: %w", k, err)
 		}
 	}
 	if err := w.Close(); err != nil {
-		return nil, "", fmt.Errorf("qbittorrent: close multipart body: %w", err)
+		return "", "", fmt.Errorf("qbittorrent: close multipart body: %w", err)
 	}
-	return strings.NewReader(buf.String()), w.FormDataContentType(), nil
+	return buf.String(), w.FormDataContentType(), nil
 }
 
 var _ downloader.Downloader = (*Client)(nil)

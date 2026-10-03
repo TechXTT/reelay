@@ -64,7 +64,7 @@ func (r infoRow) toStatus() downloader.TorrentStatus {
 		State:           normaliseState(r.State),
 		Progress:        clampProgress(r.Progress),
 		ContentPath:     contentPath(r),
-		DownloadedBytes: max64(r.Downloaded, 0),
+		DownloadedBytes: max(r.Downloaded, 0),
 		TotalBytes:      total,
 		Category:        r.Category,
 		Seeders:         r.NumSeeds,
@@ -103,13 +103,6 @@ func contentPath(r infoRow) string {
 	return strings.TrimRight(r.SavePath, `/\`) + sep + r.Name
 }
 
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func clampProgress(p float64) float64 {
 	switch {
 	case p < 0:
@@ -136,20 +129,25 @@ func normaliseState(s string) string {
 		return downloader.StateError
 
 	// Finished, and actively (or nominally) seeding.
-	case "uploading", "forcedUP", "queuedUP", "checkingUP":
+	case "uploading", "forcedUP", "queuedUP":
 		return downloader.StateSeeding
 	// Finished, seeding, but with nobody to seed to. Still complete, and the
 	// importer only cares about completion.
 	case "stalledUP":
 		return downloader.StateSeeding
+	case "checkingUP":
+		return downloader.StateMaintenance
 	// Finished and deliberately not seeding.
 	case "pausedUP", "stoppedUP":
 		return downloader.StateCompleted
 
 	// Still fetching.
-	case "downloading", "forcedDL", "queuedDL", "checkingDL", "metaDL",
-		"forcedMetaDL", "allocating", "checkingResumeData", "moving":
+	case "downloading", "forcedDL", "metaDL", "forcedMetaDL":
 		return downloader.StateDownloading
+	case "queuedDL":
+		return downloader.StateQueued
+	case "checkingDL", "allocating", "checkingResumeData", "moving":
+		return downloader.StateMaintenance
 	// Fetching, but with no peers. Distinct from downloading because this is
 	// the state a stall timeout is watching for.
 	case "stalledDL":

@@ -883,6 +883,24 @@ func TestUnknownStateIsNotGuessed(t *testing.T) {
 	}
 }
 
+func TestMaintenanceAndQueuedStatesAreDistinctFromTransfers(t *testing.T) {
+	pairs := map[string]string{
+		"queuedDL":           downloader.StateQueued,
+		"checkingDL":         downloader.StateMaintenance,
+		"checkingUP":         downloader.StateMaintenance,
+		"allocating":         downloader.StateMaintenance,
+		"checkingResumeData": downloader.StateMaintenance,
+		"moving":             downloader.StateMaintenance,
+		"metaDL":             downloader.StateDownloading,
+		"forcedMetaDL":       downloader.StateDownloading,
+	}
+	for raw, want := range pairs {
+		if got := normaliseState(raw); got != want {
+			t.Errorf("normaliseState(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 // qBittorrent 5.0 renamed pausedDL/pausedUP. One binary has to handle both.
 func TestBothPausedSpellingsAreHandled(t *testing.T) {
 	pairs := map[string]string{

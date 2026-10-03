@@ -14,10 +14,6 @@ const downloadsPausedKey = "downloads.paused"
 
 // DownloadsPaused reports the operator-controlled global transfer state.
 func (e *Engine) DownloadsPaused(ctx context.Context) (bool, error) {
-	return e.downloadsPaused(ctx)
-}
-
-func (e *Engine) downloadsPaused(ctx context.Context) (bool, error) {
 	value, err := e.store.KV().Get(ctx, downloadsPausedKey)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
@@ -39,7 +35,7 @@ func (e *Engine) SetDownloadsPaused(ctx context.Context, paused bool) (int, erro
 	e.downloadControlMu.Lock()
 	defer e.downloadControlMu.Unlock()
 
-	previous, err := e.downloadsPaused(ctx)
+	previous, err := e.DownloadsPaused(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -53,6 +49,16 @@ func (e *Engine) SetDownloadsPaused(ctx context.Context, paused bool) (int, erro
 	}
 	hashes := make([]string, 0, len(grabs))
 	seen := make(map[string]bool, len(grabs))
+	if previous && !paused {
+		now := e.clock.Now().UTC()
+		for i := range grabs {
+			grabs[i].ProgressedAt = now
+			if err := e.store.Grabs().Update(ctx, grabs[i]); err != nil {
+				_ = e.store.KV().Set(context.WithoutCancel(ctx), downloadsPausedKey, strconv.FormatBool(previous))
+				return 0, err
+			}
+		}
+	}
 	for _, grab := range grabs {
 		hash := strings.ToLower(strings.TrimSpace(grab.TorrentHash))
 		if grab.Progress < 1 && hash != "" && !seen[hash] {
@@ -73,7 +79,7 @@ func (e *Engine) addDownload(ctx context.Context, req downloader.AddRequest) (st
 	e.downloadControlMu.Lock()
 	defer e.downloadControlMu.Unlock()
 
-	paused, err := e.downloadsPaused(ctx)
+	paused, err := e.DownloadsPaused(ctx)
 	if err != nil {
 		return "", err
 	}

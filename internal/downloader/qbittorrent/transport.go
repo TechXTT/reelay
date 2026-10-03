@@ -19,7 +19,7 @@ type request struct {
 	// form is sent url-encoded; body+contentType is sent as given. Only one of
 	// the two is used.
 	form        url.Values
-	body        io.Reader
+	body        string
 	contentType string
 
 	// okStatus overrides the default of "200 only".
@@ -110,8 +110,8 @@ func (c *Client) roundTrip(ctx context.Context, req request) ([]byte, int, error
 	var bodyReader io.Reader
 	contentType := req.contentType
 	switch {
-	case req.body != nil:
-		bodyReader = req.body
+	case req.body != "":
+		bodyReader = strings.NewReader(req.body)
 	case len(req.form) > 0:
 		bodyReader = strings.NewReader(req.form.Encode())
 		contentType = "application/x-www-form-urlencoded"

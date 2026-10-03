@@ -33,13 +33,13 @@ export function setAuthToken(value: string): void {
   else localStorage.removeItem(tokenKey);
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}, acceptedStatuses: number[] = []): Promise<T> {
   const headers = new Headers(init.headers);
   const token = authToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
+  if (!response.ok && !acceptedStatuses.includes(response.status)) {
     const payload = await response.json().catch(() => ({}));
     throw new APIError(payload?.error?.message ?? `${response.status} ${response.statusText}`,
       response.status, payload?.error?.code ?? "http_error");
@@ -56,6 +56,6 @@ export function connectEvents(onEvent: () => void): EventSource {
   const token = authToken();
   const url = `/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   const source = new EventSource(url);
-  ["state_transition", "progress", "queue_control"].forEach(type => source.addEventListener(type, onEvent));
+  ["state_transition", "progress", "queue_control", "requests_updated"].forEach(type => source.addEventListener(type, onEvent));
   return source;
 }

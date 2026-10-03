@@ -1,13 +1,33 @@
 import "./styles.css";
 import { api, APIError, authToken, connectEvents, esc, setAuthToken } from "./api.ts";
 
-type View = "dashboard" | "discover" | "series" | "movies" | "add" | "settings";
+type View = "dashboard" | "discover" | "requests" | "series" | "movies" | "add" | "settings";
 type Item = Record<string, any>;
+type RequestMonitorMode = "latest_season" | "all" | "future_only";
+type RequestRecord = {
+  id: number;
+  title: string;
+  year: number;
+  media_type: "movie" | "series";
+  requested_at: string;
+  monitor_mode: RequestMonitorMode | "";
+  state: string;
+  progress: number;
+  last_error: string | null;
+  next_search_at: string | null;
+  available: boolean;
+  imported_episodes: number;
+  total_episodes: number;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 let current: View = "dashboard";
 let eventSource: EventSource | null = null;
+let connectionStatus = "Connecting";
 let refreshTimer = 0;
+let refreshing = false;
+let refreshPending = false;
+let selectedSeries: number | null = null;
 const discoverUserKey = "reelay.discover-user";
 const discoverTypeKey = "reelay.discover-type";
 let discoverUser = localStorage.getItem(discoverUserKey) ?? "";
@@ -18,6 +38,7 @@ type DialogCheck = { id: string; label: string; detail: string; checked?: boolea
 const nav: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◫" },
   { id: "discover", label: "Discover", icon: "*" },
+  { id: "requests", label: "Requests", icon: "↧" },
   { id: "series", label: "Series", icon: "▤" },
   { id: "movies", label: "Movies", icon: "▶" },
   { id: "add", label: "Add", icon: "+" },
@@ -28,19 +49,24 @@ function shell(): void {
   app.innerHTML = `<header class="topbar"><button class="brand" data-view="dashboard" aria-label="Dashboard">
     <span class="brand-mark">R</span><strong>Reelay</strong></button>
     <div id="connection" class="connection">Connecting</div></header>
-    <div class="layout"><nav>${nav.map(n => `<button data-view="${n.id}" title="${n.label}" class="${current === n.id ? "active" : ""}">
+    <div class="layout"><nav aria-label="Primary navigation">${nav.map(n => `<button data-view="${n.id}" title="${n.label}" aria-label="${n.label}" aria-current="${current === n.id ? "page" : "false"}" class="${current === n.id ? "active" : ""}">
       <span aria-hidden="true">${n.icon}</span><span>${n.label}</span></button>`).join("")}</nav>
     <main id="content"><div class="loading">Loading</div></main></div>
     <div id="toast" role="status" aria-live="polite"></div>`;
   document.querySelectorAll<HTMLElement>("[data-view]").forEach(el => el.onclick = () => navigate(el.dataset.view as View));
+  setConnection(connectionStatus);
 }
 
 async function navigate(view: View): Promise<void> {
   current = view;
+  selectedSeries = null;
+  clearTimeout(refreshTimer);
+  refreshTimer = 0;
   shell();
   try {
     if (view === "dashboard") await dashboard();
     if (view === "discover") await discoverView();
+    if (view === "requests") await requestsView();
     if (view === "series") await seriesView();
     if (view === "movies") await moviesView();
     if (view === "add") await addView();
@@ -65,6 +91,10 @@ function state(value: string): string {
 }
 
 function showError(error: unknown): void {
+  if (error instanceof APIError && error.status === 401) {
+    authGate(error.message);
+    return;
+  }
   const toast = document.querySelector<HTMLElement>("#toast");
   if (!toast) return;
   toast.textContent = error instanceof Error ? error.message : String(error);
@@ -93,9 +123,10 @@ function authGate(message: string): void {
 
 async function dashboard(): Promise<void> {
   const [health, queue, history, movies] = await Promise.all([
-    api<Item>("/api/v1/health"), api<Item>("/api/v1/queue"), api<Item>("/api/v1/history?page=1"),
+    api<Item>("/api/v1/health", {}, [503]), api<Item>("/api/v1/queue"), api<Item>("/api/v1/history?page=1"),
     api<Item>("/api/v1/movies")
   ]);
+  if (current !== "dashboard" || (refreshing && isEditing())) return;
   const active = queue.items ?? [];
   const downloadsPaused = Boolean(queue.paused);
   const components = health.components ?? [];
@@ -120,7 +151,10 @@ async function dashboard(): Promise<void> {
       `${g.subject_type} #${g.subject_id}`, state(g.state), `${(g.progress * 100).toFixed(0)}%`, date(g.updated_at)
     ]))}</section>`);
   document.querySelector<HTMLButtonElement>("#refresh-search")!.onclick = async () => {
-    await api("/api/v1/system/trigger/search", { method: "POST" }); showToast("Search triggered");
+    const button = document.querySelector<HTMLButtonElement>("#refresh-search")!;
+    await runControl(button, async () => {
+      await api("/api/v1/system/trigger/search", { method: "POST" }); showToast("Search triggered");
+    });
   };
   const setPaused = async (paused: boolean): Promise<void> => {
     const button = document.querySelector<HTMLButtonElement>(paused ? "#pause-downloads" : "#resume-downloads")!;
@@ -149,6 +183,7 @@ async function dashboard(): Promise<void> {
 
 async function discoverView(selectedUser = discoverUser, mediaType = discoverType): Promise<void> {
   const users = (await api<Item>("/api/v1/integrations/jellyfin/users")).items ?? [];
+  if (current !== "discover") return;
   if (!users.length) {
     content(`<div class="page-head"><div><h1>Discover</h1><p>Personalized from Jellyfin activity</p></div></div>
       <div class="empty">Install and configure the Reelay Jellyfin plugin to synchronize users.</div>`);
@@ -162,6 +197,7 @@ async function discoverView(selectedUser = discoverUser, mediaType = discoverTyp
   localStorage.setItem(discoverTypeKey, mediaType);
   const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&media_type=${mediaType}`;
   const values = (await api<Item>(`/api/v1/recommendations?${query}`)).items ?? [];
+  if (current !== "discover" || discoverUser !== key || discoverType !== mediaType) return;
   const node = content(`<div class="page-head"><div><h1>Discover</h1><p>Recommendations for ${esc(user.display_name)}</p></div>
     <button class="command" id="generate-recommendations">Refresh</button></div>
     <div class="discover-toolbar"><label>User<select id="discover-user">${users.map((value: Item) => option(`${value.server_id}:${value.user_id}`, value.display_name, key)).join("")}</select></label>
@@ -173,13 +209,20 @@ async function discoverView(selectedUser = discoverUser, mediaType = discoverTyp
       <p>${esc(item.overview || "")}</p><ul>${(item.reasons ?? []).map((reason: string) => `<li>${esc(reason)}</li>`).join("")}</ul>
       <div class="row-actions recommendation-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button>
       <label class="rating-field"><span>Rating</span><select class="rec-rating" aria-label="Rating for ${esc(item.title)}"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option></select></label>
-      <button class="command compact rec-rate" data-id="${item.id}">Rate</button><button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
+      <button class="command compact rec-rate" data-id="${item.id}">Rate</button>${mediaType === "series" ? `<label class="request-scope"><span>Episodes to request</span><select class="rec-monitor" aria-label="Episodes to request for ${esc(item.title)}">
+        <option value="latest_season" selected>Latest season</option><option value="all">All episodes</option><option value="future_only">Future episodes</option></select>
+        <small class="scope-explanation">Latest season requests the most recently aired season. All episodes includes past episodes; Future episodes follows upcoming air dates.</small></label>` : ""}<button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
     </article>`).join("") : `<div class="empty">No active recommendations</div>`}</div>`);
-  node.querySelector<HTMLSelectElement>("#discover-user")!.onchange = event => void discoverView((event.currentTarget as HTMLSelectElement).value, mediaType);
-  node.querySelectorAll<HTMLInputElement>("[name=discover-type]").forEach(input => input.onchange = () => void discoverView(key, input.value));
+  node.querySelector<HTMLSelectElement>("#discover-user")!.onchange = event =>
+    void discoverView((event.currentTarget as HTMLSelectElement).value, mediaType).catch(showError);
+  node.querySelectorAll<HTMLInputElement>("[name=discover-type]").forEach(input => input.onchange = () =>
+    void discoverView(key, input.value).catch(showError));
   node.querySelector<HTMLButtonElement>("#generate-recommendations")!.onclick = async () => {
-    await api("/api/v1/recommendations/generate", { method: "POST", body: JSON.stringify({ server_id: user.server_id, user_id: user.user_id, media_type: mediaType }) });
-    showToast("Recommendations refreshed"); await discoverView(key, mediaType);
+    const button = node.querySelector<HTMLButtonElement>("#generate-recommendations")!;
+    await runControl(button, async () => {
+      await api("/api/v1/recommendations/generate", { method: "POST", body: JSON.stringify({ server_id: user.server_id, user_id: user.user_id, media_type: mediaType }) });
+      showToast("Recommendations refreshed"); await discoverView(key, mediaType);
+    });
   };
   for (const action of ["dismiss", "request"] as const) {
     node.querySelectorAll<HTMLButtonElement>(`.rec-${action}`).forEach(button => {
@@ -196,11 +239,12 @@ async function recommendationAction(button: HTMLButtonElement, action: "dismiss"
   if (!card) return;
   const controls = Array.from(card.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select"));
   const rating = action === "rate" ? Number(card.querySelector<HTMLSelectElement>(".rec-rating")?.value) : undefined;
+  const monitorMode = action === "request" ? card.querySelector<HTMLSelectElement>(".rec-monitor")?.value as RequestMonitorMode | undefined : undefined;
   controls.forEach(control => control.disabled = true);
   try {
     await api(`/api/v1/recommendations/${button.dataset.id}/actions`, {
       method: "POST",
-      body: JSON.stringify({ action_id: crypto.randomUUID(), action, ...(rating ? { rating } : {}) })
+      body: JSON.stringify({ action_id: crypto.randomUUID(), action, ...(rating ? { rating } : {}), ...(monitorMode ? { monitor_mode: monitorMode } : {}) })
     });
     const message = action === "request" ? "Added to Reelay" : action === "rate" ? `Rated ${rating} of 5` : "Recommendation dismissed";
     showToast(message);
@@ -213,8 +257,65 @@ async function recommendationAction(button: HTMLButtonElement, action: "dismiss"
   }
 }
 
+async function requestsView(selectedUser = discoverUser): Promise<void> {
+  const users = (await api<Item>("/api/v1/integrations/jellyfin/users")).items ?? [];
+  if (current !== "requests") return;
+  if (!users.length) {
+    content(`<div class="page-head"><div><h1>Requests</h1><p>Track recommendations through library availability</p></div></div>
+      <div class="empty">Install and configure the Reelay Jellyfin plugin to view requests by user.</div>`);
+    return;
+  }
+  const user = users.find((value: Item) => `${value.server_id}:${value.user_id}` === selectedUser) ?? users[0];
+  const key = `${user.server_id}:${user.user_id}`;
+  discoverUser = key;
+  localStorage.setItem(discoverUserKey, key);
+  const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}`;
+  const records = ((await api<{ items: RequestRecord[] }>(`/api/v1/requests?${query}`)).items ?? []);
+  if (current !== "requests" || discoverUser !== key) return;
+  const node = content(`<div class="page-head requests-head"><div><h1>Recent requests</h1><p>Most recent requests for ${esc(user.display_name)} · follow each title until it is available in Jellyfin</p></div>
+    <div class="row-actions"><label class="request-user">Jellyfin user<select id="requests-user">${users.map((value: Item) => option(`${value.server_id}:${value.user_id}`, value.display_name, key)).join("")}</select></label>
+    <button class="command" id="refresh-requests" aria-label="Refresh requests">↻ <span>Refresh</span></button></div></div>
+    <div class="request-list">${records.length ? records.map(record => `<article class="request-row">
+      <div class="request-title"><strong>${esc(record.title)}</strong><small>${esc(record.media_type)}${record.year ? ` · ${esc(record.year)}` : ""}</small></div>
+      <div class="request-status"><span>Status</span>${state(record.state)}${record.available ? `<span class="state state-available">Available in Jellyfin</span>` : ""}</div>
+      <div class="request-progress"><span>Progress</span>${record.media_type === "series" && record.total_episodes > 0 ? `<strong>${record.imported_episodes} of ${record.total_episodes} known episodes</strong>` : `<strong>${Math.max(0, Math.min(100, record.progress * 100)).toFixed(0)}%</strong>`}
+        ${record.progress > 0 && !record.available ? `<div class="progress"><i style="width:${Math.max(0, Math.min(100, record.progress * 100))}%"></i></div>` : ""}</div>
+      <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
+      ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}
+      ${record.last_error ? `<p class="request-error">${esc(record.last_error)}</p>` : ""}
+      ${record.next_search_at ? `<small class="request-next">Next search ${esc(date(record.next_search_at))}</small>` : ""}
+    </article>`).join("") : `<div class="empty">No requests for ${esc(user.display_name)} yet. Request a recommendation from Discover to track it here.</div>`}</div>`);
+  node.querySelector<HTMLSelectElement>("#requests-user")!.onchange = event =>
+    void requestsView((event.currentTarget as HTMLSelectElement).value).catch(showError);
+  node.querySelector<HTMLButtonElement>("#refresh-requests")!.onclick = () =>
+    void runControl(node.querySelector<HTMLButtonElement>("#refresh-requests")!, () => requestsView(key));
+}
+
+function monitorLabel(mode: RequestMonitorMode): string {
+  if (mode === "latest_season") return "Latest season";
+  if (mode === "all") return "All episodes";
+  return "Future episodes";
+}
+
+async function runControl(control: HTMLButtonElement | HTMLSelectElement, action: () => Promise<void>,
+  recover?: () => void, keepDisabledOnSuccess = false): Promise<void> {
+  if (control.disabled) return;
+  control.disabled = true;
+  let succeeded = false;
+  try {
+    await action();
+    succeeded = true;
+  } catch (error) {
+    showError(error);
+    recover?.();
+  } finally {
+    if (control.isConnected && !(succeeded && keepDisabledOnSuccess)) control.disabled = false;
+  }
+}
+
 async function seriesView(): Promise<void> {
   const payload = await api<Item>("/api/v1/series");
+  if (current !== "series" || (refreshing && isEditing())) return;
   const items = payload.items ?? [];
   const node = content(`<div class="page-head"><div><h1>Series</h1><p>${items.length} followed</p></div>
     <button class="command" data-view="add">+ <span>Add series</span></button></div>
@@ -223,13 +324,15 @@ async function seriesView(): Promise<void> {
       <small>${esc(item.year || "Year unknown")} · ${esc(item.monitor_mode)}</small></div>${state(item.status)}</button>`).join("") : `<div class="empty">No followed series</div>`}</div>
     <section id="series-detail"></section>`);
   node.querySelector<HTMLElement>("[data-view=add]")!.onclick = () => navigate("add");
-  node.querySelectorAll<HTMLElement>("[data-series]").forEach(el => el.onclick = () => seriesDetail(Number(el.dataset.series)));
+  node.querySelectorAll<HTMLElement>("[data-series]").forEach(el => el.onclick = () => void seriesDetail(Number(el.dataset.series)).catch(showError));
 }
 
 async function seriesDetail(id: number): Promise<void> {
+  selectedSeries = id;
   const [payload, profilesPayload, queuePayload] = await Promise.all([
     api<Item>(`/api/v1/series/${id}`), api<Item>("/api/v1/profiles"), api<Item>("/api/v1/queue")
   ]);
+  if (current !== "series" || selectedSeries !== id || (refreshing && isEditing())) return;
   const item = payload.series, episodes = payload.episodes ?? [];
   const profiles = profilesPayload.items ?? [];
   const episodeIDs = new Set<number>(episodes.map((episode: Item) => episode.id));
@@ -250,17 +353,28 @@ async function seriesDetail(id: number): Promise<void> {
       `<button class="command compact episode-search" data-id="${e.id}">Search</button>`
     ]))}`;
   detail.querySelector<HTMLButtonElement>("#series-search")!.onclick = async () => {
-    await api(`/api/v1/series/${id}/search`, { method: "POST" }); showToast("Series search started");
+    const button = detail.querySelector<HTMLButtonElement>("#series-search")!;
+    await runControl(button, async () => {
+      await api(`/api/v1/series/${id}/search`, { method: "POST" }); showToast("Series search started");
+    });
   };
   detail.querySelectorAll<HTMLButtonElement>(".episode-search").forEach(button => button.onclick = async () => {
-    await api(`/api/v1/episodes/${button.dataset.id}/search`, { method: "POST" }); showToast("Episode search started");
+    await runControl(button, async () => {
+      await api(`/api/v1/episodes/${button.dataset.id}/search`, { method: "POST" }); showToast("Episode search started");
+    });
   });
-  detail.querySelector<HTMLSelectElement>("#series-profile")!.onchange = event =>
-    patchSeries(id, { profile_id: Number((event.currentTarget as HTMLSelectElement).value) });
-  detail.querySelector<HTMLSelectElement>("#series-monitor")!.onchange = event =>
-    patchSeries(id, { monitor_mode: (event.currentTarget as HTMLSelectElement).value });
-  detail.querySelector<HTMLSelectElement>("#series-status")!.onchange = event =>
-    patchSeries(id, { status: (event.currentTarget as HTMLSelectElement).value });
+  detail.querySelectorAll<HTMLSelectElement>("#series-profile, #series-monitor, #series-status").forEach(select => {
+    select.onchange = () => void runControl(select, async () => {
+      const value = select.value;
+      if (select.id === "series-profile") await patchSeries(item, { profile_id: Number(value) });
+      if (select.id === "series-monitor") await patchSeries(item, { monitor_mode: value });
+      if (select.id === "series-status") await patchSeries(item, { status: value });
+    }, () => {
+      if (select.id === "series-profile") select.value = String(item.quality_profile_id);
+      if (select.id === "series-monitor") select.value = String(item.monitor_mode);
+      if (select.id === "series-status") select.value = String(item.status);
+    });
+  });
   detail.querySelector<HTMLButtonElement>("#series-delete")!.onclick = () =>
     void deleteCollection("series", id, item.title, hasActive, hasFiles);
 }
@@ -269,6 +383,7 @@ async function moviesView(): Promise<void> {
   const [payload, profilesPayload, queuePayload] = await Promise.all([
     api<Item>("/api/v1/movies"), api<Item>("/api/v1/profiles"), api<Item>("/api/v1/queue")
   ]);
+  if (current !== "movies" || (refreshing && isEditing())) return;
   const items = payload.items ?? [];
   const profiles = profilesPayload.items ?? [];
   const activeByMovie = new Map<number, Item>((queuePayload.items ?? [])
@@ -285,12 +400,20 @@ async function moviesView(): Promise<void> {
       <button class="command compact danger movie-delete" data-id="${m.id}">Delete</button></div></article>`).join("") : `<div class="empty">No tracked movies</div>`}</div>`);
   node.querySelector<HTMLElement>("[data-view=add]")!.onclick = () => navigate("add");
   node.querySelectorAll<HTMLButtonElement>(".movie-search").forEach(button => button.onclick = async () => {
-    await api(`/api/v1/movies/${button.dataset.id}/search`, { method: "POST" }); showToast("Movie search started");
+    await runControl(button, async () => {
+      await api(`/api/v1/movies/${button.dataset.id}/search`, { method: "POST" }); showToast("Movie search started");
+    });
   });
   node.querySelectorAll<HTMLSelectElement>(".movie-profile").forEach(select => select.onchange = async () => {
-    await api(`/api/v1/movies/${select.dataset.id}`, { method: "PATCH",
-      body: JSON.stringify({ profile_id: Number(select.value) }) });
-    showToast("Movie profile updated");
+    const movie = items.find((item: Item) => item.id === Number(select.dataset.id));
+    if (!movie) return;
+    await runControl(select, async () => {
+      const profileID = Number(select.value);
+      await api(`/api/v1/movies/${select.dataset.id}`, { method: "PATCH",
+        body: JSON.stringify({ profile_id: profileID }) });
+      movie.quality_profile_id = profileID;
+      showToast("Movie profile updated");
+    }, () => { select.value = String(movie.quality_profile_id); });
   });
   node.querySelectorAll<HTMLButtonElement>(".movie-cancel").forEach(button => button.onclick = () => {
     const grab = activeByMovie.get(Number(button.dataset.id));
@@ -306,6 +429,7 @@ async function moviesView(): Promise<void> {
 
 async function addView(): Promise<void> {
   const profiles = (await api<Item>("/api/v1/profiles")).items ?? [];
+  if (current !== "add") return;
   const node = content(`<div class="page-head"><div><h1>Add</h1><p>Find a movie or series</p></div></div>
     <form id="add-search" class="search-form"><div class="segmented"><label><input type="radio" name="type" value="series" checked><span>Series</span></label>
       <label><input type="radio" name="type" value="movie"><span>Movie</span></label></div>
@@ -313,32 +437,40 @@ async function addView(): Promise<void> {
     <div id="search-results" class="search-results"></div>`);
   node.querySelector<HTMLFormElement>("#add-search")!.onsubmit = async event => {
     event.preventDefault();
-	const form = event.currentTarget as HTMLFormElement;
-	const data = new FormData(form);
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
     const type = String(data.get("type")), query = String(data.get("query"));
-    const payload = await api<Item>(`/api/v1/metadata/search?type=${type}&q=${encodeURIComponent(query)}`);
-    const results = document.querySelector<HTMLElement>("#search-results")!;
-    results.innerHTML = (payload.items ?? []).map((item: Item, index: number) => `<article class="result">
+    const searchButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    await runControl(searchButton, async () => {
+      const payload = await api<Item>(`/api/v1/metadata/search?type=${type}&q=${encodeURIComponent(query)}`);
+      if (current !== "add") return;
+      const results = node.querySelector<HTMLElement>("#search-results")!;
+      results.innerHTML = (payload.items ?? []).map((item: Item, index: number) => `<article class="result">
       ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="">` : `<div class="poster-fallback">${esc(item.title.charAt(0))}</div>`}
       <div><h2>${esc(item.title)}</h2><p>${esc(item.year || "Year unknown")}</p><small>${esc(item.overview || "")}</small></div>
       <div class="add-controls"><select data-profile>${profiles.map((p: Item) => `<option value="${p.id}" ${p.is_default ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
       ${type === "series" ? `<select data-monitor><option value="future_only">Future only</option><option value="all">All episodes</option><option value="latest_season">Latest season</option></select>` : ""}
       <button class="command add-result" data-index="${index}">+ <span>Add</span></button></div></article>`).join("") || `<div class="empty">No matches</div>`;
-    results.querySelectorAll<HTMLButtonElement>(".add-result").forEach(button => button.onclick = async () => {
-      const result = payload.items[Number(button.dataset.index)];
-      const parent = button.closest<HTMLElement>(".result")!;
-      const profile_id = Number(parent.querySelector<HTMLSelectElement>("[data-profile]")!.value);
-      const body = type === "series" ? { query: result.title, tvmaze_id: result.tvmaze_id, profile_id,
-        monitor_mode: parent.querySelector<HTMLSelectElement>("[data-monitor]")!.value } :
-        { query: result.title, tmdb_id: result.tmdb_id, year: result.year, profile_id };
-      await api(`/api/v1/${type === "series" ? "series" : "movies"}`, { method: "POST", body: JSON.stringify(body) });
-      button.disabled = true; button.textContent = "Added"; showToast(`${result.title} added`);
+      results.querySelectorAll<HTMLButtonElement>(".add-result").forEach(button => button.onclick = async () => {
+        const result = payload.items[Number(button.dataset.index)];
+        const parent = button.closest<HTMLElement>(".result")!;
+        const profile_id = Number(parent.querySelector<HTMLSelectElement>("[data-profile]")!.value);
+        const body = type === "series" ? { query: result.title, tvmaze_id: result.tvmaze_id, profile_id,
+          monitor_mode: parent.querySelector<HTMLSelectElement>("[data-monitor]")!.value } :
+          { query: result.title, tmdb_id: result.tmdb_id, year: result.year, profile_id };
+        await runControl(button, async () => {
+          await api(`/api/v1/${type === "series" ? "series" : "movies"}`, { method: "POST", body: JSON.stringify(body) });
+          button.textContent = "Added";
+          showToast(`${result.title} added`);
+        }, undefined, true);
+      });
     });
   };
 }
 
 async function settingsView(): Promise<void> {
   const [settings, profiles] = await Promise.all([api<Item>("/api/v1/settings"), api<Item>("/api/v1/profiles")]);
+  if (current !== "settings") return;
   const node = content(`<div class="page-head"><div><h1>Settings</h1><p>Runtime configuration</p></div></div>
     <section><h2>Access</h2><form id="token-form" class="inline-form"><input type="password" value="${esc(authToken())}" placeholder="Bearer token">
       <button class="command" type="submit">✓ <span>Save token</span></button></form></section>
@@ -359,7 +491,9 @@ async function settingsView(): Promise<void> {
 	setAuthToken(form.querySelector("input")!.value); connect(); showToast("Token saved");
   };
   node.querySelectorAll<HTMLButtonElement>(".trigger").forEach(button => button.onclick = async () => {
-    await api(`/api/v1/system/trigger/${button.dataset.loop}`, { method: "POST" }); showToast(`${button.dataset.loop} triggered`);
+    await runControl(button, async () => {
+      await api(`/api/v1/system/trigger/${button.dataset.loop}`, { method: "POST" }); showToast(`${button.dataset.loop} triggered`);
+    });
   });
 }
 
@@ -371,14 +505,12 @@ function profileOptions(profiles: Item[], selected: number): string {
   return profiles.map(profile => option(String(profile.id), profile.name, String(selected))).join("");
 }
 
-async function patchSeries(id: number, body: Item): Promise<void> {
-  try {
-    await api(`/api/v1/series/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-    showToast("Series updated");
-  } catch (error) {
-    showError(error);
-    await seriesDetail(id);
-  }
+async function patchSeries(item: Item, body: Item): Promise<void> {
+  await api(`/api/v1/series/${item.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  if (body.profile_id !== undefined) item.quality_profile_id = body.profile_id;
+  if (body.monitor_mode !== undefined) item.monitor_mode = body.monitor_mode;
+  if (body.status !== undefined) item.status = body.status;
+  showToast("Series updated");
 }
 
 function downloadLabel(grab: Item, movieNames: Map<number, string>): string {
@@ -465,9 +597,57 @@ function table(headers: string[], rows: string[][]): string {
     </tbody></table></div>`;
 }
 const pad = (n: number) => String(n).padStart(2, "0");
-const date = (value: string) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: value.includes("T") ? "short" : undefined }).format(new Date(value)) : "—";
+const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const date = (value: string) => value
+  ? (value.includes("T") ? dateTimeFormatter : dateFormatter).format(new Date(value))
+  : "—";
 function showToast(message: string): void { const toast = document.querySelector<HTMLElement>("#toast")!; toast.textContent = message; toast.className = "show"; setTimeout(() => toast.className = "", 3000); }
-function setConnection(status: string): void { const el = document.querySelector<HTMLElement>("#connection"); if (el) { el.textContent = status === "ok" ? "Connected" : status; el.className = `connection ${status}`; } }
-function connect(): void { eventSource?.close(); eventSource = connectEvents(() => { if (current === "discover") return; clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => navigate(current), 350); }); eventSource.onopen = () => setConnection("ok"); eventSource.onerror = () => setConnection("offline"); }
+function setConnection(status: string): void { connectionStatus = status; const el = document.querySelector<HTMLElement>("#connection"); if (el) { el.textContent = status === "ok" ? "Connected" : status; el.className = `connection ${status}`; } }
+function isEditing() {
+  return Boolean(document.querySelector("dialog[open]") ||
+    document.activeElement?.matches("input, select, textarea"));
+}
+
+async function refreshLiveView() {
+  if (!["dashboard", "requests", "series", "movies"].includes(current) || isEditing()) return;
+  if (refreshing) {
+    refreshPending = true;
+    return;
+  }
+  refreshing = true;
+  try {
+    if (current === "dashboard") await dashboard();
+    else if (current === "requests") await requestsView();
+    else if (current === "movies") await moviesView();
+    else if (selectedSeries === null) await seriesView();
+    else await seriesDetail(selectedSeries);
+  } catch (error) {
+    if (error instanceof APIError && error.status === 401) authGate(error.message);
+    else showError(error);
+  } finally {
+    refreshing = false;
+    if (refreshPending) {
+      refreshPending = false;
+      void refreshLiveView();
+    }
+  }
+}
+
+function connect() {
+  eventSource?.close();
+  eventSource = connectEvents(() => {
+    if (refreshTimer) return;
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = 0;
+      void refreshLiveView();
+    }, 350);
+  });
+  eventSource.onopen = () => {
+    setConnection("ok");
+    void refreshLiveView();
+  };
+  eventSource.onerror = () => setConnection("offline");
+}
 
 shell(); connect(); navigate("dashboard");

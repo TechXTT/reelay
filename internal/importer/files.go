@@ -126,28 +126,22 @@ func copyVerified(source, dest string) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = os.Remove(tmp) }()
 	h := sha256.New()
 	_, copyErr := io.Copy(io.MultiWriter(out, h), in)
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(tmp)
 		return errors.Join(copyErr, closeErr)
 	}
 	want := h.Sum(nil)
 	got, err := fileHash(tmp)
 	if err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("verify copied file %s: %w", dest, err)
 	}
 	if !bytes.Equal(want, got) {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("verify copied file %s: checksum mismatch", dest)
 	}
-	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return os.Rename(tmp, dest)
 }
 
 func fileHash(path string) ([]byte, error) {

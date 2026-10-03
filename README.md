@@ -245,8 +245,20 @@ Dashboard -> Scheduled Tasks so the per-user folders exist before you add them
 as libraries. The plugin then performs a full sync at startup and every six hours. Favorites and
 dislikes are checked every minute and written to a durable retry outbox before
 being sent. Movie requests enter the wanted queue immediately. Series requests
-use `future_only` monitoring by default; change the series to `all` in Reelay if
-you want its aired back catalogue.
+from the plugin use `future_only` monitoring by default; change the series to
+`all` in Reelay if you want its aired back catalogue. In Reelay's Discover view,
+choose Latest season, All episodes, or Future episodes before requesting a
+series. Existing broader monitoring is preserved when a narrower scope is
+requested for the same shared series.
+
+The Requests view shows the 100 most recent recommendation requests for the
+selected synchronized Jellyfin user, even after the recommendation leaves
+Discover. It shows download
+and import status, errors, retry timing, and series episode counts. Imported
+media and availability confirmed by Jellyfin library sync are separate signals;
+a series present in Jellyfin does not mean all its episodes are available.
+The user selector is an operator filter under Reelay's shared bearer token,
+not a separate login or permission boundary.
 
 Use the 1-5 selector on Reelay's Discover view to rate a suggestion without
 requesting it. The suggestion is removed, high ratings become recommendation
@@ -289,7 +301,8 @@ version and GitHub release, but remain separate runtime artifacts because
 Jellyfin must load the plugin assembly inside its own process.
 
 See [`docs/architecture.md`](docs/architecture.md) for the state machine and
-search-to-import flow.
+search-to-import flow, and [`docs/product-plan.md`](docs/product-plan.md) for the
+product improvement plan and delivery status.
 
 ## Legal
 

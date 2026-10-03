@@ -81,6 +81,15 @@ falls back to a verified copy.
    from Discover after success or once the real media enters the library.
 7. A 1-5 rating is durable per user and title. Ratings above neutral add
    recommendation seeds; ratings below neutral reduce matching taste signals.
+8. A separate media request records each requester and links to the shared
+   movie or series. Recommendation refresh does not remove this attribution.
+   The operator's Requests view combines persisted subject state and episode
+   counts with availability confirmed by that Jellyfin server's library sync.
+   Imported media and confirmed Jellyfin presence remain separate signals.
+9. Dashboard requests can choose latest-season, all, or future-only monitoring.
+   Latest-season monitoring selects the most recently aired numbered season;
+   older plugin clients keep their future-only default. Shared monitoring may
+   widen when a new requester asks for more episodes, and does not narrow.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
 10.11.11 (`net9.0`) and Jellyfin 12 preview (`net10.0`). ABI-specific package

@@ -61,6 +61,9 @@ func (f *Fake) Since(t time.Time) time.Duration { return f.Now().Sub(t) }
 func (f *Fake) Sleep(d time.Duration) { f.Advance(d) }
 
 func (f *Fake) NewTicker(d time.Duration) (<-chan time.Time, func()) {
+	if d <= 0 {
+		panic("non-positive interval for NewTicker")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t := &fakeTicker{
@@ -81,22 +84,19 @@ func (f *Fake) NewTicker(d time.Duration) (<-chan time.Time, func()) {
 // A ticker with a full buffer drops the tick, exactly as time.Ticker does.
 func (f *Fake) Advance(d time.Duration) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.now = f.now.Add(d)
-	now := f.now
-	tickers := make([]*fakeTicker, len(f.tickers))
-	copy(tickers, f.tickers)
-	f.mu.Unlock()
 
-	for _, t := range tickers {
-		f.mu.Lock()
-		for !t.stopped && !t.next.After(now) {
-			select {
-			case t.ch <- t.next:
-			default:
-			}
-			t.next = t.next.Add(t.interval)
+	for _, t := range f.tickers {
+		if t.stopped || t.next.After(f.now) {
+			continue
 		}
-		f.mu.Unlock()
+		select {
+		case t.ch <- t.next:
+		default:
+		}
+		// Skip missed intervals in one step, retaining the first due tick.
+		t.next = f.now.Add(t.interval - f.now.Sub(t.next)%t.interval)
 	}
 }
 

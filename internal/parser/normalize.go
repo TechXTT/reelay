@@ -90,7 +90,7 @@ func Levenshtein(a, b string, max int) int {
 			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
-			curr[j] = min3(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
+			curr[j] = min(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
 			if curr[j] < rowMin {
 				rowMin = curr[j]
 			}
@@ -101,16 +101,6 @@ func Levenshtein(a, b string, max int) int {
 		prev, curr = curr, prev
 	}
 	return prev[len(rb)]
-}
-
-func min3(a, b, c int) int {
-	if b < a {
-		a = b
-	}
-	if c < a {
-		a = c
-	}
-	return a
 }
 
 // fuzzyBudget is the edit distance allowed for a title of the given length.

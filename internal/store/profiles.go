@@ -44,10 +44,11 @@ func (r *ProfileRepository) Seed(ctx context.Context, profiles []model.QualityPr
 			if !hasDefault && i == 0 {
 				p.IsDefault = true
 			}
-			args, err := profileArgs(p, now)
+			args, err := profileArgs(p)
 			if err != nil {
 				return err
 			}
+			args = append(args, now, now)
 			if _, err := tx.ExecContext(ctx, insertProfileSQL, args...); err != nil {
 				return fmt.Errorf("insert profile %q: %w", p.Name, err)
 			}
@@ -83,10 +84,11 @@ func (r *ProfileRepository) Create(ctx context.Context, in model.QualityProfile)
 		return in, err
 	}
 	now := FormatTime(r.s.nowUTC())
-	args, err := profileArgs(in, now)
+	args, err := profileArgs(in)
 	if err != nil {
 		return in, err
 	}
+	args = append(args, now, now)
 	res, err := r.s.rw.ExecContext(ctx, insertProfileSQL, args...)
 	if err != nil {
 		return in, fmt.Errorf("create profile: %w", err)
@@ -105,18 +107,16 @@ func (r *ProfileRepository) Update(ctx context.Context, in model.QualityProfile)
 	if err := validateProfile(in); err != nil {
 		return in, err
 	}
-	args, err := profileArgs(in, FormatTime(r.s.nowUTC()))
+	args, err := profileArgs(in)
 	if err != nil {
 		return in, err
 	}
-	// profileArgs includes created_at; updates preserve it and use only the
-	// mutable values plus the generated updated timestamp.
+	args = append(args, FormatTime(r.s.nowUTC()), in.ID)
 	res, err := r.s.rw.ExecContext(ctx, `UPDATE quality_profiles SET name=?, is_default=?,
  allowed_resolutions_json=?, allowed_sources_json=?, min_size_mb=?, max_size_mb=?,
  min_seeders=?, required_terms_json=?, banned_terms_json=?, preferred_groups_json=?,
  language_prefs_json=?, hdr_prefs_json=?, upgrade_until=NULLIF(?,''), updated_at=? WHERE id=?`,
-		args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
-		args[8], args[9], args[10], args[11], args[12], args[14], in.ID)
+		args...)
 	if err != nil {
 		return in, fmt.Errorf("update profile %d: %w", in.ID, err)
 	}
@@ -158,7 +158,7 @@ INSERT INTO quality_profiles (
  upgrade_until, created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)`
 
-func profileArgs(p model.QualityProfile, now string) ([]any, error) {
+func profileArgs(p model.QualityProfile) ([]any, error) {
 	res, err := encodeJSON(p.AllowedResolutions)
 	if err != nil {
 		return nil, err
@@ -188,7 +188,7 @@ func profileArgs(p model.QualityProfile, now string) ([]any, error) {
 		return nil, err
 	}
 	return []any{p.Name, p.IsDefault, res, sources, p.MinSizeMB, p.MaxSizeMB,
-		p.MinSeeders, required, banned, groups, languages, hdr, p.UpgradeUntil, now, now}, nil
+		p.MinSeeders, required, banned, groups, languages, hdr, p.UpgradeUntil}, nil
 }
 
 const selectProfileSQL = `SELECT id, name, is_default,

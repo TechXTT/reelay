@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -164,10 +165,10 @@ func (c *Config) validateDatabase(ck *checker) {
 }
 
 func (c *Config) validateLogging(ck *checker) {
-	if !contains(validLogLevels, c.Logging.Level) {
+	if !slices.Contains(validLogLevels, c.Logging.Level) {
 		ck.bad("logging.level", "%q is not one of %s", c.Logging.Level, strings.Join(validLogLevels, ", "))
 	}
-	if !contains(validLogFormats, c.Logging.Format) {
+	if !slices.Contains(validLogFormats, c.Logging.Format) {
 		ck.bad("logging.format", "%q is not one of %s", c.Logging.Format, strings.Join(validLogFormats, ", "))
 	}
 }
@@ -404,7 +405,7 @@ func (c *Config) validateProfiles(ck *checker) {
 			ck.bad(k("allowed_resolutions"), "must list at least one resolution, best first")
 		}
 		for j, r := range p.AllowedResolutions {
-			if !contains(validResolution, r) {
+			if !slices.Contains(validResolution, r) {
 				ck.bad(fmt.Sprintf("%s[%d]", k("allowed_resolutions"), j),
 					"%q is not one of %s", r, strings.Join(validResolution, ", "))
 			}
@@ -413,7 +414,7 @@ func (c *Config) validateProfiles(ck *checker) {
 			ck.bad(k("allowed_sources"), "must list at least one source, best first")
 		}
 		for j, s := range p.AllowedSources {
-			if !contains(validSources, s) {
+			if !slices.Contains(validSources, s) {
 				ck.bad(fmt.Sprintf("%s[%d]", k("allowed_sources"), j),
 					"%q is not one of %s", s, strings.Join(validSources, ", "))
 			}
@@ -430,11 +431,11 @@ func (c *Config) validateProfiles(ck *checker) {
 		if p.MinSeeders == 0 {
 			ck.warn("profiles[%d] (%s) has min_seeders 0; dead releases will be grabbed and stall.", i, p.Name)
 		}
-		if p.UpgradeUntil != "" && !contains(p.AllowedResolutions, p.UpgradeUntil) {
+		if p.UpgradeUntil != "" && !slices.Contains(p.AllowedResolutions, p.UpgradeUntil) {
 			ck.bad(k("upgrade_until"), "%q is not in this profile's allowed_resolutions", p.UpgradeUntil)
 		}
 		for j, h := range p.HDRPrefs {
-			if !contains([]string{"hdr10", "hdr10plus", "dv", "hlg"}, h) {
+			if !slices.Contains([]string{"hdr10", "hdr10plus", "dv", "hlg"}, h) {
 				ck.bad(fmt.Sprintf("%s[%d]", k("hdr_prefs"), j),
 					"%q is not one of hdr10, hdr10plus, dv, hlg", h)
 			}
@@ -593,13 +594,4 @@ func checkTemplate(ck *checker, key, tpl string) {
 func isLoopback(bind string) bool {
 	ip := net.ParseIP(bind)
 	return ip != nil && ip.IsLoopback()
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }

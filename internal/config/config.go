@@ -7,7 +7,9 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -237,7 +239,7 @@ func Load(path string) (cfg *Config, warnings []string, err error) {
 }
 
 // Addr is the listen address for the HTTP server.
-func (c *Config) Addr() string { return fmt.Sprintf("%s:%d", c.Server.Bind, c.Server.Port) }
+func (c *Config) Addr() string { return net.JoinHostPort(c.Server.Bind, strconv.Itoa(c.Server.Port)) }
 
 // DefaultProfile returns the seed profile flagged default, else the first.
 func (c *Config) DefaultProfile() *Profile {

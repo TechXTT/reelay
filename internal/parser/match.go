@@ -21,7 +21,7 @@ func matchNo(f string, a ...any) MatchResult {
 
 // Matches reports whether a parsed release satisfies what we want.
 //
-// Title matching runs three comparisons in decreasing confidence:
+// Title matching accepts any of these comparisons against the title or aliases:
 //  1. normalised equality against the title or any alias
 //  2. article-insensitive equality ("The Expanse" vs "Expanse")
 //  3. bounded edit distance, with the budget scaled by title length
@@ -49,33 +49,17 @@ func Matches(p Parsed, want model.Wanted) MatchResult {
 func matchTitle(p Parsed, want model.Wanted) MatchResult {
 	candidates := append([]string{want.Title}, want.Aliases...)
 
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		if p.Title == c {
-			return matchOK()
-		}
-	}
 	pm := NormalizeForMatch(p.Title)
 	for _, c := range candidates {
 		if c == "" {
 			continue
 		}
-		if pm == NormalizeForMatch(c) {
+		cm := NormalizeForMatch(c)
+		if p.Title == c || pm == cm {
 			return matchOK()
 		}
-	}
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		cm := NormalizeForMatch(c)
 		budget := fuzzyBudget(len(cm))
-		if budget == 0 {
-			continue
-		}
-		if Levenshtein(pm, cm, budget) <= budget {
+		if budget > 0 && Levenshtein(pm, cm, budget) <= budget {
 			return matchOK()
 		}
 	}

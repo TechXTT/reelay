@@ -293,13 +293,15 @@ func stripBracketTags(s string) (string, string) {
 	return out, group
 }
 
+var numericQualityRe = regexp.MustCompile(`^\d+([.\-]\d+)?(bit|p|i|ch)?$`)
+
 func looksLikeQualityToken(lower string) bool {
 	if resolutionAlias[lower] != "" || sourceAlias[lower] != "" ||
 		videoAlias[lower] != "" || audioAlias[lower] != "" || hdrAlias[lower] != "" {
 		return true
 	}
 	// "5.1", "7.1", "10bit", "1080p"
-	return regexp.MustCompile(`^\d+([.\-]\d+)?(bit|p|i|ch)?$`).MatchString(lower)
+	return numericQualityRe.MatchString(lower)
 }
 
 var separatorRe = regexp.MustCompile(`[._]+|\s{2,}`)
@@ -781,12 +783,9 @@ func cleanTitleRaw(s string) string {
 }
 
 func atoi(s string) int {
-	n, err := strconv.Atoi(strings.TrimLeft(s, "0"))
+	var n, err = strconv.Atoi(s)
+
 	if err != nil {
-		// All-zero strings trim to empty.
-		if strings.Trim(s, "0") == "" {
-			return 0
-		}
 		return 0
 	}
 	return n

@@ -129,7 +129,6 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	var wg sync.WaitGroup
 	for _, spec := range loops {
-		spec := spec
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

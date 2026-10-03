@@ -186,7 +186,6 @@ func (c *Client) Search(ctx context.Context, q indexer.Query) ([]indexer.Release
 		c.breaker.Failure(err)
 		return nil, err
 	}
-	c.breaker.Success()
 	c.searches.Add(1)
 
 	var rows []row
@@ -198,6 +197,7 @@ func (c *Client) Search(ctx context.Context, q indexer.Query) ([]indexer.Release
 		c.breaker.Failure(wrapped)
 		return nil, wrapped
 	}
+	c.breaker.Success()
 
 	if isNoResultsMarker(rows) {
 		c.noResults.Add(1)

@@ -106,22 +106,13 @@ func (t *TMDB) SearchMovies(ctx context.Context, title string, year int) ([]Movi
 	}
 	cacheKey := fmt.Sprintf("search:%s:%d", strings.ToLower(title), year)
 	var payload tmdbSearchResponse
-	_, hit, err := cacheLoad(ctx, t.cache, "tmdb", cacheKey, t.now(), &payload)
-	if err != nil {
-		return nil, err
+	var q = url.Values{"api_key": {t.key}, "query": {title}, "include_adult": {"false"}}
+
+	if year > 0 {
+		q.Set("primary_release_year", strconv.Itoa(year))
 	}
-	if !hit {
-		q := url.Values{"api_key": {t.key}, "query": {title}, "include_adult": {"false"}}
-		if year > 0 {
-			q.Set("primary_release_year", strconv.Itoa(year))
-		}
-		raw, err := t.http.get(ctx, "/search/movie", q, &payload)
-		if err != nil {
-			return nil, err
-		}
-		if err := cacheStore(ctx, t.cache, "tmdb", cacheKey, raw, t.now(), t.ttl); err != nil {
-			return nil, err
-		}
+	if _, err := t.cachedGET(ctx, cacheKey, "/search/movie", q, &payload); err != nil {
+		return nil, err
 	}
 	out := make([]Movie, 0, len(payload.Results))
 	for _, m := range payload.Results {
@@ -136,19 +127,10 @@ func (t *TMDB) MovieDetails(ctx context.Context, id int) (Movie, error) {
 	}
 	cacheKey := "movie:" + strconv.Itoa(id)
 	var payload tmdbMovie
-	_, hit, err := cacheLoad(ctx, t.cache, "tmdb", cacheKey, t.now(), &payload)
-	if err != nil {
+	var q = url.Values{"api_key": {t.key}, "append_to_response": {"external_ids"}}
+
+	if _, err := t.cachedGET(ctx, cacheKey, "/movie/"+strconv.Itoa(id), q, &payload); err != nil {
 		return Movie{}, err
-	}
-	if !hit {
-		q := url.Values{"api_key": {t.key}, "append_to_response": {"external_ids"}}
-		raw, err := t.http.get(ctx, "/movie/"+strconv.Itoa(id), q, &payload)
-		if err != nil {
-			return Movie{}, err
-		}
-		if err := cacheStore(ctx, t.cache, "tmdb", cacheKey, raw, t.now(), t.ttl); err != nil {
-			return Movie{}, err
-		}
 	}
 	return convertTMDBMovie(payload), nil
 }

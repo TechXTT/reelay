@@ -87,7 +87,7 @@ func filterBannedTerms(c *Candidate, in Input) (string, string) {
 	// A cam-family source is banned whether or not the profile spelled out
 	// every marker, because the parser recognises far more spellings of it
 	// than any hand-written term list will.
-	if c.Parsed.Source == "cam" && !allowsSource(in.Profile, "cam") {
+	if c.Parsed.Source == "cam" && in.Profile.SourceRank("cam") < 0 {
 		return RejectBannedTerm, "release is a cam/telesync/screener rip"
 	}
 	return "", ""
@@ -203,7 +203,7 @@ func contentUnits(p parser.Parsed, files int) int {
 		// episode count, and it comes free from the indexer. Clamped because a
 		// pack that ships subtitles and artwork inflates the count.
 		if files > 1 {
-			return clamp(files, 1, 40*seasons)
+			return min(files, 40*seasons)
 		}
 		// No file count: assume a typical season rather than a single episode,
 		// or every pack fails the ceiling.
@@ -221,15 +221,8 @@ func runtimeScale(runtimeMinutes int) float64 {
 	if runtimeMinutes <= 0 {
 		return 1
 	}
-	scale := float64(runtimeMinutes) / 45.0
 	// Clamped so a bad metadata value cannot make the window meaningless.
-	if scale < 0.4 {
-		return 0.4
-	}
-	if scale > 4 {
-		return 4
-	}
-	return scale
+	return min(4, max(0.4, float64(runtimeMinutes)/45))
 }
 
 // filterUpgrade rejects a candidate that would not improve on what we have.
@@ -313,20 +306,6 @@ func isWordBoundary(s string, i int) bool {
 	}
 	c := s[i]
 	return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9')
-}
-
-func allowsSource(p model.QualityProfile, src string) bool {
-	return p.SourceRank(src) >= 0
-}
-
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 func unitWord(n int) string {

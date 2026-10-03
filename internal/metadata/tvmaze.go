@@ -90,21 +90,8 @@ func (t *TVmaze) SearchSeries(ctx context.Context, title string) ([]Series, erro
 	}
 	cacheKey := "search:" + strings.ToLower(title)
 	var payload []tvmazeSearchResult
-	_, hit, err := cacheLoad(ctx, t.cache, "tvmaze", cacheKey, t.now(), &payload)
-	if err != nil {
+	if err := t.cachedGET(ctx, cacheKey, "/search/shows", url.Values{"q": {title}}, &payload); err != nil {
 		return nil, err
-	}
-	if !hit {
-		if err := t.limiter.Wait(ctx); err != nil {
-			return nil, fmt.Errorf("tvmaze: rate limit wait: %w", err)
-		}
-		raw, err := t.http.get(ctx, "/search/shows", url.Values{"q": {title}}, &payload)
-		if err != nil {
-			return nil, err
-		}
-		if err := cacheStore(ctx, t.cache, "tvmaze", cacheKey, raw, t.now(), t.ttl); err != nil {
-			return nil, err
-		}
 	}
 	out := make([]Series, 0, len(payload))
 	for _, result := range payload {
@@ -119,21 +106,8 @@ func (t *TVmaze) SeriesEpisodes(ctx context.Context, id int) ([]Episode, error) 
 	}
 	cacheKey := "episodes:" + strconv.Itoa(id)
 	var payload []tvmazeEpisode
-	_, hit, err := cacheLoad(ctx, t.cache, "tvmaze", cacheKey, t.now(), &payload)
-	if err != nil {
+	if err := t.cachedGET(ctx, cacheKey, "/shows/"+strconv.Itoa(id)+"/episodes", nil, &payload); err != nil {
 		return nil, err
-	}
-	if !hit {
-		if err := t.limiter.Wait(ctx); err != nil {
-			return nil, fmt.Errorf("tvmaze: rate limit wait: %w", err)
-		}
-		raw, err := t.http.get(ctx, "/shows/"+strconv.Itoa(id)+"/episodes", nil, &payload)
-		if err != nil {
-			return nil, err
-		}
-		if err := cacheStore(ctx, t.cache, "tvmaze", cacheKey, raw, t.now(), t.ttl); err != nil {
-			return nil, err
-		}
 	}
 	out := make([]Episode, 0, len(payload))
 	for _, ep := range payload {
@@ -205,21 +179,22 @@ func (t *TVmaze) LookupSeries(ctx context.Context, tvdbID int, imdbID string) (S
 		return Series{}, fmt.Errorf("tvmaze: lookup requires a TVDB or IMDb id")
 	}
 	var payload tvmazeShow
-	_, hit, err := cacheLoad(ctx, t.cache, "tvmaze", "lookup:"+key, t.now(), &payload)
-	if err != nil {
+	if err := t.cachedGET(ctx, "lookup:"+key, "/lookup/shows", q, &payload); err != nil {
 		return Series{}, err
 	}
-	if !hit {
-		if err := t.limiter.Wait(ctx); err != nil {
-			return Series{}, fmt.Errorf("tvmaze: rate limit wait: %w", err)
-		}
-		raw, err := t.http.get(ctx, "/lookup/shows", q, &payload)
-		if err != nil {
-			return Series{}, err
-		}
-		if err := cacheStore(ctx, t.cache, "tvmaze", "lookup:"+key, raw, t.now(), t.ttl); err != nil {
-			return Series{}, err
-		}
-	}
 	return convertTVmazeShow(payload), nil
+}
+
+func (t *TVmaze) cachedGET(ctx context.Context, key, path string, query url.Values, dst any) error {
+	if _, hit, err := cacheLoad(ctx, t.cache, "tvmaze", key, t.now(), dst); err != nil || hit {
+		return err
+	}
+	if err := t.limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("tvmaze: rate limit wait: %w", err)
+	}
+	raw, err := t.http.get(ctx, path, query, dst)
+	if err != nil {
+		return err
+	}
+	return cacheStore(ctx, t.cache, "tvmaze", key, raw, t.now(), t.ttl)
 }

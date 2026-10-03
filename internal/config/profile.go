@@ -1,6 +1,10 @@
 package config
 
-import "github.com/TechXTT/reelay/internal/model"
+import (
+	"slices"
+
+	"github.com/TechXTT/reelay/internal/model"
+)
 
 // ToModel converts a seed profile from the config file into the domain type.
 //
@@ -19,27 +23,16 @@ func (p Profile) ToModel() model.QualityProfile {
 	return model.QualityProfile{
 		Name:               p.Name,
 		IsDefault:          p.Default,
-		AllowedResolutions: copyStrings(p.AllowedResolutions),
-		AllowedSources:     copyStrings(p.AllowedSources),
+		AllowedResolutions: slices.Clone(p.AllowedResolutions),
+		AllowedSources:     slices.Clone(p.AllowedSources),
 		MinSizeMB:          p.MinSizeMB,
 		MaxSizeMB:          p.MaxSizeMB,
 		MinSeeders:         p.MinSeeders,
-		RequiredTerms:      copyStrings(p.RequiredTerms),
-		BannedTerms:        copyStrings(p.BannedTerms),
+		RequiredTerms:      slices.Clone(p.RequiredTerms),
+		BannedTerms:        slices.Clone(p.BannedTerms),
 		PreferredGroups:    groups,
-		LanguagePrefs:      copyStrings(p.LanguagePrefs),
-		HDRPrefs:           copyStrings(p.HDRPrefs),
+		LanguagePrefs:      slices.Clone(p.LanguagePrefs),
+		HDRPrefs:           slices.Clone(p.HDRPrefs),
 		UpgradeUntil:       p.UpgradeUntil,
 	}
-}
-
-// copyStrings defends against the caller mutating a slice that is still shared
-// with the parsed config, which is read once and treated as immutable.
-func copyStrings(in []string) []string {
-	if in == nil {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
 }

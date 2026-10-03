@@ -136,7 +136,7 @@ func (s *Server) deleteSeriesCollection(ctx context.Context, id int64, deleteFil
 
 func (s *Server) prepareCollectionDelete(ctx context.Context, target collectionTarget, deleteFiles, deleteDownloads bool) error {
 	for _, grab := range target.grabs {
-		if activeGrab(grab.State) && !deleteDownloads {
+		if grab.State.Active() && !deleteDownloads {
 			return Conflict("collection has an active download; select download-data deletion to cancel it")
 		}
 	}
@@ -182,15 +182,6 @@ func (s *Server) prepareCollectionDelete(ctx context.Context, target collectionT
 		}
 	}
 	return nil
-}
-
-func activeGrab(state model.GrabState) bool {
-	switch state {
-	case model.GrabPending, model.GrabDownloading, model.GrabCompleted, model.GrabImporting:
-		return true
-	default:
-		return false
-	}
 }
 
 func managedPath(root, path string) (string, error) {

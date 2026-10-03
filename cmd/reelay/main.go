@@ -322,7 +322,6 @@ func registerHardlinkProbes(srv *api.Server, cfg *config.Config, log *slog.Logge
 // keeps working and the other indexers keep being searched.
 func registerIndexerHealth(srv *api.Server, indexers []indexer.Indexer) {
 	for _, ix := range indexers {
-		ix := ix
 		srv.Register(api.FuncChecker{
 			Name:     "indexer:" + ix.Name(),
 			Kind:     "indexer",

@@ -30,73 +30,66 @@ func applyEnv(c *Config) error {
 type lookupFunc func(key string) (string, bool)
 
 func walkEnv(v reflect.Value, prefix string, look lookupFunc) error {
-	t := v.Type()
+	var t = v.Type()
+
 	for i := 0; i < t.NumField(); i++ {
-		sf := t.Field(i)
-		tag := sf.Tag.Get("yaml")
+		var tag = t.Field(i).Tag.Get("yaml")
+		var path = strings.Split(tag, ",")[0]
+		var fv = v.Field(i)
+
 		if tag == "" || tag == "-" {
 			continue
 		}
-		name := strings.Split(tag, ",")[0]
-		path := name
 		if prefix != "" {
-			path = prefix + "." + name
+			path = prefix + "." + path
 		}
-		fv := v.Field(i)
-
-		// Duration is a struct but behaves as a scalar.
-		if fv.Type() == reflect.TypeOf(Duration{}) {
-			if raw, ok := look(EnvKey(path)); ok {
-				d := Duration{}
-				if err := d.Set(raw); err != nil {
-					return fmt.Errorf("%s: %w", EnvKey(path), err)
-				}
-				fv.Set(reflect.ValueOf(d))
-			}
-			continue
-		}
-
-		switch fv.Kind() {
-		case reflect.Struct:
+		if fv.Kind() == reflect.Struct && fv.Type() != reflect.TypeOf(Duration{}) {
 			if err := walkEnv(fv, path, look); err != nil {
 				return err
 			}
-		case reflect.Slice:
-			// Only []string is overridable, comma separated.
-			if fv.Type().Elem().Kind() != reflect.String {
-				continue
+			continue
+		}
+		key := EnvKey(path)
+		raw, ok := look(key)
+		if !ok {
+			continue
+		}
+		// Duration is a struct but behaves as a scalar.
+		if fv.Type() == reflect.TypeOf(Duration{}) {
+			d := Duration{}
+
+			if err := d.Set(raw); err != nil {
+				return fmt.Errorf("%s: %w", key, err)
 			}
-			if raw, ok := look(EnvKey(path)); ok {
+			fv.Set(reflect.ValueOf(d))
+			continue
+		}
+		switch fv.Kind() {
+		case reflect.Slice:
+			// Struct slices are intentionally not configurable through the environment.
+			if fv.Type().Elem().Kind() == reflect.String {
 				fv.Set(reflect.ValueOf(splitList(raw)))
 			}
 		case reflect.String:
-			if raw, ok := look(EnvKey(path)); ok {
-				fv.SetString(raw)
-			}
+			fv.SetString(raw)
 		case reflect.Bool:
-			if raw, ok := look(EnvKey(path)); ok {
-				b, err := strconv.ParseBool(raw)
-				if err != nil {
-					return fmt.Errorf("%s: invalid boolean %q (want true/false)", EnvKey(path), raw)
-				}
-				fv.SetBool(b)
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("%s: invalid boolean %q (want true/false)", key, raw)
 			}
+			fv.SetBool(b)
 		case reflect.Int, reflect.Int64:
-			if raw, ok := look(EnvKey(path)); ok {
-				n, err := strconv.ParseInt(raw, 10, 64)
-				if err != nil {
-					return fmt.Errorf("%s: invalid integer %q", EnvKey(path), raw)
-				}
-				fv.SetInt(n)
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				return fmt.Errorf("%s: invalid integer %q", key, raw)
 			}
+			fv.SetInt(n)
 		case reflect.Float64:
-			if raw, ok := look(EnvKey(path)); ok {
-				f, err := strconv.ParseFloat(raw, 64)
-				if err != nil {
-					return fmt.Errorf("%s: invalid number %q", EnvKey(path), raw)
-				}
-				fv.SetFloat(f)
+			f, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return fmt.Errorf("%s: invalid number %q", key, raw)
 			}
+			fv.SetFloat(f)
 		}
 	}
 	return nil

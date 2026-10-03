@@ -188,10 +188,7 @@ func (s *Store) InTx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return fmt.Errorf("store: begin transaction: %w", err)
 	}
 	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback()
-			panic(p)
-		}
+		_ = tx.Rollback()
 	}()
 	if err := fn(tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {

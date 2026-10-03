@@ -104,7 +104,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			searchSeeds = append(searchSeeds, tasteItem(detail))
 		}
 	}
-	add := func(values []metadata.DiscoveryItem) {
+	add := func(values []metadata.DiscoveryItem, matched map[int]bool) {
 		for rank, item := range values {
 			if item.TMDBID <= 0 || excluded[item.TMDBID] {
 				continue
@@ -118,7 +118,10 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			if score > a.provider {
 				a.provider = score
 			}
-			a.matches++
+			if !matched[item.TMDBID] {
+				a.matches++
+				matched[item.TMDBID] = true
+			}
 		}
 	}
 	if len(searchSeeds) == 0 {
@@ -126,7 +129,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		if err != nil {
 			return err
 		}
-		add(values)
+		add(values, map[int]bool{})
 	} else {
 		queried := map[int]bool{}
 		for _, seed := range searchSeeds {
@@ -138,9 +141,11 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			if err != nil {
 				return fmt.Errorf("recommendations for %s: %w", seed.Title, err)
 			}
-			add(values)
+			matched := map[int]bool{}
+
+			add(values, matched)
 			if similar, err := s.provider.Similar(ctx, mediaType, seed.TMDBID); err == nil {
-				add(similar)
+				add(similar, matched)
 			}
 			if len(pool) >= s.cfg.CandidateLimit {
 				break
@@ -152,7 +157,12 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	for _, a := range pool {
 		candidates = append(candidates, Candidate{Item: toModel(a.item), ProviderScore: a.provider, SeedMatches: a.matches, VoteAverage: a.item.VoteAverage, VoteCount: a.item.VoteCount})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ProviderScore > candidates[j].ProviderScore })
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ProviderScore != candidates[j].ProviderScore {
+			return candidates[i].ProviderScore > candidates[j].ProviderScore
+		}
+		return candidates[i].Item.TMDBID < candidates[j].Item.TMDBID
+	})
 	if len(candidates) > s.cfg.CandidateLimit {
 		candidates = candidates[:s.cfg.CandidateLimit]
 	}

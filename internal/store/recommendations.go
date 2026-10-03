@@ -113,15 +113,17 @@ func (r *RecommendationRepository) PositiveSeeds(ctx context.Context, serverID, 
 	if limit <= 0 || limit > 50 {
 		limit = 12
 	}
-	rows, err := r.s.ro.QueryContext(ctx, `SELECT i.server_id,i.item_id,i.media_type,i.tmdb_id,i.tvdb_id,i.imdb_id,i.title,i.year,i.genres_json,i.keywords_json,i.people_json,i.language,i.country,i.runtime_minutes,i.present
-FROM jellyfin_items i
+	rows, err := r.s.ro.QueryContext(ctx, `WITH signals AS (
+ SELECT item_id, MAX(occurred_at) AS latest
+ FROM jellyfin_activity WHERE server_id=? AND user_id=?
+ GROUP BY item_id
+ HAVING MAX(event_type IN ('favorite','like','completed') OR (event_type='rating' AND progress>=0.6))=1
+    AND MAX(event_type='dislike' OR (event_type='rating' AND progress<0.6))=0
+)
+SELECT i.server_id,i.item_id,i.media_type,i.tmdb_id,i.tvdb_id,i.imdb_id,i.title,i.year,i.genres_json,i.keywords_json,i.people_json,i.language,i.country,i.runtime_minutes,i.present
+FROM jellyfin_items i JOIN signals ON signals.item_id=i.item_id
 WHERE i.server_id=? AND i.media_type=? AND i.tmdb_id>0
-  AND EXISTS (SELECT 1 FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?
-      AND (a.event_type IN ('favorite','like','completed') OR (a.event_type='rating' AND a.progress>=0.6)))
-  AND NOT EXISTS (SELECT 1 FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?
-      AND (a.event_type='dislike' OR (a.event_type='rating' AND a.progress<0.6)))
-ORDER BY (SELECT MAX(a.occurred_at) FROM jellyfin_activity a WHERE a.server_id=i.server_id AND a.item_id=i.item_id AND a.user_id=?) DESC
-LIMIT ?`, serverID, mediaType, userID, userID, userID, limit)
+ORDER BY signals.latest DESC LIMIT ?`, serverID, userID, serverID, mediaType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list recommendation seeds: %w", err)
 	}

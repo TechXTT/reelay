@@ -39,7 +39,12 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 	if weights == (Weights{}) {
 		weights = DefaultWeights()
 	}
-	scored := make([]model.Recommendation, 0, len(candidates))
+	type rankedCandidate struct {
+		model.Recommendation
+		novelty float64
+	}
+	scored := make([]rankedCandidate, 0, len(candidates))
+
 	for _, c := range candidates {
 		components := map[string]float64{
 			"provider":   clamp(c.ProviderScore) * weights.Provider,
@@ -50,35 +55,41 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 			"preference": preference(c.Item, profile) * weights.Preference,
 		}
 		base := 0.0
-		for _, value := range components {
-			base += value
+		for _, name := range []string{"provider", "affinity", "people", "multi_seed", "rating", "preference"} {
+			base += components[name]
 		}
 		c.Item.Score = math.Round(base*10) / 10
 		c.Item.Components = components
-		c.Item.Reasons = reasons(c.Item, components, c.SeedMatches)
-		scored = append(scored, c.Item)
+		c.Item.Reasons = reasons(components, c.SeedMatches)
+		scored = append(scored, rankedCandidate{Recommendation: c.Item, novelty: 1})
 	}
-	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].Score != scored[j].Score {
+			return scored[i].Score > scored[j].Score
+		}
+		return scored[i].TMDBID < scored[j].TMDBID
+	})
 
 	// Greedy diversity bonus: reward a candidate that is unlike items already
 	// selected without allowing novelty to overwhelm relevance.
 	selected := make([]model.Recommendation, 0, min(limit, len(scored)))
 	for len(scored) > 0 && len(selected) < limit {
-		best, bestValue := 0, -1.0
+		best, bestValue := 0, math.Inf(-1)
 		for i := range scored {
-			novelty := 1.0
-			for _, previous := range selected {
-				novelty = math.Min(novelty, 1-jaccard(scored[i].Genres, previous.Genres))
-			}
-			value := scored[i].Score + novelty*weights.Novelty
+			value := scored[i].Score + scored[i].novelty*weights.Novelty
 			if value > bestValue {
 				best, bestValue = i, value
 			}
 		}
 		scored[best].Components["novelty"] = math.Round((bestValue-scored[best].Score)*10) / 10
 		scored[best].Score = math.Min(100, math.Round(bestValue*10)/10)
-		selected = append(selected, scored[best])
+		selected = append(selected, scored[best].Recommendation)
 		scored = append(scored[:best], scored[best+1:]...)
+		if len(selected) < limit {
+			for i := range scored {
+				scored[i].novelty = math.Min(scored[i].novelty, 1-jaccard(scored[i].Genres, selected[len(selected)-1].Genres))
+			}
+		}
 	}
 	return selected
 }
@@ -131,7 +142,7 @@ func bayesianRating(average float64, votes int) float64 {
 	return clamp((average / 10) * confidence)
 }
 
-func reasons(item model.Recommendation, parts map[string]float64, seedMatches int) []string {
+func reasons(parts map[string]float64, seedMatches int) []string {
 	type part struct {
 		name  string
 		score float64
@@ -154,24 +165,30 @@ func reasons(item model.Recommendation, parts map[string]float64, seedMatches in
 }
 
 func jaccard(a, b []string) float64 {
-	set := map[string]bool{}
-	for _, s := range a {
-		set[strings.ToLower(s)] = true
-	}
-	intersection, union := 0, len(set)
-	for _, s := range b {
-		k := strings.ToLower(s)
-		if set[k] {
+	var left = genreSet(a)
+	var right = genreSet(b)
+	var intersection int
+	var union int
+
+	for genre := range left {
+		if right[genre] {
 			intersection++
-		} else {
-			set[k] = true
-			union++
 		}
 	}
+	union = len(left) + len(right) - intersection
 	if union == 0 {
 		return 0
 	}
 	return float64(intersection) / float64(union)
+}
+
+func genreSet(genres []string) map[string]bool {
+	var set = make(map[string]bool, len(genres))
+
+	for _, genre := range genres {
+		set[strings.ToLower(genre)] = true
+	}
+	return set
 }
 
 func clamp(v float64) float64 {

@@ -26,7 +26,9 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	}
 	groups := make(map[string][]searchTarget)
 	for _, target := range targets {
-		groups[targetKey(target)] = append(groups[targetKey(target)], target)
+		key := targetKey(target)
+
+		groups[key] = append(groups[key], target)
 	}
 
 	var recentReleases []indexer.Release
@@ -46,9 +48,10 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(groups))
 	for _, group := range groups {
-		group := group
 		wg.Add(1)
 		go func() {
+			var errs []error
+
 			defer wg.Done()
 			select {
 			case e.searchSem <- struct{}{}:
@@ -72,17 +75,19 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 				})
 			}
 			for _, target := range group {
-				if processErr := e.processSearchTarget(ctx, target, releases, queryErr); processErr != nil {
-					errCh <- processErr
+				if processErr := e.processSearchTarget(ctx, target, releases, queryErr); processErr != nil && !errors.Is(processErr, store.ErrLocked) {
+					errs = append(errs, processErr)
 				}
 			}
+			// Each group sends at most once, so the channel cannot fill before Wait returns.
+			errCh <- errors.Join(errs...)
 		}()
 	}
 	wg.Wait()
 	close(errCh)
 	var errs []error
 	for loopErr := range errCh {
-		if loopErr != nil && !errors.Is(loopErr, store.ErrLocked) {
+		if loopErr != nil {
 			errs = append(errs, loopErr)
 		}
 	}
@@ -222,24 +227,25 @@ func releaseItemLocks(locks []*store.ItemLock) {
 
 func (e *Engine) persistCandidates(ctx context.Context, target searchTarget, result scoring.Result) error {
 	evaluations := make([]model.CandidateEvaluation, 0, result.Considered())
-	all := append(append([]scoring.Candidate{}, result.Accepted...), result.Rejected...)
-	for _, candidate := range all {
-		parsed, err := json.Marshal(candidate.Parsed)
-		if err != nil {
-			return err
+	for _, candidates := range [][]scoring.Candidate{result.Accepted, result.Rejected} {
+		for _, candidate := range candidates {
+			parsed, err := json.Marshal(candidate.Parsed)
+			if err != nil {
+				return err
+			}
+			stored, err := e.store.Releases().Upsert(ctx, model.StoredRelease{Indexer: candidate.Release.Indexer,
+				RawTitle: candidate.Release.Title, InfoHash: candidate.Release.InfoHash,
+				Magnet: candidate.Release.Magnet, SizeBytes: candidate.Release.SizeBytes,
+				Seeders: candidate.Release.Seeders, Leechers: candidate.Release.Leechers,
+				PublishedAt: candidate.Release.PublishedAt, Category: candidate.Release.Category,
+				ParsedJSON: string(parsed), Score: candidate.Score})
+			if err != nil {
+				return err
+			}
+			evaluations = append(evaluations, model.CandidateEvaluation{SubjectType: target.subject,
+				SubjectID: target.id, ReleaseID: stored.ID, Accepted: candidate.Accepted(),
+				ReasonCode: candidate.RejectedBy, Reason: candidate.Reason, Score: candidate.Score})
 		}
-		stored, err := e.store.Releases().Upsert(ctx, model.StoredRelease{Indexer: candidate.Release.Indexer,
-			RawTitle: candidate.Release.Title, InfoHash: candidate.Release.InfoHash,
-			Magnet: candidate.Release.Magnet, SizeBytes: candidate.Release.SizeBytes,
-			Seeders: candidate.Release.Seeders, Leechers: candidate.Release.Leechers,
-			PublishedAt: candidate.Release.PublishedAt, Category: candidate.Release.Category,
-			ParsedJSON: string(parsed), Score: candidate.Score})
-		if err != nil {
-			return err
-		}
-		evaluations = append(evaluations, model.CandidateEvaluation{SubjectType: target.subject,
-			SubjectID: target.id, ReleaseID: stored.ID, Accepted: candidate.Accepted(),
-			ReasonCode: candidate.RejectedBy, Reason: candidate.Reason, Score: candidate.Score})
 	}
 	return e.store.Decisions().ReplaceCandidates(ctx, target.subject, target.id, evaluations)
 }

@@ -59,46 +59,44 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 			firstWanted: movie.FirstWantedAt, category: e.cfg.Downloader.CategoryMovies,
 			savePath: e.cfg.Downloader.SavePathMovies, imported: importedQuality(movie.ImportedQuality)})
 	}
-	seriesCache := map[int64]model.Series{}
-	episodeCache := map[int64][]model.Episode{}
+	type seriesSearchData struct {
+		series        model.Series
+		episodes      []model.Episode
+		wantedNumbers map[int][]int
+	}
+	seriesCache := map[int64]seriesSearchData{}
+
 	for _, episode := range episodes {
-		series, ok := seriesCache[episode.SeriesID]
+		cached, ok := seriesCache[episode.SeriesID]
 		if !ok {
-			series, err = e.store.Series().Get(ctx, episode.SeriesID)
+			series, err := e.store.Series().Get(ctx, episode.SeriesID)
 			if err != nil {
 				return nil, err
 			}
-			seriesCache[episode.SeriesID] = series
+			seriesEpisodes, err := e.store.Episodes().ListBySeries(ctx, series.ID)
+			if err != nil {
+				return nil, err
+			}
+			cached = seriesSearchData{series: series, wantedNumbers: map[int][]int{}}
+			for _, candidate := range seriesEpisodes {
+				if candidate.State == model.StateWanted {
+					cached.episodes = append(cached.episodes, candidate)
+					cached.wantedNumbers[candidate.Season] = append(cached.wantedNumbers[candidate.Season], candidate.Number)
+				}
+			}
+			seriesCache[episode.SeriesID] = cached
 		}
+		series := cached.series
 		p, err := profile(series.ProfileID)
 		if err != nil {
 			return nil, err
-		}
-		seriesEpisodes, ok := episodeCache[series.ID]
-		if !ok {
-			seriesEpisodes, err = e.store.Episodes().ListBySeries(ctx, series.ID)
-			if err != nil {
-				return nil, err
-			}
-			episodeCache[series.ID] = seriesEpisodes
-		}
-		wantedNumbers := make([]int, 0, len(seriesEpisodes))
-		wantedEpisodes := make([]model.Episode, 0, len(seriesEpisodes))
-		for _, candidate := range seriesEpisodes {
-			if candidate.State != model.StateWanted {
-				continue
-			}
-			wantedEpisodes = append(wantedEpisodes, candidate)
-			if candidate.Season == episode.Season {
-				wantedNumbers = append(wantedNumbers, candidate.Number)
-			}
 		}
 		out = append(out, searchTarget{subject: model.SubjectEpisode, id: episode.ID, seriesID: series.ID,
 			want: model.Wanted{Kind: model.SubjectEpisode, Title: series.Title,
 				Aliases: series.Aliases, Season: episode.Season, Episode: episode.Number,
 				AbsoluteEp: episode.AbsoluteNumber, IsAnime: series.IsAnime,
-				WantedEpisodes: wantedNumbers},
-			episodes: wantedEpisodes,
+				WantedEpisodes: cached.wantedNumbers[episode.Season]},
+			episodes: cached.episodes,
 			profile:  p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
 			firstWanted: episode.FirstWantedAt, category: e.cfg.Downloader.CategoryTV,
 			savePath: e.cfg.Downloader.SavePathTV, imported: importedQuality(episode.ImportedQuality)})
@@ -120,7 +118,7 @@ func importedQuality(raw string) *scoring.Imported {
 }
 
 func targetKey(t searchTarget) string {
-	return fmt.Sprintf("%s:%t", strings.ToLower(strings.TrimSpace(t.want.Title)), t.want.IsAnime)
+	return fmt.Sprintf("%s:%s:%t", t.subject, strings.ToLower(strings.TrimSpace(targetQuery(t))), t.want.IsAnime)
 }
 
 func targetQuery(t searchTarget) string {

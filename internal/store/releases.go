@@ -30,7 +30,7 @@ func (r *ReleaseRepository) Upsert(ctx context.Context, in model.StoredRelease) 
 	if in.SeenAt.IsZero() {
 		in.SeenAt = r.s.nowUTC()
 	}
-	_, err := r.s.rw.ExecContext(ctx, `INSERT INTO releases (
+	stored, err := scanRelease(r.s.rw.QueryRowContext(ctx, `INSERT INTO releases (
  indexer, raw_title, info_hash, magnet, size_bytes, seeders, leechers,
  published_at, category, parsed_json, score, seen_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -38,14 +38,15 @@ ON CONFLICT (indexer, info_hash) DO UPDATE SET
  raw_title=excluded.raw_title, magnet=excluded.magnet, size_bytes=excluded.size_bytes,
  seeders=excluded.seeders, leechers=excluded.leechers,
  published_at=excluded.published_at, category=excluded.category,
- parsed_json=excluded.parsed_json, score=excluded.score, seen_at=excluded.seen_at`,
+ parsed_json=excluded.parsed_json, score=excluded.score, seen_at=excluded.seen_at
+RETURNING `+releaseColumns,
 		in.Indexer, in.RawTitle, in.InfoHash, in.Magnet, in.SizeBytes, in.Seeders,
 		in.Leechers, nullTime(&in.PublishedAt), in.Category, in.ParsedJSON,
-		in.Score, FormatTime(in.SeenAt))
+		in.Score, FormatTime(in.SeenAt)))
 	if err != nil {
 		return in, fmt.Errorf("upsert release %s/%s: %w", in.Indexer, in.InfoHash, err)
 	}
-	return r.ByIndexerHash(ctx, in.Indexer, in.InfoHash)
+	return stored, nil
 }
 
 func (r *ReleaseRepository) Get(ctx context.Context, id int64) (model.StoredRelease, error) {
@@ -58,9 +59,10 @@ func (r *ReleaseRepository) ByIndexerHash(ctx context.Context, indexer, hash str
 		fmt.Sprintf("release %s/%s", indexer, hash))
 }
 
-const selectReleaseSQL = `SELECT id, indexer, raw_title, info_hash, magnet,
- size_bytes, seeders, leechers, published_at, category, parsed_json, score, seen_at
- FROM releases`
+const releaseColumns = `id, indexer, raw_title, info_hash, magnet,
+ size_bytes, seeders, leechers, published_at, category, parsed_json, score, seen_at`
+
+const selectReleaseSQL = "SELECT " + releaseColumns + " FROM releases"
 
 func scanRelease(row scanner) (model.StoredRelease, error) {
 	var v model.StoredRelease

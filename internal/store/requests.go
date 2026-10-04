@@ -74,8 +74,8 @@ func (r *RequestRepository) Get(ctx context.Context, id int64) (model.MediaReque
 	var request model.MediaRequest
 	var cancelled sql.NullString
 	var requested, seasons string
-	var err = r.s.ro.QueryRowContext(ctx, `SELECT id,server_id,user_id,media_type,tmdb_id,title,year,requested_at,monitor_mode,subject_type,subject_id,cancelled_at,seasons_json FROM media_requests WHERE id=?`, id).Scan(
-		&request.ID, &request.ServerID, &request.UserID, &request.MediaType, &request.TMDBID, &request.Title, &request.Year, &requested, &request.MonitorMode, &request.SubjectType, &request.SubjectID, &cancelled, &seasons)
+	var err = r.s.ro.QueryRowContext(ctx, `SELECT `+requestIdentityColumns+`,cancelled_at,seasons_json FROM media_requests WHERE id=?`, id).Scan(
+		append(requestIdentityTargets(&request, &requested), &cancelled, &seasons)...)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return request, ErrNotFound
@@ -83,15 +83,32 @@ func (r *RequestRepository) Get(ctx context.Context, id int64) (model.MediaReque
 	if err != nil {
 		return request, err
 	}
+	if err := finishRequest(&request, requested, cancelled, seasons); err != nil {
+		return request, err
+	}
+	request.Trial, err = r.Trial(ctx, id)
+	return request, err
+}
+
+const requestIdentityColumns = `id,server_id,user_id,media_type,tmdb_id,title,year,requested_at,monitor_mode,subject_type,subject_id`
+
+func requestIdentityTargets(request *model.MediaRequest, requested *string) []any {
+	return []any{&request.ID, &request.ServerID, &request.UserID, &request.MediaType, &request.TMDBID, &request.Title, &request.Year, requested, &request.MonitorMode, &request.SubjectType, &request.SubjectID}
+}
+
+// finishRequest parses the textual columns shared by every media request read.
+func finishRequest(request *model.MediaRequest, requested string, cancelled sql.NullString, seasons string) error {
+	var err error
+
 	request.RequestedAt, err = ParseTime(requested)
 	if err != nil {
-		return request, err
+		return err
 	}
 	request.CancelledAt, err = scanNullTime(cancelled)
 	if err != nil {
-		return request, err
+		return err
 	}
-	return request, decodeJSON(seasons, &request.Seasons)
+	return decodeJSON(seasons, &request.Seasons)
 }
 
 // Cancelling withdraws this requester's subscription. It never deletes or
@@ -162,12 +179,7 @@ func (r *RequestRepository) SelectedSeasons(ctx context.Context, seriesID int64)
 	if err != nil {
 		return nil, err
 	}
-	return collectRows(rows, func(row scanner) (int, error) {
-		var season int
-		var err = row.Scan(&season)
-
-		return season, err
-	})
+	return collectRows(rows, scanColumn[int])
 }
 
 func (r *RequestRepository) List(ctx context.Context, serverID, userID string) ([]model.MediaRequest, error) {
@@ -184,7 +196,7 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
 	rows, err := r.s.ro.QueryContext(ctx, `WITH selected_requests AS MATERIALIZED (
  SELECT * FROM media_requests mr WHERE server_id=? AND user_id=? AND (?=0 OR (cancelled_at IS NULL AND (
  EXISTS(SELECT 1 FROM movies m WHERE mr.subject_type='movie' AND m.id=mr.subject_id AND m.tmdb_id=mr.tmdb_id AND m.state IN ('failed','import_failed'))
- OR EXISTS(SELECT 1 FROM series sr JOIN episodes ep ON ep.series_id=sr.id WHERE mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id AND ep.state IN ('failed','import_failed') AND (mr.monitor_mode<>'' OR mr.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(mr.seasons_json))))
+ OR EXISTS(SELECT 1 FROM series sr JOIN episodes ep ON ep.series_id=sr.id WHERE mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id AND ep.state IN ('failed','import_failed') AND (mr.monitor_mode<>'' OR mr.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(mr.seasons_json))) AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=mr.id AND t.decision<>'continue') OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=mr.id AND te.episode_id=ep.id)))
  ))) ORDER BY requested_at DESC,id DESC LIMIT ? OFFSET ?
 ), selected_series AS MATERIALIZED (
  SELECT request.id AS request_id,sr.id AS subject_id,request.seasons_json,request.monitor_mode FROM selected_requests request JOIN series sr ON sr.id=request.subject_id AND sr.tmdb_id=request.tmdb_id
@@ -203,7 +215,7 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
         MAX(NULLIF(ep.last_error,'')) AS last_error,
         MIN(ep.next_search_at) AS next_search_at
  FROM episodes ep JOIN selected_series selected ON selected.subject_id=ep.series_id
- WHERE selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json)) GROUP BY selected.request_id
+ WHERE (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json))) AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=selected.request_id AND t.decision<>'continue') OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=selected.request_id AND te.episode_id=ep.id)) GROUP BY selected.request_id
 ), movie_progress AS (
  SELECT subject_id,MAX(progress) AS progress FROM grabs
  WHERE subject_type='movie' AND subject_id IN (SELECT subject_id FROM selected_movies)
@@ -211,7 +223,7 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
 ), series_progress AS (
  SELECT selected.request_id,MAX(g.progress) AS progress FROM grabs g JOIN episodes ep ON g.subject_type='episode' AND g.subject_id=ep.id
  JOIN selected_series selected ON selected.subject_id=ep.series_id
- WHERE g.state IN ('pending','downloading','completed','importing') AND (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json))) GROUP BY selected.request_id
+ WHERE g.state IN ('pending','downloading','completed','importing') AND (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json))) AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=selected.request_id AND t.decision<>'continue') OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=selected.request_id AND te.episode_id=ep.id)) GROUP BY selected.request_id
 )
 SELECT
  mr.id,mr.server_id,mr.user_id,mr.media_type,mr.tmdb_id,mr.title,mr.year,mr.requested_at,mr.monitor_mode,mr.subject_type,mr.subject_id,
@@ -244,38 +256,62 @@ ORDER BY mr.requested_at DESC,mr.id DESC`, serverID, userID, attention, model.Me
 	if err != nil {
 		return nil, fmt.Errorf("list media requests: %w", err)
 	}
-	return collectRows(rows, func(row scanner) (model.MediaRequest, error) {
-		var value model.MediaRequest
-		var requested string
-		var next sql.NullString
-		var available int
-		var cancelled sql.NullString
-		var seasons string
-		if err := row.Scan(&value.ID, &value.ServerID, &value.UserID, &value.MediaType, &value.TMDBID, &value.Title, &value.Year,
-			&requested, &value.MonitorMode, &value.SubjectType, &value.SubjectID, &value.State, &value.Progress, &value.LastError,
-			&next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID); err != nil {
-			return value, err
-		}
-		var err error
-		value.RequestedAt, err = ParseTime(requested)
+	values, err := collectRows(rows, scanListedRequest)
+	if err != nil {
+		return nil, err
+	}
+	var ids = make([]int64, len(values))
+	for i, value := range values {
+		ids[i] = value.ID
+	}
+	trials, err := r.trialsByRequest(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range values {
+		values[i].Trial = trials[values[i].ID]
+	}
+	return values, nil
+}
+
+func scanListedRequest(row scanner) (model.MediaRequest, error) {
+	var value model.MediaRequest
+	var requested, seasons string
+	var next, cancelled sql.NullString
+	var available int
+
+	if err := row.Scan(append(requestIdentityTargets(&value, &requested), &value.State, &value.Progress, &value.LastError,
+		&next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID)...); err != nil {
+		return value, err
+	}
+	if err := finishRequest(&value, requested, cancelled, seasons); err != nil {
+		return value, err
+	}
+	var err error
+	value.NextSearchAt, err = scanNullTime(next)
+	value.Available = available == 1
+	return value, err
+}
+
+// SelectedSeasonsBySeries returns the selected seasons of every listed series keyed by series ID.
+func (r *RequestRepository) SelectedSeasonsBySeries(ctx context.Context, seriesIDs []int64) (map[int64][]int, error) {
+	seasons := make(map[int64][]int, len(seriesIDs))
+	for _, chunk := range chunkIDs(seriesIDs) {
+		rows, err := r.s.ro.QueryContext(ctx, `SELECT series_id, season FROM series_seasons WHERE series_id IN (`+placeholders(len(chunk))+`) ORDER BY series_id, season`, int64Args(chunk)...)
 		if err != nil {
-			return value, err
+			return nil, err
 		}
-		if next.Valid {
-			parsed, err := ParseTime(next.String)
-			if err != nil {
-				return value, err
-			}
-			value.NextSearchAt = &parsed
-		}
-		value.Available = available == 1
-		value.CancelledAt, err = scanNullTime(cancelled)
+		pairs, err := collectRows(rows, func(row scanner) ([2]int64, error) {
+			var pair [2]int64
+			err := row.Scan(&pair[0], &pair[1])
+			return pair, err
+		})
 		if err != nil {
-			return value, err
+			return nil, err
 		}
-		if err := decodeJSON(seasons, &value.Seasons); err != nil {
-			return value, err
+		for _, pair := range pairs {
+			seasons[pair[0]] = append(seasons[pair[0]], int(pair[1]))
 		}
-		return value, nil
-	})
+	}
+	return seasons, nil
 }

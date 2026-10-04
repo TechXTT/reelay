@@ -23,10 +23,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("X-Accel-Buffering", "no")
 	controller := http.NewResponseController(w)
 	_ = controller.SetWriteDeadline(time.Time{})
-	if _, err := fmt.Fprint(w, ": connected\n\n"); err != nil {
+
+	// send writes one frame and reports whether the client is still there.
+	send := func(format string, args ...any) bool {
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			return false
+		}
+		_ = controller.Flush()
+		return true
+	}
+
+	if !send(": connected\n\n") {
 		return nil
 	}
-	_ = controller.Flush()
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -38,15 +47,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, payload); err != nil {
+			if !send("event: %s\ndata: %s\n\n", event.Type, payload) {
 				return nil
 			}
-			_ = controller.Flush()
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+			if !send(": heartbeat\n\n") {
 				return nil
 			}
-			_ = controller.Flush()
 		}
 	}
 }
@@ -56,6 +63,7 @@ func (s *Server) handleMetadataSearch(w http.ResponseWriter, r *http.Request) er
 	if query == "" {
 		return BadRequest("q is required")
 	}
+	var items any
 	switch r.URL.Query().Get("type") {
 	case "movie":
 		if s.movies == nil {
@@ -66,7 +74,7 @@ func (s *Server) handleMetadataSearch(w http.ResponseWriter, r *http.Request) er
 		if err != nil {
 			return Unavailable("movie metadata search failed").WithCause(err)
 		}
-		writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
+		items = values
 	case "series":
 		if s.series == nil {
 			return Unavailable("series metadata provider unavailable")
@@ -75,9 +83,9 @@ func (s *Server) handleMetadataSearch(w http.ResponseWriter, r *http.Request) er
 		if err != nil {
 			return Unavailable("series metadata search failed").WithCause(err)
 		}
-		writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
+		items = values
 	default:
 		return BadRequest("type must be movie or series")
 	}
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": items})
 }

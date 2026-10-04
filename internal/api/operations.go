@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -13,15 +14,13 @@ import (
 	"github.com/TechXTT/reelay/internal/scoring"
 )
 
-func (s *Server) handleEpisodePatch(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	var req struct {
-		Monitored *bool `json:"monitored"`
-	}
-	if err := decodeBody(r, &req); err != nil || req.Monitored == nil {
+type episodePatchRequest struct {
+	Monitored *bool `json:"monitored"`
+}
+
+func (s *Server) handleEpisodePatch(w http.ResponseWriter, r *http.Request, id int64) error {
+	req, err := decodeJSON[episodePatchRequest](r)
+	if err != nil || req.Monitored == nil {
 		return BadRequest("monitored is required")
 	}
 	if *req.Monitored {
@@ -34,70 +33,58 @@ func (s *Server) handleEpisodePatch(w http.ResponseWriter, r *http.Request) erro
 		return Conflict("episode monitoring state could not change").WithCause(err)
 	}
 	item, _ := s.store.Episodes().Get(r.Context(), id)
-	writeJSON(w, s.logFor(r), http.StatusOK, item)
-	return nil
+	return reply(w, r, http.StatusOK, item)
 }
 
-func (s *Server) handleEpisodeSearch(w http.ResponseWriter, r *http.Request) error {
-	return s.handleForceSearch(w, r, model.SubjectEpisode, "episode")
+// forceSearch queues an immediate search for the {id} subject.
+func (s *Server) forceSearch(subject model.SubjectType, noun string) handler {
+	return withID(func(w http.ResponseWriter, r *http.Request, id int64) error {
+		if s.engine == nil {
+			return Unavailable("engine is unavailable")
+		}
+		if err := s.engine.ForceSearch(r.Context(), subject, id); err != nil {
+			return Conflict("%s cannot be searched now", noun).WithCause(err)
+		}
+		return reply(w, r, http.StatusAccepted, map[string]any{"queued": true})
+	})
 }
 
-func (s *Server) handleForceSearch(w http.ResponseWriter, r *http.Request, subject model.SubjectType, noun string) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	if s.engine == nil {
-		return Unavailable("engine is unavailable")
-	}
-	if err := s.engine.ForceSearch(r.Context(), subject, id); err != nil {
-		return Conflict("%s cannot be searched now", noun).WithCause(err)
-	}
-	writeJSON(w, s.logFor(r), http.StatusAccepted, map[string]any{"queued": true})
-	return nil
-}
-
-func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request, id int64) error {
 	values, err := s.store.Decisions().Candidates(r.Context(), model.SubjectEpisode, id)
 	if err != nil {
 		return err
 	}
-	type candidate struct {
-		Evaluation model.CandidateEvaluation `json:"evaluation"`
-		Release    model.StoredRelease       `json:"release"`
+	releaseIDs := make([]int64, len(values))
+	for i, value := range values {
+		releaseIDs[i] = value.ReleaseID
 	}
-	out := make([]candidate, 0, len(values))
-	for _, value := range values {
-		release, err := s.store.Releases().Get(r.Context(), value.ReleaseID)
-		if err == nil {
-			out = append(out, candidate{value, release})
-		}
-	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": out})
-	return nil
-}
-
-func (s *Server) handleEpisodeGrab(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
+	releases, err := s.store.Releases().GetMany(r.Context(), releaseIDs)
 	if err != nil {
 		return err
 	}
-	var req struct {
-		ReleaseID int64 `json:"release_id"`
+	out := make([]diagnosticCandidate, 0, len(values))
+	for _, value := range values {
+		if release, found := releases[value.ReleaseID]; found {
+			out = append(out, diagnosticCandidate{value, release})
+		}
 	}
-	if err := decodeBody(r, &req); err != nil || req.ReleaseID <= 0 {
+	return reply(w, r, http.StatusOK, map[string]any{"items": out})
+}
+
+type episodeGrabRequest struct {
+	ReleaseID int64 `json:"release_id"`
+}
+
+func (s *Server) handleEpisodeGrab(w http.ResponseWriter, r *http.Request, id int64) error {
+	req, err := decodeJSON[episodeGrabRequest](r)
+	if err != nil || req.ReleaseID <= 0 {
 		return BadRequest("release_id is required")
 	}
 	grab, err := s.engine.ManualGrab(r.Context(), model.SubjectEpisode, id, req.ReleaseID)
 	if err != nil {
 		return Conflict("release could not be grabbed").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusCreated, grab)
-	return nil
+	return reply(w, r, http.StatusCreated, grab)
 }
 
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) error {
@@ -112,35 +99,24 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "paused": paused})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": values, "paused": paused})
 }
 
-func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) error {
-	return s.handleQueuePauseState(w, r, true)
-}
-
-func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) error {
-	return s.handleQueuePauseState(w, r, false)
-}
-
-func (s *Server) handleQueuePauseState(w http.ResponseWriter, r *http.Request, paused bool) error {
-	if s.engine == nil {
-		return Unavailable("engine is unavailable")
+// setQueuePaused pauses or resumes every download.
+func (s *Server) setQueuePaused(paused bool) handler {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		if s.engine == nil {
+			return Unavailable("engine is unavailable")
+		}
+		count, err := s.engine.SetDownloadsPaused(r.Context(), paused)
+		if err != nil {
+			return Conflict("download pause state could not be changed").WithCause(err)
+		}
+		return reply(w, r, http.StatusOK, map[string]any{"paused": paused, "count": count})
 	}
-	count, err := s.engine.SetDownloadsPaused(r.Context(), paused)
-	if err != nil {
-		return Conflict("download pause state could not be changed").WithCause(err)
-	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"paused": paused, "count": count})
-	return nil
 }
 
-func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request, id int64) error {
 	grab, err := s.store.Grabs().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("grab %d not found", id)
@@ -168,35 +144,47 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) error
 		return Conflict("torrent could not be removed").WithCause(err)
 	}
 	if blacklist {
-		release, releaseErr := s.store.Releases().Get(r.Context(), grab.ReleaseID)
-		if releaseErr == nil {
-			if grab.SubjectType == model.SubjectEpisode {
-				for _, episode := range covered {
-					_ = s.store.Decisions().Blacklist(r.Context(), model.SubjectEpisode,
-						episode.ID, release.InfoHash, "removed from queue")
-				}
-			} else {
-				_ = s.store.Decisions().Blacklist(r.Context(), grab.SubjectType, grab.SubjectID,
-					release.InfoHash, "removed from queue")
-			}
-		}
+		s.blacklistGrab(r.Context(), grab, covered)
 	}
 	grab.State = model.GrabRemoved
 	if err := s.store.Grabs().Update(r.Context(), grab); err != nil {
 		return err
 	}
-	if grab.SubjectType == model.SubjectEpisode {
-		for _, episode := range covered {
-			if err := s.store.Transitions().RetryNow(r.Context(), model.SubjectEpisode,
-				episode.ID, "shared grab removed from queue"); err != nil {
-				return Conflict("covered episode cannot return to wanted").WithCause(err)
-			}
-		}
-	} else if err := s.store.Transitions().RetryNow(r.Context(), grab.SubjectType, grab.SubjectID,
-		"grab removed from queue"); err != nil {
-		return Conflict("item cannot return to wanted").WithCause(err)
+	if err := s.returnToWanted(r.Context(), grab, covered); err != nil {
+		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// blacklistGrab best-effort blacklists the grabbed release for every subject it served.
+func (s *Server) blacklistGrab(ctx context.Context, grab model.Grab, covered []model.Episode) {
+	release, err := s.store.Releases().Get(ctx, grab.ReleaseID)
+	if err != nil {
+		return
+	}
+	if grab.SubjectType != model.SubjectEpisode {
+		_ = s.store.Decisions().Blacklist(ctx, grab.SubjectType, grab.SubjectID, release.InfoHash, "removed from queue")
+		return
+	}
+	for _, episode := range covered {
+		_ = s.store.Decisions().Blacklist(ctx, model.SubjectEpisode, episode.ID, release.InfoHash, "removed from queue")
+	}
+}
+
+// returnToWanted sends every subject the removed grab served back to the search queue.
+func (s *Server) returnToWanted(ctx context.Context, grab model.Grab, covered []model.Episode) error {
+	if grab.SubjectType != model.SubjectEpisode {
+		if err := s.store.Transitions().RetryNow(ctx, grab.SubjectType, grab.SubjectID, "grab removed from queue"); err != nil {
+			return Conflict("item cannot return to wanted").WithCause(err)
+		}
+		return nil
+	}
+	for _, episode := range covered {
+		if err := s.store.Transitions().RetryNow(ctx, model.SubjectEpisode, episode.ID, "shared grab removed from queue"); err != nil {
+			return Conflict("covered episode cannot return to wanted").WithCause(err)
+		}
+	}
 	return nil
 }
 
@@ -209,19 +197,18 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "page": page})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": values, "page": page})
 }
 
 func (s *Server) handleTrigger(w http.ResponseWriter, r *http.Request) error {
 	if s.engine == nil {
 		return Unavailable("engine is unavailable")
 	}
-	if err := s.engine.Trigger(r.PathValue("loop")); err != nil {
+	loop := r.PathValue("loop")
+	if err := s.engine.Trigger(loop); err != nil {
 		return BadRequest("%v", err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusAccepted, map[string]any{"triggered": r.PathValue("loop")})
-	return nil
+	return reply(w, r, http.StatusAccepted, map[string]any{"triggered": loop})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) error {
@@ -230,7 +217,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) error {
 		indexers = append(indexers, map[string]any{"name": item.Name, "type": item.Type,
 			"base_url": item.BaseURL, "enabled": item.Enabled, "rate_limit_per_second": item.RateLimitPerSecond})
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{
+	return reply(w, r, http.StatusOK, map[string]any{
 		"server": map[string]any{"bind": s.cfg.Server.Bind, "port": s.cfg.Server.Port,
 			"auth_enabled": s.cfg.Server.AuthToken != ""},
 		"indexers": indexers,
@@ -241,7 +228,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) error {
 			"refresh_interval": s.cfg.Recommendations.RefreshInterval.String(),
 			"result_limit":     s.cfg.Recommendations.ResultLimit},
 	})
-	return nil
 }
 
 func (s *Server) handleLiveSearch(w http.ResponseWriter, r *http.Request) error {
@@ -270,7 +256,6 @@ func (s *Server) handleLiveSearch(w http.ResponseWriter, r *http.Request) error 
 	}
 	result := scoring.Evaluate(scoring.Input{Releases: releases, Profile: profile,
 		Weights: s.cfg.Scoring, Now: s.clock.Now()})
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"result": result,
+	return reply(w, r, http.StatusOK, map[string]any{"result": result,
 		"failures": failures, "parsed_query": parser.Parse(term)})
-	return nil
 }

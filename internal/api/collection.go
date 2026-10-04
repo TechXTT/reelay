@@ -24,39 +24,34 @@ type collectionTarget struct {
 
 type collectionDeleteFunc func(context.Context, int64, bool, bool) error
 
-func queryBool(rValue, name string, fallback bool) (bool, error) {
-	if strings.TrimSpace(rValue) == "" {
+func queryBool(raw, name string, fallback bool) (bool, error) {
+	if strings.TrimSpace(raw) == "" {
 		return fallback, nil
 	}
-	value, err := strconv.ParseBool(rValue)
+	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, BadRequest("%s must be true or false", name)
 	}
 	return value, nil
 }
 
-func collectionDeleteOptions(r *http.Request) (deleteFiles, deleteDownloads bool, err error) {
-	if deleteFiles, err = queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false); err != nil {
-		return false, false, err
-	}
-	deleteDownloads, err = queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
-	return deleteFiles, deleteDownloads, err
-}
-
-func (s *Server) handleCollectionDelete(w http.ResponseWriter, r *http.Request, remove collectionDeleteFunc) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	deleteFiles, deleteDownloads, err := collectionDeleteOptions(r)
-	if err != nil {
-		return err
-	}
-	if err := remove(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
-		return err
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+// collectionDelete removes the {id} movie or series after the optional file and download cleanup.
+func collectionDelete(remove collectionDeleteFunc) handler {
+	return withID(func(w http.ResponseWriter, r *http.Request, id int64) error {
+		deleteFiles, err := queryBool(r.URL.Query().Get("deleteFiles"), "deleteFiles", false)
+		if err != nil {
+			return err
+		}
+		deleteDownloads, err := queryBool(r.URL.Query().Get("deleteDownloads"), "deleteDownloads", false)
+		if err != nil {
+			return err
+		}
+		if err := remove(r.Context(), id, deleteFiles, deleteDownloads); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
 }
 
 func (s *Server) deleteMovieCollection(ctx context.Context, id int64, deleteFiles, deleteDownloads bool) error {
@@ -96,37 +91,26 @@ func (s *Server) deleteSeriesCollection(ctx context.Context, id int64, deleteFil
 	if err != nil {
 		return err
 	}
-	locks := make([]*store.ItemLock, 0, len(episodes))
-	releaseLocks := func() {
-		for _, lock := range locks {
-			_ = lock.Release(context.WithoutCancel(ctx))
-		}
+	release, err := s.lockEpisodes(ctx, episodes)
+	if err != nil {
+		return err
 	}
-	for _, episode := range episodes {
-		lock, lockErr := s.store.Locks().Acquire(ctx, model.SubjectEpisode, episode.ID,
-			"api-delete-series", 5*time.Minute)
-		if errors.Is(lockErr, store.ErrLocked) {
-			releaseLocks()
-			return Conflict("series has an episode currently being processed; retry deletion shortly")
-		}
-		if lockErr != nil {
-			releaseLocks()
-			return lockErr
-		}
-		locks = append(locks, lock)
-	}
-	defer releaseLocks()
+	defer release()
 
+	episodeIDs := make([]int64, len(episodes))
+	for i, episode := range episodes {
+		episodeIDs[i] = episode.ID
+	}
+	grabsByEpisode, err := s.store.Grabs().BySubjects(ctx, model.SubjectEpisode, episodeIDs)
+	if err != nil {
+		return err
+	}
 	target := collectionTarget{root: series.RootFolder}
 	for _, episode := range episodes {
 		if episode.ImportedPath != "" {
 			target.paths = append(target.paths, episode.ImportedPath)
 		}
-		grabs, err := s.store.Grabs().BySubject(ctx, model.SubjectEpisode, episode.ID)
-		if err != nil {
-			return err
-		}
-		target.grabs = append(target.grabs, grabs...)
+		target.grabs = append(target.grabs, grabsByEpisode[episode.ID]...)
 	}
 	if err := s.prepareCollectionDelete(ctx, target, deleteFiles, deleteDownloads); err != nil {
 		return err
@@ -134,6 +118,32 @@ func (s *Server) deleteSeriesCollection(ctx context.Context, id int64, deleteFil
 	return s.store.Series().Delete(ctx, id)
 }
 
+// lockEpisodes takes every episode's item lock or none; the returned func releases them.
+func (s *Server) lockEpisodes(ctx context.Context, episodes []model.Episode) (func(), error) {
+	locks := make([]*store.ItemLock, 0, len(episodes))
+	release := func() {
+		for _, lock := range locks {
+			_ = lock.Release(context.WithoutCancel(ctx))
+		}
+	}
+	for _, episode := range episodes {
+		lock, err := s.store.Locks().Acquire(ctx, model.SubjectEpisode, episode.ID, "api-delete-series", 5*time.Minute)
+		if errors.Is(err, store.ErrLocked) {
+			release()
+			return nil, Conflict("series has an episode currently being processed; retry deletion shortly")
+		}
+		if err != nil {
+			release()
+			return nil, err
+		}
+		locks = append(locks, lock)
+	}
+	return release, nil
+}
+
+// prepareCollectionDelete validates every step that can refuse, then removes
+// download data and library files. Nothing is touched until the active-download
+// and path-containment checks have passed.
 func (s *Server) prepareCollectionDelete(ctx context.Context, target collectionTarget, deleteFiles, deleteDownloads bool) error {
 	for _, grab := range target.grabs {
 		if grab.State.Active() && !deleteDownloads {
@@ -141,8 +151,9 @@ func (s *Server) prepareCollectionDelete(ctx context.Context, target collectionT
 		}
 	}
 
-	paths := make([]string, 0, len(target.paths))
+	var paths []string
 	if deleteFiles {
+		paths = make([]string, 0, len(target.paths))
 		for _, path := range target.paths {
 			clean, err := managedPath(target.root, path)
 			if err != nil {
@@ -153,32 +164,40 @@ func (s *Server) prepareCollectionDelete(ctx context.Context, target collectionT
 	}
 
 	if deleteDownloads {
-		if s.downloader == nil {
-			return Unavailable("download client is unavailable")
-		}
-		removed := make(map[string]bool)
-		for _, grab := range target.grabs {
-			hash := strings.ToLower(grab.TorrentHash)
-			if !removed[hash] {
-				if err := s.downloader.Remove(ctx, hash, true); err != nil &&
-					!errors.Is(err, downloader.ErrNotFound) {
-					return Conflict("download data could not be removed").WithCause(err)
-				}
-				removed[hash] = true
-			}
-			if grab.State != model.GrabRemoved {
-				grab.State = model.GrabRemoved
-				grab.LastError = "removed with collection"
-				if err := s.store.Grabs().Update(ctx, grab); err != nil {
-					return err
-				}
-			}
+		if err := s.removeDownloads(ctx, target.grabs); err != nil {
+			return err
 		}
 	}
 
 	for _, path := range paths {
 		if err := deleteManagedFile(path, target.root, s.cfg.Library.SubtitleExtensions); err != nil {
 			return Conflict("library file could not be deleted").WithCause(err)
+		}
+	}
+	return nil
+}
+
+// removeDownloads deletes each distinct torrent once and marks its grabs removed.
+func (s *Server) removeDownloads(ctx context.Context, grabs []model.Grab) error {
+	if s.downloader == nil {
+		return Unavailable("download client is unavailable")
+	}
+	removed := make(map[string]bool)
+	for _, grab := range grabs {
+		hash := strings.ToLower(grab.TorrentHash)
+		if !removed[hash] {
+			if err := s.downloader.Remove(ctx, hash, true); err != nil &&
+				!errors.Is(err, downloader.ErrNotFound) {
+				return Conflict("download data could not be removed").WithCause(err)
+			}
+			removed[hash] = true
+		}
+		if grab.State != model.GrabRemoved {
+			grab.State = model.GrabRemoved
+			grab.LastError = "removed with collection"
+			if err := s.store.Grabs().Update(ctx, grab); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

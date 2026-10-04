@@ -9,7 +9,7 @@ Jellyfin or Plex can read.
 Same functional category as Sonarr, Radarr and Prowlarr — one binary, no
 runtime, no database server.
 
-**Status: implemented locally; activation and live verification remain.**
+**Status: implemented and activated locally; complete live journeys remain to verify.**
 Discover previews, request tracking and recovery, Torznab support, recommendation
 controls, and backup/restore are implemented. Follow the
 [activation checklist](docs/setup-checklist.md) to configure and run this build.
@@ -34,6 +34,23 @@ controls, and backup/restore are implemented. Follow the
 10. Pirate Bay and magnet-capable Torznab sources, including Prowlarr.
 11. Availability webhooks, playable Jellyfin links, setup/path checks, free-space
     visibility, and consistent SQLite backups with validated restore.
+12. Series trials: one episode, three episodes, or the first season, followed by
+    a required Continue/Stop vote and a personal rating from 1 to 5.
+
+In Discover, select a Jellyfin user, switch to Series, and choose **Try 1 episode**,
+**Try 3 episodes**, or **Try first season** before requesting a title. Trials start
+from the beginning and skip specials. Short series use up to three known episodes;
+a season trial includes all known episodes of the first season. Future episodes
+wait for their air date and grace period.
+
+The updated Jellyfin plugin checks each user's watched episodes every minute.
+Discover keeps a trial panel until that user watches the selected episodes and
+submits both a Continue/Stop decision and a rating. Continue automatically monitors
+the full series, including future episodes. Stop ends that user's request and
+leaves other users' monitoring and shared downloads intact. The vote is required
+to expand that trial; it does not block browsing or playback of other titles.
+Trial tracking requires the plugin changes in this working tree; the published
+v0.1.5 artifacts predate this feature.
 
 ## Why Go
 

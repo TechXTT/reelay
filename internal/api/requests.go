@@ -1,27 +1,24 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
 
 func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) error {
-	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	if serverID == "" || userID == "" {
-		return BadRequest("server_id and user_id are required")
+	serverID, userID, err := userScope(r)
+	if err != nil {
+		return err
 	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
-		var err error
 		offset, err = strconv.Atoi(raw)
 		if err != nil {
 			return BadRequest("offset must be an integer")
@@ -39,21 +36,20 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) error {
 			values[i].JellyfinURL = strings.TrimRight(base, "/") + "/web/index.html#!/details?id=" + url.QueryEscape(values[i].JellyfinItemID)
 		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "limit": model.MediaRequestListLimit, "offset": offset, "has_more": len(values) == model.MediaRequestListLimit})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": model.MediaRequestListLimit, "offset": offset, "has_more": len(values) == model.MediaRequestListLimit})
 }
 
-func (s *Server) handleRequestAction(w http.ResponseWriter, r *http.Request) error {
-	var id, err = pathID(r)
-	var body struct {
-		Action string `json:"action"`
-	}
-	var retried int
+type requestActionRequest struct {
+	Action string `json:"action"`
+}
 
+func requestActionFailed(err error) error {
+	return Conflict("request action could not be completed").WithCause(err)
+}
+
+func (s *Server) handleRequestAction(w http.ResponseWriter, r *http.Request, id int64) error {
+	body, err := decodeJSON[requestActionRequest](r)
 	if err != nil {
-		return err
-	}
-	if err := decodeBody(r, &body); err != nil {
 		return err
 	}
 	request, err := s.store.Requests().Get(r.Context(), id)
@@ -63,65 +59,71 @@ func (s *Server) handleRequestAction(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
+
+	retried := 0
 	switch body.Action {
 	case "cancel":
-		err = s.store.Requests().Cancel(r.Context(), id)
+		if err := s.store.Requests().Cancel(r.Context(), id); err != nil {
+			return requestActionFailed(err)
+		}
 	case "retry":
 		if s.engine == nil {
 			return Unavailable("engine is unavailable")
 		}
-		if request.MediaType == "movie" {
-			movie, lookupErr := s.store.Movies().Get(r.Context(), request.SubjectID)
-			if lookupErr != nil || movie.TMDBID != request.TMDBID {
-				return Conflict("requested movie is missing; request the title again")
-			}
-			if movie.State == model.StateImported {
-				return Conflict("movie is already imported")
-			}
-			err = s.engine.ForceSearch(r.Context(), model.SubjectMovie, movie.ID)
-			if err == nil {
-				retried++
-			}
-		} else {
-			series, lookupErr := s.store.Series().Get(r.Context(), request.SubjectID)
-			if lookupErr != nil || series.TMDBID != request.TMDBID {
-				return Conflict("requested series is missing; request the title again")
-			}
-			if series.Status != model.SeriesFollowing {
-				return Conflict("resume the series before retrying")
-			}
-			episodes, lookupErr := s.store.Episodes().ListBySeries(r.Context(), series.ID)
-			if lookupErr != nil {
-				return lookupErr
-			}
-			for _, episode := range episodes {
-				if request.MonitorMode == "" && len(request.Seasons) > 0 && !slices.Contains(request.Seasons, episode.Season) {
-					continue
-				}
-				if episode.State != model.StateWanted && episode.State != model.StateFailed && episode.State != model.StateImportFailed {
-					continue
-				}
-				if retryErr := s.engine.ForceSearch(r.Context(), model.SubjectEpisode, episode.ID); retryErr != nil {
-					return Conflict("episode cannot be retried now").WithCause(retryErr)
-				}
-				retried++
-			}
-			if retried == 0 {
-				return Conflict("no failed or waiting episodes can be retried")
-			}
+		retried, err = s.retryRequest(r.Context(), request)
+		if err != nil {
+			return err
 		}
-		if err == nil {
-			err = s.store.Requests().Reactivate(r.Context(), id)
+		if err := s.store.Requests().Reactivate(r.Context(), id); err != nil {
+			return requestActionFailed(err)
 		}
 	default:
 		return BadRequest("action must be cancel or retry")
 	}
+	s.publishRequestsUpdated(request.ServerID, request.UserID)
+	return reply(w, r, http.StatusOK, map[string]any{"action": body.Action, "retried": retried})
+}
+
+// retryRequest forces a search for every retryable subject of the request and
+// returns how many were queued. Errors are final API errors.
+func (s *Server) retryRequest(ctx context.Context, request model.MediaRequest) (int, error) {
+	if request.MediaType == "movie" {
+		movie, err := s.store.Movies().Get(ctx, request.SubjectID)
+		if err != nil || movie.TMDBID != request.TMDBID {
+			return 0, Conflict("requested movie is missing; request the title again")
+		}
+		if movie.State == model.StateImported {
+			return 0, Conflict("movie is already imported")
+		}
+		if err := s.engine.ForceSearch(ctx, model.SubjectMovie, movie.ID); err != nil {
+			return 0, requestActionFailed(err)
+		}
+		return 1, nil
+	}
+
+	series, err := s.store.Series().Get(ctx, request.SubjectID)
+	if err != nil || series.TMDBID != request.TMDBID {
+		return 0, Conflict("requested series is missing; request the title again")
+	}
+	if series.Status != model.SeriesFollowing {
+		return 0, Conflict("resume the series before retrying")
+	}
+	episodes, err := s.store.Episodes().ListBySeries(ctx, series.ID)
 	if err != nil {
-		return Conflict("request action could not be completed").WithCause(err)
+		return 0, err
 	}
-	if s.engine != nil {
-		s.engine.Events().Publish(engine.Event{Type: "requests_updated", At: s.clock.Now(), Data: map[string]any{"server_id": request.ServerID, "user_id": request.UserID}})
+	retried := 0
+	for _, episode := range episodes {
+		if !request.IncludesEpisode(episode) || !isRetryable(episode.State) {
+			continue
+		}
+		if err := s.engine.ForceSearch(ctx, model.SubjectEpisode, episode.ID); err != nil {
+			return 0, Conflict("episode cannot be retried now").WithCause(err)
+		}
+		retried++
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"action": body.Action, "retried": retried})
-	return nil
+	if retried == 0 {
+		return 0, Conflict("no failed or waiting episodes can be retried")
+	}
+	return retried, nil
 }

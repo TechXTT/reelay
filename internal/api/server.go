@@ -26,6 +26,7 @@ import (
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metadata"
+	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 	webui "github.com/TechXTT/reelay/web"
@@ -79,13 +80,19 @@ func New(opt Options) *Server {
 		opt.Clock = clock.Real{}
 	}
 	s := &Server{
-		cfg:       opt.Config,
-		store:     opt.Store,
-		log:       opt.Logger,
-		clock:     opt.Clock,
-		startedAt: opt.Clock.Now(), engine: opt.Engine, movies: opt.Movies,
-		series: opt.Series, indexers: opt.Indexers, downloader: opt.Downloader,
-		recommendations: opt.Recommendations, externalSeries: opt.ExternalSeries, discovery: opt.Discovery,
+		cfg:             opt.Config,
+		store:           opt.Store,
+		log:             opt.Logger,
+		clock:           opt.Clock,
+		startedAt:       opt.Clock.Now(),
+		engine:          opt.Engine,
+		movies:          opt.Movies,
+		series:          opt.Series,
+		indexers:        opt.Indexers,
+		downloader:      opt.Downloader,
+		recommendations: opt.Recommendations,
+		externalSeries:  opt.ExternalSeries,
+		discovery:       opt.Discovery,
 	}
 	s.static, _ = fs.Sub(webui.Dist, "dist")
 
@@ -146,54 +153,75 @@ func (s *Server) handler() http.Handler {
 
 func (s *Server) routes(mux *http.ServeMux) {
 	// Go 1.22 pattern routing: method and wildcards in the pattern itself.
-	mux.HandleFunc("GET "+pathPing, s.wrap(s.handlePing))
-	mux.HandleFunc("GET /api/v1/health", s.wrap(s.handleHealth))
-	mux.HandleFunc("GET /api/v1/events", s.wrap(s.handleEvents))
-	mux.HandleFunc("GET /api/v1/search", s.wrap(s.handleLiveSearch))
-	mux.HandleFunc("GET /api/v1/metadata/search", s.wrap(s.handleMetadataSearch))
-	mux.HandleFunc("GET /api/v1/series", s.wrap(s.handleSeriesList))
-	mux.HandleFunc("POST /api/v1/series", s.wrap(s.handleSeriesCreate))
-	mux.HandleFunc("GET /api/v1/series/{id}", s.wrap(s.handleSeriesGet))
-	mux.HandleFunc("PATCH /api/v1/series/{id}", s.wrap(s.handleSeriesPatch))
-	mux.HandleFunc("DELETE /api/v1/series/{id}", s.wrap(s.handleSeriesDelete))
-	mux.HandleFunc("POST /api/v1/series/{id}/search", s.wrap(s.handleSeriesSearch))
-	mux.HandleFunc("GET /api/v1/movies", s.wrap(s.handleMoviesList))
-	mux.HandleFunc("POST /api/v1/movies", s.wrap(s.handleMovieCreate))
-	mux.HandleFunc("GET /api/v1/movies/{id}", s.wrap(s.handleMovieGet))
-	mux.HandleFunc("PATCH /api/v1/movies/{id}", s.wrap(s.handleMoviePatch))
-	mux.HandleFunc("DELETE /api/v1/movies/{id}", s.wrap(s.handleMovieDelete))
-	mux.HandleFunc("POST /api/v1/movies/{id}/search", s.wrap(s.handleMovieSearch))
-	mux.HandleFunc("PATCH /api/v1/episodes/{id}", s.wrap(s.handleEpisodePatch))
-	mux.HandleFunc("POST /api/v1/episodes/{id}/search", s.wrap(s.handleEpisodeSearch))
-	mux.HandleFunc("GET /api/v1/episodes/{id}/candidates", s.wrap(s.handleCandidates))
-	mux.HandleFunc("POST /api/v1/episodes/{id}/grab", s.wrap(s.handleEpisodeGrab))
-	mux.HandleFunc("GET /api/v1/queue", s.wrap(s.handleQueue))
-	mux.HandleFunc("POST /api/v1/queue/pause", s.wrap(s.handleQueuePause))
-	mux.HandleFunc("POST /api/v1/queue/resume", s.wrap(s.handleQueueResume))
-	mux.HandleFunc("DELETE /api/v1/queue/{id}", s.wrap(s.handleQueueDelete))
-	mux.HandleFunc("GET /api/v1/history", s.wrap(s.handleHistory))
-	mux.HandleFunc("GET /api/v1/profiles", s.wrap(s.handleProfilesList))
-	mux.HandleFunc("POST /api/v1/profiles", s.wrap(s.handleProfileCreate))
-	mux.HandleFunc("PATCH /api/v1/profiles/{id}", s.wrap(s.handleProfilePatch))
-	mux.HandleFunc("DELETE /api/v1/profiles/{id}", s.wrap(s.handleProfileDelete))
-	mux.HandleFunc("GET /api/v1/settings", s.wrap(s.handleSettings))
-	mux.HandleFunc("GET /api/v1/setup", s.wrap(s.handleSetup))
-	mux.HandleFunc("POST /api/v1/database/backup", s.wrap(s.handleDatabaseBackup))
-	mux.HandleFunc("POST /api/v1/system/trigger/{loop}", s.wrap(s.handleTrigger))
-	mux.HandleFunc("POST /api/v1/integrations/jellyfin/sync", s.wrap(s.handleJellyfinSync))
-	mux.HandleFunc("POST /api/v1/integrations/jellyfin/events", s.wrap(s.handleJellyfinEvents))
-	mux.HandleFunc("GET /api/v1/integrations/jellyfin/users", s.wrap(s.handleJellyfinUsers))
-	mux.HandleFunc("GET /api/v1/recommendations", s.wrap(s.handleRecommendations))
-	mux.HandleFunc("GET /api/v1/recommendations/preferences", s.wrap(s.handleRecommendationPreferences))
-	mux.HandleFunc("PUT /api/v1/recommendations/preferences", s.wrap(s.handleRecommendationPreferences))
-	mux.HandleFunc("GET /api/v1/recommendations/history", s.wrap(s.handleRecommendationHistory))
-	mux.HandleFunc("GET /api/v1/recommendations/{id}/preview", s.wrap(s.handleRecommendationPreview))
-	mux.HandleFunc("GET /api/v1/requests", s.wrap(s.handleRequests))
-	mux.HandleFunc("POST /api/v1/requests/{id}/actions", s.wrap(s.handleRequestAction))
-	mux.HandleFunc("GET /api/v1/requests/{id}/diagnostics", s.wrap(s.handleRequestDiagnostics))
-	mux.HandleFunc("POST /api/v1/requests/{id}/grab", s.wrap(s.handleRequestGrab))
-	mux.HandleFunc("POST /api/v1/recommendations/generate", s.wrap(s.handleRecommendationGenerate))
-	mux.HandleFunc("POST /api/v1/recommendations/{id}/actions", s.wrap(s.handleRecommendationAction))
+	routes := []struct {
+		pattern string
+		handler handler
+	}{
+		{"GET " + pathPing, s.handlePing},
+		{"GET /api/v1/health", s.handleHealth},
+		{"GET " + pathEvents, s.handleEvents},
+		{"GET /api/v1/search", s.handleLiveSearch},
+		{"GET /api/v1/metadata/search", s.handleMetadataSearch},
+
+		{"GET /api/v1/series", listHandler(s.store.Series().List)},
+		{"POST /api/v1/series", s.handleSeriesCreate},
+		{"GET /api/v1/series/{id}", withID(s.handleSeriesGet)},
+		{"PATCH /api/v1/series/{id}", withID(s.handleSeriesPatch)},
+		{"DELETE /api/v1/series/{id}", collectionDelete(s.deleteSeriesCollection)},
+		{"POST /api/v1/series/{id}/search", withID(s.handleSeriesSearch)},
+
+		{"GET /api/v1/movies", listHandler(s.store.Movies().List)},
+		{"POST /api/v1/movies", s.handleMovieCreate},
+		{"GET /api/v1/movies/{id}", withID(s.handleMovieGet)},
+		{"PATCH /api/v1/movies/{id}", withID(s.handleMoviePatch)},
+		{"DELETE /api/v1/movies/{id}", collectionDelete(s.deleteMovieCollection)},
+		{"POST /api/v1/movies/{id}/search", s.forceSearch(model.SubjectMovie, "movie")},
+
+		{"PATCH /api/v1/episodes/{id}", withID(s.handleEpisodePatch)},
+		{"POST /api/v1/episodes/{id}/search", s.forceSearch(model.SubjectEpisode, "episode")},
+		{"GET /api/v1/episodes/{id}/candidates", withID(s.handleCandidates)},
+		{"POST /api/v1/episodes/{id}/grab", withID(s.handleEpisodeGrab)},
+
+		{"GET /api/v1/queue", s.handleQueue},
+		{"POST /api/v1/queue/pause", s.setQueuePaused(true)},
+		{"POST /api/v1/queue/resume", s.setQueuePaused(false)},
+		{"DELETE /api/v1/queue/{id}", withID(s.handleQueueDelete)},
+		{"GET /api/v1/history", s.handleHistory},
+
+		{"GET /api/v1/profiles", listHandler(s.store.Profiles().List)},
+		{"POST /api/v1/profiles", s.handleProfileCreate},
+		{"PATCH /api/v1/profiles/{id}", withID(s.handleProfilePatch)},
+		{"DELETE /api/v1/profiles/{id}", withID(s.handleProfileDelete)},
+
+		{"GET /api/v1/settings", s.handleSettings},
+		{"GET /api/v1/setup", s.handleSetup},
+		{"POST /api/v1/database/backup", s.handleDatabaseBackup},
+		{"POST /api/v1/system/trigger/{loop}", s.handleTrigger},
+
+		{"POST /api/v1/integrations/jellyfin/sync", s.handleJellyfinSync},
+		{"POST /api/v1/integrations/jellyfin/events", s.handleJellyfinEvents},
+		{"GET /api/v1/integrations/jellyfin/users", listHandler(s.store.Recommendations().Users)},
+		{"POST /api/v1/integrations/jellyfin/trial-playback", s.handleTrialPlayback},
+
+		{"GET /api/v1/recommendations", s.handleRecommendations},
+		{"GET /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
+		{"PUT /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
+		{"GET /api/v1/recommendations/history", s.handleRecommendationHistory},
+		{"GET /api/v1/recommendations/{id}/preview", withID(s.handleRecommendationPreview)},
+		{"POST /api/v1/recommendations/generate", s.handleRecommendationGenerate},
+		{"POST /api/v1/recommendations/{id}/actions", withID(s.handleRecommendationAction)},
+
+		{"GET /api/v1/requests", s.handleRequests},
+		{"POST /api/v1/requests/{id}/actions", withID(s.handleRequestAction)},
+		{"GET /api/v1/requests/{id}/diagnostics", withID(s.handleRequestDiagnostics)},
+		{"POST /api/v1/requests/{id}/grab", withID(s.handleRequestGrab)},
+
+		{"GET /api/v1/trials", s.handleTrials},
+		{"POST /api/v1/trials/{id}/vote", withID(s.handleTrialVote)},
+	}
+	for _, route := range routes {
+		mux.HandleFunc(route.pattern, s.wrap(route.handler))
+	}
 
 	// Everything under /api that has no route yet gets a JSON 404 rather than
 	// the stdlib's text/plain "404 page not found".

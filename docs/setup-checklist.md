@@ -13,7 +13,7 @@ Completed steps below reflect that installation; unchecked steps still need veri
 3. [x] Browser fixtures covered previews, request controls, preferences, diagnostics,
    setup checks, backup downloads, and mobile layout.
 
-4. [x] Reelay is running on schema 7 with Prowlarr enabled. Both NAS roots and
+4. [x] Reelay is running on schema 8 with Prowlarr enabled. Both NAS roots and
    their free-space checks pass; qBittorrent authentication/health passes.
 5. [x] The updated Jellyfin plugin loaded and synchronized 19 real library items
    for both enabled users. A live TMDB preview returned a description, rating,
@@ -163,6 +163,32 @@ still need the checks below.
    diversity choices, then Refresh. Try a personal rating, edit it in history,
    and undo an unrated dismissal. TMDB ratings are out of 10; personal ratings are
    out of 5; match scores describe recommendation fit.
+
+## Try a series before continuing
+
+1. [x] Isolated backend and browser checks covered one episode, three episodes,
+   the first season, short series, required ratings, Continue/Stop votes,
+   user separation, shared monitoring, and mobile layout.
+   The trial-enabled Go build and Jellyfin plugin were activated locally on
+   2026-10-04. Jellyfin completed sync for both enabled users after restart.
+   Previous database/configuration/binary files are preserved under
+   `data/backups/pre-trials-20261004-144026`; the previous plugin is under
+   `F:\New folder\plugin-backups\pre-trials-20261004-144026`.
+2. [ ] Select your Jellyfin user in Reelay Discover, switch to Series, choose
+   **Try 1 episode**, **Try 3 episodes**, or **Try first season**, and request a
+   title you intend to watch. Trials start from the beginning and skip specials;
+   future episodes wait for their air date plus grace.
+3. [ ] Watch the selected episodes in the real Jellyfin library. Allow about a
+   minute for the updated plugin to report watched status. Confirm the Discover
+   trial panel shows the correct watched count and unlocks the vote.
+4. [ ] Choose a personal rating from 1 to 5, then **Continue series** or **Stop**.
+   Continue automatically follows the full series, including future episodes.
+   Stop ends your request without stopping other users' shared monitoring.
+   The rating records your taste; the explicit vote controls continuation.
+5. [ ] On another installation, install both the Go build and matching updated
+   Jellyfin plugin from this working tree. Published v0.1.5 artifacts predate
+   trial support. Preserve the database before the schema 8 migration; a schema 7
+   binary cannot operate on the migrated database.
 
 ## Configure availability
 

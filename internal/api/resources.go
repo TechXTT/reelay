@@ -1,38 +1,83 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
 )
 
-func decodeBody(r *http.Request, dst any) error {
+// decodeJSON reads a strict JSON request body: at most 1 MiB, no unknown fields.
+func decodeJSON[T any](r *http.Request) (T, error) {
+	var body T
+
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return BadRequest("invalid JSON body: %v", err)
+	if err := dec.Decode(&body); err != nil {
+		return body, BadRequest("invalid JSON body: %v", err)
 	}
+	return body, nil
+}
+
+// reply writes v as the JSON response; handlers end with `return reply(...)`.
+func reply(w http.ResponseWriter, r *http.Request, status int, v any) error {
+	writeJSON(w, loggerFrom(r), status, v)
 	return nil
 }
 
-func pathID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		return 0, BadRequest("invalid id %q", r.PathValue("id"))
+// withID parses the positive {id} path value before calling h.
+func withID(h func(http.ResponseWriter, *http.Request, int64) error) handler {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			return BadRequest("invalid id %q", r.PathValue("id"))
+		}
+		return h(w, r, id)
 	}
-	return id, nil
 }
 
-func (s *Server) handleSeriesList(w http.ResponseWriter, r *http.Request) error {
-	values, err := s.store.Series().List(r.Context())
-	if err != nil {
-		return err
+// listHandler serves {"items": list(ctx)}.
+func listHandler[T any](list func(context.Context) ([]T, error)) handler {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		values, err := list(r.Context())
+		if err != nil {
+			return err
+		}
+		return reply(w, r, http.StatusOK, map[string]any{"items": values})
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
-	return nil
+}
+
+// userScope reads the required server_id and user_id query parameters.
+func userScope(r *http.Request) (string, string, error) {
+	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if serverID == "" || userID == "" {
+		return "", "", BadRequest("server_id and user_id are required")
+	}
+	return serverID, userID, nil
+}
+
+func (s *Server) publishRequestsUpdated(serverID, userID string) {
+	if s.engine == nil {
+		return
+	}
+	s.engine.Events().Publish(engine.Event{Type: "requests_updated", At: s.clock.Now(), Data: map[string]any{"server_id": serverID, "user_id": userID}})
+}
+
+// trigger wakes the named engine loops. It does nothing without an engine,
+// which is how the API runs in tests and read-only setups.
+func (s *Server) trigger(loops ...string) {
+	if s.engine == nil {
+		return
+	}
+	for _, loop := range loops {
+		_ = s.engine.Trigger(loop)
+	}
 }
 
 type seriesCreateRequest struct {
@@ -45,8 +90,8 @@ type seriesCreateRequest struct {
 }
 
 func (s *Server) handleSeriesCreate(w http.ResponseWriter, r *http.Request) error {
-	var req seriesCreateRequest
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[seriesCreateRequest](r)
+	if err != nil {
 		return err
 	}
 	if s.series == nil {
@@ -89,15 +134,10 @@ func (s *Server) handleSeriesCreate(w http.ResponseWriter, r *http.Request) erro
 	if s.engine != nil {
 		_ = s.engine.MetadataOnce(r.Context())
 	}
-	writeJSON(w, s.logFor(r), http.StatusCreated, created)
-	return nil
+	return reply(w, r, http.StatusCreated, created)
 }
 
-func (s *Server) handleSeriesGet(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleSeriesGet(w http.ResponseWriter, r *http.Request, id int64) error {
 	series, err := s.store.Series().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("series %d not found", id)
@@ -106,8 +146,7 @@ func (s *Server) handleSeriesGet(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"series": series, "episodes": episodes})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"series": series, "episodes": episodes})
 }
 
 type seriesPatchRequest struct {
@@ -117,17 +156,13 @@ type seriesPatchRequest struct {
 	IsAnime     *bool               `json:"is_anime"`
 }
 
-func (s *Server) handleSeriesPatch(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleSeriesPatch(w http.ResponseWriter, r *http.Request, id int64) error {
 	item, err := s.store.Series().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("series %d not found", id)
 	}
-	var req seriesPatchRequest
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[seriesPatchRequest](r)
+	if err != nil {
 		return err
 	}
 	if req.MonitorMode != nil {
@@ -146,31 +181,27 @@ func (s *Server) handleSeriesPatch(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return BadRequest("invalid series update").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, item)
-	return nil
+	return reply(w, r, http.StatusOK, item)
 }
 
-func (s *Server) handleSeriesDelete(w http.ResponseWriter, r *http.Request) error {
-	return s.handleCollectionDelete(w, r, s.deleteSeriesCollection)
+// isRetryable reports whether a search can be forced for an episode in this state.
+func isRetryable(state model.ItemState) bool {
+	return state == model.StateWanted || state == model.StateFailed || state == model.StateImportFailed
 }
 
-func (s *Server) handleSeriesSearch(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleSeriesSearch(w http.ResponseWriter, r *http.Request, id int64) error {
 	episodes, err := s.store.Episodes().ListBySeries(r.Context(), id)
 	if err != nil {
 		return err
 	}
 	count := 0
 	for _, episode := range episodes {
-		if episode.State == model.StateWanted || episode.State == model.StateFailed || episode.State == model.StateImportFailed {
-			if err := s.engine.ForceSearch(r.Context(), model.SubjectEpisode, episode.ID); err == nil {
-				count++
-			}
+		if !isRetryable(episode.State) {
+			continue
+		}
+		if err := s.engine.ForceSearch(r.Context(), model.SubjectEpisode, episode.ID); err == nil {
+			count++
 		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusAccepted, map[string]any{"searched": count})
-	return nil
+	return reply(w, r, http.StatusAccepted, map[string]any{"searched": count})
 }

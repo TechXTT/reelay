@@ -20,12 +20,21 @@ const (
 	ctxLogger ctxKey = iota
 )
 
-// logFor returns the request-scoped logger, falling back to the server logger.
-func (s *Server) logFor(r *http.Request) *slog.Logger {
-	if l, ok := r.Context().Value(ctxLogger).(*slog.Logger); ok {
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+// requestLogger returns the logger requestContext attached, if any.
+func requestLogger(r *http.Request) (*slog.Logger, bool) {
+	l, ok := r.Context().Value(ctxLogger).(*slog.Logger)
+	return l, ok
+}
+
+// loggerFrom returns the request-scoped logger, or a discarding one when the
+// request did not pass through requestContext.
+func loggerFrom(r *http.Request) *slog.Logger {
+	if l, ok := requestLogger(r); ok {
 		return l
 	}
-	return s.log
+	return discardLogger
 }
 
 type middleware func(http.Handler) http.Handler
@@ -108,7 +117,7 @@ func accessLog(next http.Handler) http.Handler {
 		if rec.status == 0 {
 			rec.status = http.StatusOK
 		}
-		log, ok := r.Context().Value(ctxLogger).(*slog.Logger)
+		log, ok := requestLogger(r)
 		if !ok {
 			return
 		}
@@ -146,25 +155,16 @@ func recoverPanic(next http.Handler) http.Handler {
 			if p == http.ErrAbortHandler {
 				panic(p)
 			}
-			log, ok := r.Context().Value(ctxLogger).(*slog.Logger)
-			if ok {
-				log.Error("handler panic",
-					"panic", p,
-					"path", r.URL.Path,
-					"stack", string(debug.Stack()))
-			}
-			writeJSON(w, orDiscard(log, ok), http.StatusInternalServerError,
+			log := loggerFrom(r)
+			log.Error("handler panic",
+				"panic", p,
+				"path", r.URL.Path,
+				"stack", string(debug.Stack()))
+			writeJSON(w, log, http.StatusInternalServerError,
 				errorEnvelope{Error: &Error{Code: CodeInternal, Message: "internal error"}})
 		}()
 		next.ServeHTTP(w, r)
 	})
-}
-
-func orDiscard(l *slog.Logger, ok bool) *slog.Logger {
-	if ok {
-		return l
-	}
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // bearerAuth enforces the static token on API data and command routes except
@@ -221,13 +221,6 @@ func cutPrefixFold(s, prefix string) (string, bool) {
 		return "", false
 	}
 	return s[len(prefix):], true
-}
-
-func loggerFrom(r *http.Request) *slog.Logger {
-	if l, ok := r.Context().Value(ctxLogger).(*slog.Logger); ok {
-		return l
-	}
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // cors allows only the configured origins. An empty list means same-origin

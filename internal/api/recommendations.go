@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -20,9 +21,13 @@ type jellyfinSyncRequest struct {
 	Items     []model.JellyfinItem `json:"items"`
 }
 
+type jellyfinEventsRequest struct {
+	Events []model.JellyfinActivity `json:"events"`
+}
+
 func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) error {
-	var req jellyfinSyncRequest
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[jellyfinSyncRequest](r)
+	if err != nil {
 		return err
 	}
 	if len(req.Users) > 100 || len(req.Items) > 500 {
@@ -52,7 +57,6 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 	}
 	removed := 0
 	if req.Complete {
-		var err error
 		removed, err = s.store.Recommendations().CompleteSync(r.Context(), req.ServerID, req.SyncToken)
 		if err != nil {
 			return BadRequest("invalid sync completion").WithCause(err)
@@ -67,15 +71,12 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 			}})
 		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed})
 }
 
 func (s *Server) handleJellyfinEvents(w http.ResponseWriter, r *http.Request) error {
-	var req struct {
-		Events []model.JellyfinActivity `json:"events"`
-	}
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[jellyfinEventsRequest](r)
+	if err != nil {
 		return err
 	}
 	if len(req.Events) == 0 || len(req.Events) > 500 {
@@ -85,23 +86,13 @@ func (s *Server) handleJellyfinEvents(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return BadRequest("invalid activity batch").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"accepted": inserted, "duplicates": len(req.Events) - inserted})
-	return nil
-}
-
-func (s *Server) handleJellyfinUsers(w http.ResponseWriter, r *http.Request) error {
-	values, err := s.store.Recommendations().Users(r.Context())
-	if err != nil {
-		return err
-	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"accepted": inserted, "duplicates": len(req.Events) - inserted})
 }
 
 func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) error {
-	serverID, userID := strings.TrimSpace(r.URL.Query().Get("server_id")), strings.TrimSpace(r.URL.Query().Get("user_id"))
-	if serverID == "" || userID == "" {
-		return BadRequest("server_id and user_id are required")
+	serverID, userID, err := userScope(r)
+	if err != nil {
+		return err
 	}
 	mediaType := r.URL.Query().Get("media_type")
 	if mediaType != "" && mediaType != "movie" && mediaType != "series" {
@@ -113,31 +104,25 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) e
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "limit": limit, "offset": offset})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": limit, "offset": offset})
 }
 
-func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Request) error {
-	var id, err = pathID(r)
-	var provider, supported = s.discovery.(metadata.PreviewProvider)
-	var response struct {
-		Title          string                  `json:"title"`
-		Year           int                     `json:"year"`
-		MediaType      string                  `json:"media_type"`
-		Overview       string                  `json:"overview"`
-		PosterURL      string                  `json:"poster_url"`
-		Genres         []string                `json:"genres"`
-		People         []string                `json:"people"`
-		RuntimeMinutes int                     `json:"runtime_minutes"`
-		VoteAverage    float64                 `json:"vote_average"`
-		VoteCount      int                     `json:"vote_count"`
-		Videos         []metadata.PreviewVideo `json:"videos"`
-		Seasons        []int                   `json:"seasons"`
-	}
+type recommendationPreviewResponse struct {
+	Title          string                  `json:"title"`
+	Year           int                     `json:"year"`
+	MediaType      string                  `json:"media_type"`
+	Overview       string                  `json:"overview"`
+	PosterURL      string                  `json:"poster_url"`
+	Genres         []string                `json:"genres"`
+	People         []string                `json:"people"`
+	RuntimeMinutes int                     `json:"runtime_minutes"`
+	VoteAverage    float64                 `json:"vote_average"`
+	VoteCount      int                     `json:"vote_count"`
+	Videos         []metadata.PreviewVideo `json:"videos"`
+	Seasons        []int                   `json:"seasons"`
+}
 
-	if err != nil {
-		return err
-	}
+func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Request, id int64) error {
 	rec, err := s.store.Recommendations().Get(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		return NotFound("recommendation %d not found", id)
@@ -145,6 +130,7 @@ func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return err
 	}
+	provider, supported := s.discovery.(metadata.PreviewProvider)
 	if !supported {
 		return Unavailable("recommendation previews are unavailable")
 	}
@@ -152,25 +138,34 @@ func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return Unavailable("preview could not be loaded from TMDB").WithCause(err)
 	}
-	response.Title, response.Year, response.MediaType = detail.Title, detail.Year, rec.MediaType
-	response.Overview, response.PosterURL = detail.Overview, detail.PosterURL
-	response.Genres, response.People, response.RuntimeMinutes = detail.Genres, detail.People, detail.RuntimeMinutes
-	response.VoteAverage, response.VoteCount, response.Videos = detail.VoteAverage, detail.VoteCount, detail.Videos
-	response.Seasons = detail.Seasons
-	writeJSON(w, s.logFor(r), http.StatusOK, response)
-	return nil
+	return reply(w, r, http.StatusOK, recommendationPreviewResponse{
+		Title:          detail.Title,
+		Year:           detail.Year,
+		MediaType:      rec.MediaType,
+		Overview:       detail.Overview,
+		PosterURL:      detail.PosterURL,
+		Genres:         detail.Genres,
+		People:         detail.People,
+		RuntimeMinutes: detail.RuntimeMinutes,
+		VoteAverage:    detail.VoteAverage,
+		VoteCount:      detail.VoteCount,
+		Videos:         detail.Videos,
+		Seasons:        detail.Seasons,
+	})
+}
+
+type recommendationGenerateRequest struct {
+	ServerID  string `json:"server_id"`
+	UserID    string `json:"user_id"`
+	MediaType string `json:"media_type"`
 }
 
 func (s *Server) handleRecommendationGenerate(w http.ResponseWriter, r *http.Request) error {
 	if s.recommendations == nil || !s.cfg.Recommendations.Enabled {
 		return Unavailable("recommendations are disabled")
 	}
-	var req struct {
-		ServerID  string `json:"server_id"`
-		UserID    string `json:"user_id"`
-		MediaType string `json:"media_type"`
-	}
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[recommendationGenerateRequest](r)
+	if err != nil {
 		return err
 	}
 	if req.ServerID == "" || req.UserID == "" || (req.MediaType != "movie" && req.MediaType != "series") {
@@ -179,27 +174,25 @@ func (s *Server) handleRecommendationGenerate(w http.ResponseWriter, r *http.Req
 	if err := s.recommendations.Generate(r.Context(), req.ServerID, req.UserID, req.MediaType); err != nil {
 		return Unavailable("recommendations could not be generated").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"generated": true})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"generated": true})
 }
 
-func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
-	var req struct {
-		ActionID    string `json:"action_id"`
-		Action      string `json:"action"`
-		Rating      int    `json:"rating"`
-		MonitorMode string `json:"monitor_mode"`
-		Seasons     []int  `json:"seasons"`
-	}
-	if err := decodeBody(r, &req); err != nil {
-		return err
-	}
+type recommendationActionRequest struct {
+	ActionID    string `json:"action_id"`
+	Action      string `json:"action"`
+	Rating      int    `json:"rating"`
+	MonitorMode string `json:"monitor_mode"`
+	Seasons     []int  `json:"seasons"`
+	Trial       string `json:"trial"`
+}
+
+// validate checks the request shape before any state is read.
+func (req recommendationActionRequest) validate() error {
 	if strings.TrimSpace(req.ActionID) == "" {
 		return BadRequest("action_id is required")
+	}
+	if req.Trial != "" && (req.Action != "request" || req.MonitorMode != "" || len(req.Seasons) > 0 || (req.Trial != "one_episode" && req.Trial != "three_episodes" && req.Trial != "first_season")) {
+		return BadRequest("trial must be one_episode, three_episodes, or first_season on a series request without another scope")
 	}
 	if req.Action != "request" && req.Action != "dismiss" && req.Action != "rate" && req.Action != "undo" {
 		return BadRequest("action must be request, dismiss, rate, or undo")
@@ -221,123 +214,192 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	if req.MonitorMode != "" && req.MonitorMode != string(model.MonitorLatestSeason) && req.MonitorMode != string(model.MonitorAll) && req.MonitorMode != string(model.MonitorFutureOnly) {
 		return BadRequest("monitor_mode must be latest_season, all, or future_only")
 	}
+	return nil
+}
+
+func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Request, id int64) error {
+	req, err := decodeJSON[recommendationActionRequest](r)
+	if err != nil {
+		return err
+	}
+	if err := req.validate(); err != nil {
+		return err
+	}
 	rec, err := s.store.Recommendations().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("recommendation %d not found", id)
 	}
-	if rec.MediaType != "series" && (req.MonitorMode != "" || len(req.Seasons) > 0) {
+	if rec.MediaType != "series" && (req.MonitorMode != "" || len(req.Seasons) > 0 || req.Trial != "") {
 		return BadRequest("monitor_mode is only valid for series requests")
 	}
+
 	var subject any
 	metadataChanged := false
 	if req.Action == "request" {
-		recorded, checkErr := s.store.Requests().ActionRecorded(r.Context(), req.ActionID, rec.ServerID, rec.UserID, rec.MediaType, rec.TMDBID)
-		if checkErr != nil {
-			if errors.Is(checkErr, store.ErrActionIDConflict) {
-				return Conflict("action_id was already used for another request").WithCause(checkErr)
-			}
-			return checkErr
-		}
-		requestedMonitorMode := req.MonitorMode
-		if rec.MediaType == "series" && requestedMonitorMode == "" && len(req.Seasons) == 0 {
-			requestedMonitorMode = string(model.MonitorFutureOnly)
-		}
-		monitorMode := requestedMonitorMode
-		if len(req.Seasons) > 0 {
-			monitorMode = string(model.MonitorNone)
-		}
-		if recorded {
-			monitorMode = ""
-			requestedMonitorMode = ""
-		}
-		subject, metadataChanged, err = s.requestRecommendation(r, rec, monitorMode, !recorded)
+		subject, metadataChanged, err = s.applyRequestAction(r.Context(), rec, req)
 		if err != nil {
-			return Conflict("recommendation could not be requested").WithCause(err)
-		}
-		request := model.MediaRequest{ServerID: rec.ServerID, UserID: rec.UserID, MediaType: rec.MediaType, TMDBID: rec.TMDBID,
-			Title: rec.Title, Year: rec.Year, RequestedAt: s.clock.Now(), SubjectType: rec.MediaType}
-		if rec.MediaType == "series" {
-			request.MonitorMode = requestedMonitorMode
-		}
-		switch value := subject.(type) {
-		case model.Movie:
-			request.Title, request.Year, request.SubjectID = value.Title, value.Year, value.ID
-		case model.Series:
-			request.Title, request.Year, request.SubjectID = value.Title, value.Year, value.ID
-		default:
-			return Conflict("recommendation returned an unsupported subject")
-		}
-		if _, err = s.store.Requests().CreateForAction(r.Context(), request, !recorded); err != nil {
-			return Conflict("recommendation could not be tracked").WithCause(err)
-		}
-		if !recorded && len(req.Seasons) > 0 {
-			if err := s.store.Requests().AddSeasons(r.Context(), rec.ServerID, rec.UserID, rec.TMDBID, request.SubjectID, req.Seasons); err != nil {
-				return err
-			}
-			metadataChanged = true
+			return err
 		}
 	}
+
 	inserted := true
-	if req.Action == "undo" {
+	switch req.Action {
+	case "undo":
 		err = s.store.Recommendations().UndoDismissal(r.Context(), id)
-	} else if req.Action == "rate" {
+	case "rate":
 		_, err = s.store.Recommendations().RecordRating(r.Context(), id, req.ActionID, req.Rating)
-	} else {
+	default:
 		_, inserted, err = s.store.Recommendations().RecordAction(r.Context(), id, req.ActionID, req.Action)
 	}
 	if err != nil {
 		return err
 	}
-	if s.engine != nil {
-		if req.Action == "request" {
-			if metadataChanged {
-				_ = s.engine.MetadataOnce(r.Context())
-			}
-			_ = s.engine.Trigger("search")
-			s.engine.Events().Publish(engine.Event{Type: "requests_updated", At: s.clock.Now(), Data: map[string]any{
-				"server_id": rec.ServerID, "user_id": rec.UserID,
-			}})
-		} else if req.Action == "rate" {
-			_ = s.engine.Trigger("recommendations")
+
+	switch req.Action {
+	case "request":
+		if s.engine != nil && metadataChanged {
+			_ = s.engine.MetadataOnce(r.Context())
+		}
+		s.trigger("search")
+		s.publishRequestsUpdated(rec.ServerID, rec.UserID)
+	case "rate":
+		s.trigger("recommendations")
+	}
+	return reply(w, r, http.StatusOK, map[string]any{"recommendation": rec, "subject": subject, "created": inserted, "rating": req.Rating})
+}
+
+// applyRequestAction turns a recommendation into a tracked request: it enforces
+// the trial rules, finds or creates the library subject, and records the
+// request. A repeated action_id reuses the recorded request and creates nothing.
+func (s *Server) applyRequestAction(ctx context.Context, rec model.Recommendation, req recommendationActionRequest) (any, bool, error) {
+	recorded, err := s.store.Requests().ActionRecorded(ctx, req.ActionID, rec.ServerID, rec.UserID, rec.MediaType, rec.TMDBID)
+	if err != nil {
+		if errors.Is(err, store.ErrActionIDConflict) {
+			return nil, false, Conflict("action_id was already used for another request").WithCause(err)
+		}
+		return nil, false, err
+	}
+	if !recorded && rec.MediaType == "series" {
+		if err := s.checkTrialRules(ctx, rec, req.Trial); err != nil {
+			return nil, false, err
 		}
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"recommendation": rec, "subject": subject, "created": inserted, "rating": req.Rating})
+
+	requestedMonitorMode := req.MonitorMode
+	if rec.MediaType == "series" && requestedMonitorMode == "" && len(req.Seasons) == 0 && req.Trial == "" {
+		requestedMonitorMode = string(model.MonitorFutureOnly)
+	}
+	monitorMode := requestedMonitorMode
+	if len(req.Seasons) > 0 || req.Trial != "" {
+		monitorMode = string(model.MonitorNone)
+	}
+	if recorded {
+		monitorMode = ""
+		requestedMonitorMode = ""
+	}
+	subject, metadataChanged, err := s.requestRecommendation(ctx, rec, monitorMode, !recorded)
+	if err != nil {
+		return nil, false, Conflict("recommendation could not be requested").WithCause(err)
+	}
+
+	request := model.MediaRequest{ServerID: rec.ServerID, UserID: rec.UserID, MediaType: rec.MediaType, TMDBID: rec.TMDBID,
+		Title: rec.Title, Year: rec.Year, RequestedAt: s.clock.Now(), SubjectType: rec.MediaType}
+	if rec.MediaType == "series" {
+		request.MonitorMode = requestedMonitorMode
+	}
+	switch value := subject.(type) {
+	case model.Movie:
+		request.Title, request.Year, request.SubjectID = value.Title, value.Year, value.ID
+	case model.Series:
+		request.Title, request.Year, request.SubjectID = value.Title, value.Year, value.ID
+	default:
+		return nil, false, Conflict("recommendation returned an unsupported subject")
+	}
+	if _, err = s.store.Requests().CreateForAction(ctx, request, !recorded); err != nil {
+		return nil, false, Conflict("recommendation could not be tracked").WithCause(err)
+	}
+	if recorded {
+		return subject, metadataChanged, nil
+	}
+	if len(req.Seasons) > 0 {
+		if err := s.store.Requests().AddSeasons(ctx, rec.ServerID, rec.UserID, rec.TMDBID, request.SubjectID, req.Seasons); err != nil {
+			return nil, false, err
+		}
+		metadataChanged = true
+	}
+	if req.Trial != "" {
+		if err := s.store.Requests().StartTrial(ctx, rec.ServerID, rec.UserID, rec.TMDBID, req.Trial); err != nil {
+			return nil, false, Conflict("trial could not be started").WithCause(err)
+		}
+		metadataChanged = true
+	}
+	return subject, metadataChanged, nil
+}
+
+// checkTrialRules rejects a series request that would bypass an open trial or
+// start a trial on a series that already finished one.
+func (s *Server) checkTrialRules(ctx context.Context, rec model.Recommendation, requestedTrial string) error {
+	trial, err := s.store.Requests().TrialForTitle(ctx, rec.ServerID, rec.UserID, rec.TMDBID)
+	if err != nil {
+		return err
+	}
+	if trial == nil {
+		return nil
+	}
+	if trial.Decision == "" && (requestedTrial == "" || requestedTrial != trial.Scope) {
+		return Conflict("vote on the existing trial before requesting more episodes")
+	}
+	if requestedTrial != "" && trial.Decision != "" {
+		return Conflict("this series already has a completed trial")
+	}
 	return nil
 }
 
-func (s *Server) requestRecommendation(r *http.Request, rec model.Recommendation, monitorMode string, createIfMissing bool) (any, bool, error) {
-	profile, err := s.store.Profiles().Default(r.Context())
+func (s *Server) requestRecommendation(ctx context.Context, rec model.Recommendation, monitorMode string, createIfMissing bool) (any, bool, error) {
+	profile, err := s.store.Profiles().Default(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 	if rec.MediaType == "movie" {
-		if existing, err := s.store.Movies().GetByTMDBID(r.Context(), rec.TMDBID); err == nil {
-			return existing, false, nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return nil, false, err
-		}
-		if !createIfMissing {
-			return nil, false, store.ErrNotFound
-		}
-		detail, err := s.movies.MovieDetails(r.Context(), rec.TMDBID)
-		if err != nil {
-			return nil, false, err
-		}
-		created, err := s.store.Movies().Create(r.Context(), model.Movie{Title: detail.Title, Year: detail.Year, TMDBID: detail.TMDBID, IMDBID: detail.IMDBID, RuntimeMinutes: detail.RuntimeMinutes, ProfileID: profile.ID, RootFolder: s.cfg.Library.MovieRoot, State: model.StateWanted}, "requested from Jellyfin recommendation")
-		return created, false, err
+		return s.requestMovie(ctx, rec, profile, createIfMissing)
 	}
-	if existing, err := s.store.Series().GetByTMDBID(r.Context(), rec.TMDBID); err == nil {
+	return s.requestSeries(ctx, rec, profile, monitorMode, createIfMissing)
+}
+
+func (s *Server) requestMovie(ctx context.Context, rec model.Recommendation, profile model.QualityProfile, createIfMissing bool) (any, bool, error) {
+	existing, err := s.store.Movies().GetByTMDBID(ctx, rec.TMDBID)
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, false, err
+	}
+	if !createIfMissing {
+		return nil, false, store.ErrNotFound
+	}
+	detail, err := s.movies.MovieDetails(ctx, rec.TMDBID)
+	if err != nil {
+		return nil, false, err
+	}
+	created, err := s.store.Movies().Create(ctx, model.Movie{Title: detail.Title, Year: detail.Year, TMDBID: detail.TMDBID, IMDBID: detail.IMDBID, RuntimeMinutes: detail.RuntimeMinutes, ProfileID: profile.ID, RootFolder: s.cfg.Library.MovieRoot, State: model.StateWanted}, "requested from Jellyfin recommendation")
+	return created, false, err
+}
+
+func (s *Server) requestSeries(ctx context.Context, rec model.Recommendation, profile model.QualityProfile, monitorMode string, createIfMissing bool) (any, bool, error) {
+	existing, err := s.store.Series().GetByTMDBID(ctx, rec.TMDBID)
+	if err == nil {
 		changed := false
 		widenLatestSeason := monitorMode == string(model.MonitorLatestSeason) && (existing.MonitorMode == model.MonitorFutureOnly || existing.MonitorMode == model.MonitorNone)
 		widenAll := monitorMode == string(model.MonitorAll) && existing.MonitorMode != model.MonitorAll
 		widenFuture := monitorMode == string(model.MonitorFutureOnly) && existing.MonitorMode == model.MonitorNone
 		if existing.Status == model.SeriesFollowing && (widenLatestSeason || widenAll || widenFuture) {
 			existing.MonitorMode = model.MonitorMode(monitorMode)
-			existing, err = s.store.Series().Update(r.Context(), existing)
+			existing, err = s.store.Series().Update(ctx, existing)
 			changed = err == nil
 		}
 		return existing, changed, err
-	} else if !errors.Is(err, store.ErrNotFound) {
+	}
+	if !errors.Is(err, store.ErrNotFound) {
 		return nil, false, err
 	}
 	if !createIfMissing {
@@ -346,11 +408,11 @@ func (s *Server) requestRecommendation(r *http.Request, rec model.Recommendation
 	if s.discovery == nil || s.externalSeries == nil {
 		return nil, false, errors.New("series recommendation providers are unavailable")
 	}
-	detail, err := s.discovery.DiscoveryDetails(r.Context(), rec.MediaType, rec.TMDBID)
+	detail, err := s.discovery.DiscoveryDetails(ctx, rec.MediaType, rec.TMDBID)
 	if err != nil {
 		return nil, false, err
 	}
-	series, err := s.externalSeries.LookupSeries(r.Context(), detail.TVDBID, detail.IMDBID)
+	series, err := s.externalSeries.LookupSeries(ctx, detail.TVDBID, detail.IMDBID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -358,6 +420,6 @@ func (s *Server) requestRecommendation(r *http.Request, rec model.Recommendation
 	if monitorMode != "" {
 		mode = model.MonitorMode(monitorMode)
 	}
-	created, err := s.store.Series().Create(r.Context(), model.Series{Title: series.Title, Year: series.Year, TVmazeID: series.TVmazeID, TMDBID: rec.TMDBID, IMDBID: series.IMDBID, Aliases: series.Aliases, MonitorMode: mode, Status: model.SeriesFollowing, ProfileID: profile.ID, RootFolder: s.cfg.Library.TVRoot, RuntimeMinutes: series.RuntimeMinutes})
+	created, err := s.store.Series().Create(ctx, model.Series{Title: series.Title, Year: series.Year, TVmazeID: series.TVmazeID, TMDBID: rec.TMDBID, IMDBID: series.IMDBID, Aliases: series.Aliases, MonitorMode: mode, Status: model.SeriesFollowing, ProfileID: profile.ID, RootFolder: s.cfg.Library.TVRoot, RuntimeMinutes: series.RuntimeMinutes})
 	return created, err == nil, err
 }

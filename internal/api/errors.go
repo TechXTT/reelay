@@ -133,7 +133,7 @@ type handler func(http.ResponseWriter, *http.Request) error
 func (s *Server) wrap(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
-			writeError(w, s.logFor(r), err)
+			writeError(w, loggerFrom(r), err)
 		}
 	}
 }

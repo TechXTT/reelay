@@ -54,8 +54,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	checks = append(checks, map[string]any{"name": "Jellyfin Discover", "status": map[bool]string{true: "ok", false: "skipped"}[len(users) > 0], "detail": "Synchronize users using the Reelay Jellyfin plugin; enable Discover for each intended user.", "action": "In the plugin, configure Reelay URL and token, synchronize, then enable the user's Discover library."})
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"checks": checks, "users": users, "database": filepath.Base(s.store.Path()), "webhook_enabled": s.cfg.Availability.WebhookURL != ""})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"checks": checks, "users": users, "database": filepath.Base(s.store.Path()), "webhook_enabled": s.cfg.Availability.WebhookURL != ""})
 }
 
 func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) error {

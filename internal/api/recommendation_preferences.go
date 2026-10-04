@@ -8,47 +8,37 @@ import (
 )
 
 func (s *Server) handleRecommendationPreferences(w http.ResponseWriter, r *http.Request) error {
-	var serverID = strings.TrimSpace(r.URL.Query().Get("server_id"))
-	var userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
-	var preferences store.RecommendationPreferences
-
-	if serverID == "" || userID == "" {
-		return BadRequest("server_id and user_id are required")
-	}
-	users, err := s.store.Recommendations().Users(r.Context())
+	serverID, userID, err := userScope(r)
 	if err != nil {
 		return err
 	}
-	found := false
-	for _, user := range users {
-		if user.ServerID == serverID && user.UserID == userID {
-			found = true
-		}
+	known, err := s.store.Recommendations().UserExists(r.Context(), serverID, userID)
+	if err != nil {
+		return err
 	}
-	if !found {
+	if !known {
 		return NotFound("Jellyfin user not found")
 	}
 	if r.Method == http.MethodPut {
-		if err := decodeBody(r, &preferences); err != nil {
+		preferences, err := decodeJSON[store.RecommendationPreferences](r)
+		if err != nil {
 			return err
 		}
 		if err := s.store.Recommendations().SavePreferences(r.Context(), serverID, userID, preferences); err != nil {
 			return BadRequest("invalid preferences").WithCause(err)
 		}
 	}
-	preferences, err = s.store.Recommendations().Preferences(r.Context(), serverID, userID)
+	preferences, err := s.store.Recommendations().Preferences(r.Context(), serverID, userID)
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, preferences)
-	return nil
+	return reply(w, r, http.StatusOK, preferences)
 }
 
 func (s *Server) handleRecommendationHistory(w http.ResponseWriter, r *http.Request) error {
-	var serverID = strings.TrimSpace(r.URL.Query().Get("server_id"))
-	var userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
-	var mediaType = r.URL.Query().Get("media_type")
-
+	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	mediaType := r.URL.Query().Get("media_type")
 	if serverID == "" || userID == "" || (mediaType != "movie" && mediaType != "series") {
 		return BadRequest("server_id, user_id and media_type are required")
 	}
@@ -60,6 +50,5 @@ func (s *Server) handleRecommendationHistory(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return err
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values, "ratings": ratings})
-	return nil
+	return reply(w, r, http.StatusOK, map[string]any{"items": values, "ratings": ratings})
 }

@@ -6,15 +6,6 @@ import (
 	"github.com/TechXTT/reelay/internal/model"
 )
 
-func (s *Server) handleMoviesList(w http.ResponseWriter, r *http.Request) error {
-	values, err := s.store.Movies().List(r.Context())
-	if err != nil {
-		return err
-	}
-	writeJSON(w, s.logFor(r), http.StatusOK, map[string]any{"items": values})
-	return nil
-}
-
 type movieCreateRequest struct {
 	Query      string `json:"query"`
 	TMDBID     int    `json:"tmdb_id"`
@@ -24,8 +15,8 @@ type movieCreateRequest struct {
 }
 
 func (s *Server) handleMovieCreate(w http.ResponseWriter, r *http.Request) error {
-	var req movieCreateRequest
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[movieCreateRequest](r)
+	if err != nil {
 		return err
 	}
 	if s.movies == nil {
@@ -58,38 +49,28 @@ func (s *Server) handleMovieCreate(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return Conflict("could not add movie").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusCreated, created)
-	return nil
+	return reply(w, r, http.StatusCreated, created)
 }
 
-func (s *Server) handleMovieGet(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleMovieGet(w http.ResponseWriter, r *http.Request, id int64) error {
 	item, err := s.store.Movies().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("movie %d not found", id)
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, item)
-	return nil
+	return reply(w, r, http.StatusOK, item)
 }
 
 type moviePatchRequest struct {
 	ProfileID *int64 `json:"profile_id"`
 }
 
-func (s *Server) handleMoviePatch(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
+func (s *Server) handleMoviePatch(w http.ResponseWriter, r *http.Request, id int64) error {
 	item, err := s.store.Movies().Get(r.Context(), id)
 	if err != nil {
 		return NotFound("movie %d not found", id)
 	}
-	var req moviePatchRequest
-	if err := decodeBody(r, &req); err != nil {
+	req, err := decodeJSON[moviePatchRequest](r)
+	if err != nil {
 		return err
 	}
 	if req.ProfileID != nil {
@@ -99,14 +80,5 @@ func (s *Server) handleMoviePatch(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return BadRequest("invalid movie update").WithCause(err)
 	}
-	writeJSON(w, s.logFor(r), http.StatusOK, item)
-	return nil
-}
-
-func (s *Server) handleMovieDelete(w http.ResponseWriter, r *http.Request) error {
-	return s.handleCollectionDelete(w, r, s.deleteMovieCollection)
-}
-
-func (s *Server) handleMovieSearch(w http.ResponseWriter, r *http.Request) error {
-	return s.handleForceSearch(w, r, model.SubjectMovie, "movie")
+	return reply(w, r, http.StatusOK, item)
 }

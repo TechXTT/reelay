@@ -100,6 +100,15 @@ falls back to a verified copy.
     Familiarity and diversity choices adjust that user's ranking weights;
     unconfigured preferences retain the defaults. Dismissal undo removes the
     dismissal exclusion; rated titles remain excluded and their ratings are editable.
+12. Series trials store per-request scopes and selected episode IDs separately
+    from the shared monitor. Metadata selects the first one or three numbered
+    episodes, or all known episodes of the first numbered season, excluding
+    specials. Short series cap the three-episode target at their known count.
+    The plugin reports each requester's played episodes every minute. Only a
+    completed trial accepts a Continue/Stop vote with a 1-5 rating. Continue
+    widens monitoring to all episodes; Stop withdraws only that request. Request
+    summaries and recovery controls stay limited to the trial's selected episodes
+    until continuation. The operator bearer token remains the authorization boundary.
 
 ## Request recovery and availability
 

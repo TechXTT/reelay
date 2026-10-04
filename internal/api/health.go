@@ -137,7 +137,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) error {
 	if overall == StatusDown {
 		code = http.StatusServiceUnavailable
 	}
-	writeJSON(w, s.logFor(r), code, healthDTO{
+	return reply(w, r, code, healthDTO{
 		Status:        overall,
 		Version:       buildinfo.Get(),
 		SchemaVersion: schemaVersion,
@@ -145,7 +145,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) error {
 		UptimeSeconds: int64(s.clock.Since(s.startedAt).Seconds()),
 		Components:    components,
 	})
-	return nil
 }
 
 // handlePing is the unauthenticated liveness probe. It deliberately reveals

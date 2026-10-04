@@ -11,6 +11,7 @@ import (
 	"github.com/TechXTT/reelay/internal/clock"
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/downloader"
+	"github.com/TechXTT/reelay/internal/fsprobe"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
@@ -34,6 +35,8 @@ type Options struct {
 	Logger          *slog.Logger
 	Events          *EventBus
 	Recommendations *recommendation.Service
+	// FreeSpace reports free bytes at a path; defaults to fsprobe.FreeSpace.
+	FreeSpace func(path string) (uint64, error)
 }
 
 type Engine struct {
@@ -49,6 +52,8 @@ type Engine struct {
 	events            *EventBus
 	searchSem         chan struct{}
 	downloadControlMu sync.Mutex
+	freeSpace         func(path string) (uint64, error)
+	spaceWarnOnce     sync.Once
 
 	backupMu      sync.Mutex // guards the two fields below
 	backupAttempt time.Time
@@ -75,6 +80,9 @@ func New(opt Options) (*Engine, error) {
 	if opt.Events == nil {
 		opt.Events = NewEventBus(opt.Config.Runtime.MaxSSEClients)
 	}
+	if opt.FreeSpace == nil {
+		opt.FreeSpace = fsprobe.FreeSpace
+	}
 	concurrency := opt.Config.Runtime.SearchConcurrency
 	if concurrency <= 0 {
 		concurrency = 4
@@ -83,7 +91,7 @@ func New(opt Options) (*Engine, error) {
 		store: opt.Store, cfg: opt.Config, indexers: opt.Indexers,
 		downloader: opt.Downloader, tvmaze: opt.TVmaze, importer: opt.Importer,
 		pathMapper: opt.PathMapper,
-		clock:      opt.Clock, log: opt.Logger, events: opt.Events,
+		clock:      opt.Clock, freeSpace: opt.FreeSpace, log: opt.Logger, events: opt.Events,
 		searchSem:     make(chan struct{}, concurrency),
 		searchTrigger: make(chan struct{}, 1), statusTrigger: make(chan struct{}, 1),
 		metadataTrigger: make(chan struct{}, 1), recentTrigger: make(chan struct{}, 1),

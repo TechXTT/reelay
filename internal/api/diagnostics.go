@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
+	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -156,6 +158,10 @@ func (s *Server) handleRequestGrab(w http.ResponseWriter, r *http.Request, id in
 		return Conflict("only an accepted candidate from the last search can be selected")
 	}
 	grab, err := s.engine.ManualGrab(r.Context(), body.SubjectType, body.SubjectID, body.ReleaseID)
+	var lowDisk *engine.LowDiskError
+	if errors.As(err, &lowDisk) {
+		return InsufficientStorage("%s", lowDisk.Detail).WithCause(err)
+	}
 	if err != nil {
 		return Conflict("release could not be grabbed").WithCause(err)
 	}

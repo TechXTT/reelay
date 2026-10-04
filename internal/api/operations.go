@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/downloader"
+	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/parser"
@@ -81,6 +82,10 @@ func (s *Server) handleEpisodeGrab(w http.ResponseWriter, r *http.Request, id in
 		return BadRequest("release_id is required")
 	}
 	grab, err := s.engine.ManualGrab(r.Context(), model.SubjectEpisode, id, req.ReleaseID)
+	var lowDisk *engine.LowDiskError
+	if errors.As(err, &lowDisk) {
+		return InsufficientStorage("%s", lowDisk.Detail).WithCause(err)
+	}
 	if err != nil {
 		return Conflict("release could not be grabbed").WithCause(err)
 	}

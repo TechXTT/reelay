@@ -42,10 +42,14 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 		add(name, err, "Mount the library at the configured path and grant the service account access.")
 		available, spaceErr := fsprobe.FreeSpace(root)
 		detail := "Available disk space"
+		reserve := uint64(s.cfg.Downloader.MinFreeSpaceMB) << 20
+		belowReserve := spaceErr == nil && reserve > 0 && available < reserve
 		if spaceErr != nil {
 			detail = spaceErr.Error()
+		} else if belowReserve {
+			detail = fmt.Sprintf("Available disk space is below the configured reserve of %d MB (downloader.min_free_space_mb)", s.cfg.Downloader.MinFreeSpaceMB)
 		}
-		checks = append(checks, map[string]any{"name": name + " free space", "status": map[bool]string{true: "ok", false: "down"}[spaceErr == nil], "detail": detail, "available_bytes": available, "action": "Keep enough space for downloaded media and for a copy when hardlinks are unavailable."})
+		checks = append(checks, map[string]any{"name": name + " free space", "status": map[bool]string{true: "ok", false: "down"}[spaceErr == nil && !belowReserve], "detail": detail, "available_bytes": available, "action": "Keep enough space for downloaded media and for a copy when hardlinks are unavailable."})
 	}
 	for _, mapping := range s.cfg.Downloader.PathMappings {
 		_, err := os.Stat(mapping.LocalPrefix)

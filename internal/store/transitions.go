@@ -74,6 +74,21 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 	if lock == nil {
 		return model.StateTransition{}, errors.New("search retry requires an item lock")
 	}
+	return r.rescheduleSearch(ctx, lock, next, reason, detail, terminal, true)
+}
+
+// HoldLocked returns a searching item to wanted (or imported, for an upgrade
+// search) to be searched again at next without counting a failed attempt, so a
+// condition outside the release, such as low disk space, can never exhaust the
+// search retries and fail the item.
+func (r *TransitionRepository) HoldLocked(ctx context.Context, lock *ItemLock, next time.Time, reason, detail string) (model.StateTransition, error) {
+	if lock == nil {
+		return model.StateTransition{}, errors.New("search hold requires an item lock")
+	}
+	return r.rescheduleSearch(ctx, lock, next, reason, detail, false, false)
+}
+
+func (r *TransitionRepository) rescheduleSearch(ctx context.Context, lock *ItemLock, next time.Time, reason, detail string, terminal, countAttempt bool) (model.StateTransition, error) {
 	now := r.s.nowUTC()
 	var out model.StateTransition
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
@@ -100,9 +115,13 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 		if terminal || to == model.StateImported {
 			nextValue = nil
 		}
+		attemptIncrement := 0
+		if countAttempt {
+			attemptIncrement = 1
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET state=?,
- search_attempts=search_attempts+1, next_search_at=?, last_error=?
-	WHERE id=? AND state=?`, to, nextValue, detail, lock.ID, from)
+ search_attempts=search_attempts+?, next_search_at=?, last_error=?
+	WHERE id=? AND state=?`, to, attemptIncrement, nextValue, detail, lock.ID, from)
 		if err != nil {
 			return fmt.Errorf("schedule retry: %w", err)
 		}

@@ -143,6 +143,11 @@ downloader:
 
   add_paused: false
 
+  # Free space (MiB) to keep on the library and download volumes. A release is
+  # not grabbed when adding it would leave less than this; the item is held and
+  # searched again on the next search interval. 0 only requires the release to fit.
+  min_free_space_mb: 2048
+
   # A download that makes no progress within this window is treated as stalled:
   # removed from the client, its info_hash blacklisted for that item, and the
   # item returned to `wanted` so a different release is chosen next round.

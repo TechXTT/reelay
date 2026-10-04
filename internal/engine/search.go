@@ -26,6 +26,12 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	if err != nil || len(targets) == 0 {
 		return err
 	}
+	// Reserve-only check (size 0) of every volume a grab could write to. With
+	// a zero reserve only an unreadable volume skips the cycle.
+	if lowDisk := e.cycleSpaceCheck(); lowDisk != nil {
+		e.log.Warn("search cycle skipped: disk space", "reason", lowDisk.Reason, "detail", lowDisk.Detail)
+		return nil
+	}
 	groups := make(map[string][]searchTarget)
 	for _, target := range targets {
 		key := targetKey(target)
@@ -186,6 +192,9 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		}
 		defer releaseItemLocks(packLocks)
 		locks = append(locks, packLocks...)
+	}
+	if lowDisk := e.checkSpace(best.Release.SizeBytes, target.savePath, e.libraryRoot(target.subject)); lowDisk != nil {
+		return e.holdForSpace(ctx, lock, target.subject, target.id, lowDisk)
 	}
 	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
 		Category: target.category, SavePath: target.savePath, Paused: e.cfg.Downloader.AddPaused})

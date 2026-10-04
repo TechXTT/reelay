@@ -354,6 +354,7 @@ func (c *Config) validateDownloader(ck *checker) {
 	ck.notEmpty("downloader.save_path_tv", d.SavePathTV)
 	ck.notEmpty("downloader.save_path_movies", d.SavePathMovies)
 	ck.positive("downloader.stall_timeout", d.StallTimeout)
+	ck.notNegative("downloader.min_free_space_mb", d.MinFreeSpaceMB)
 	for i, m := range d.PathMappings {
 		ck.notEmpty(index("downloader.path_mappings", i)+".downloader_prefix", m.DownloaderPrefix)
 		ck.notEmpty(index("downloader.path_mappings", i)+".local_prefix", m.LocalPrefix)

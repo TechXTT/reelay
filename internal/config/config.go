@@ -127,6 +127,7 @@ type Downloader struct {
 	AddPaused      bool          `yaml:"add_paused"`
 	StallTimeout   Duration      `yaml:"stall_timeout"`
 	PathMappings   []PathMapping `yaml:"path_mappings"`
+	MinFreeSpaceMB int           `yaml:"min_free_space_mb"` // MiB to keep free after a grab; 0 = release must only fit
 }
 
 type Metadata struct {

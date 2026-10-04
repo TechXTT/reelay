@@ -15,7 +15,10 @@ a filesystem/API bridge and does not contain recommendation or download logic.
    SQLite advisory lock.
 3. Parser output passes through hard filters before accepted releases receive a
    weighted score. All accepted and rejected decisions are persisted.
-4. The winner is added to the downloader with a Reelay-owned category. Only one
+4. The winner is checked against the free space of the library and download
+   volumes (`downloader.min_free_space_mb` reserve); if it does not fit, the item
+   is held for the next search interval without counting a failed attempt. The
+   winner is then added to the downloader with a Reelay-owned category. Only one
    torrent may be active for a series. A season or multi-episode pack creates
    one grab row and atomically reserves every wanted episode it covers; the
    remaining episode searches stop until that grab finishes.

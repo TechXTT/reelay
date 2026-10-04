@@ -22,6 +22,12 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
    the download and library paths before handing a torrent to qBittorrent, and
    hold the grab with a clear "low disk" status when space is short. On a small
    NAS, a full disk is the most likely way an import fails.
+   **Implemented 2026-10-04:** `downloader.min_free_space_mb` reserve; search
+   and manual grabs check the library root and mapped download path, hold the
+   item as `wanted` with reason `low_disk_space` (no attempt counted, never
+   failed), and manual picks return 507. Verified with go build, vet,
+   staticcheck, and `go test ./internal/... ./cmd/...` including new engine,
+   store, and config tests.
 2. **Download from torrent files, not just magnets (M).** Torznab results that
    only offer a `.torrent` file are skipped today, so many Prowlarr results go
    unused. Fetch the file and pass it to qBittorrent.

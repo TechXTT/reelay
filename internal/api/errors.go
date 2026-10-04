@@ -9,12 +9,13 @@ import (
 
 // Error codes. Stable strings — the UI branches on these, not on prose.
 const (
-	CodeBadRequest   = "bad_request"
-	CodeUnauthorized = "unauthorized"
-	CodeNotFound     = "not_found"
-	CodeConflict     = "conflict"
-	CodeUnavailable  = "unavailable"
-	CodeInternal     = "internal"
+	CodeBadRequest          = "bad_request"
+	CodeUnauthorized        = "unauthorized"
+	CodeNotFound            = "not_found"
+	CodeConflict            = "conflict"
+	CodeInsufficientStorage = "insufficient_storage"
+	CodeUnavailable         = "unavailable"
+	CodeInternal            = "internal"
 )
 
 // Error is the single response shape for every failure:
@@ -67,6 +68,10 @@ func NotFound(format string, args ...any) *Error {
 
 func Conflict(format string, args ...any) *Error {
 	return &Error{Code: CodeConflict, Message: fmt.Sprintf(format, args...), status: http.StatusConflict}
+}
+
+func InsufficientStorage(format string, args ...any) *Error {
+	return &Error{Code: CodeInsufficientStorage, Message: fmt.Sprintf(format, args...), status: http.StatusInsufficientStorage}
 }
 
 func Unavailable(format string, args ...any) *Error {

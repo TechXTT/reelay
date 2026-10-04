@@ -73,7 +73,9 @@ still need the checks below.
 6. [x] **Verify setup checks.** The authenticated setup API passed. Open the dashboard
    at `http://127.0.0.1:7878/`, enter the Reelay bearer
    token if configured, and open **Settings → Setup checks**. Resolve missing
-   paths, downloader failures, and insufficient free space. Indexer health here
+   paths, downloader failures, and insufficient free space (set the reserve to
+   keep with `downloader.min_free_space_mb`; releases that would breach it are
+   held, not grabbed). Indexer health here
    reports circuit-breaker state; use an actual search to check connectivity.
 
 ## Configure Prowlarr

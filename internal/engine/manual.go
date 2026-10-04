@@ -76,6 +76,12 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 	if subject == model.SubjectMovie {
 		category, savePath = e.cfg.Downloader.CategoryMovies, e.cfg.Downloader.SavePathMovies
 	}
+	if lowDisk := e.checkSpace(release.SizeBytes, savePath, e.libraryRoot(subject)); lowDisk != nil {
+		if err := e.holdForSpace(ctx, lock, subject, id, lowDisk); err != nil {
+			return model.Grab{}, err
+		}
+		return model.Grab{}, lowDisk
+	}
 	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: release.Magnet,
 		Category: category, SavePath: savePath, Paused: e.cfg.Downloader.AddPaused})
 	if err != nil {

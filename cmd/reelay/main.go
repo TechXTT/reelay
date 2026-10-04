@@ -44,6 +44,8 @@ func run() error {
 		dev          = flag.Bool("dev", false, "human-readable text logs at debug level")
 		showVersion  = flag.Bool("version", false, "print version and exit")
 		checkOnly    = flag.Bool("check", false, "validate the config and the schema, then exit")
+		backupPath   = flag.String("backup", "", "write a consistent SQLite backup to a new file, then exit")
+		restorePath  = flag.String("restore", "", "restore a backup into the configured database path, which must not exist; stop the service first")
 		searchTerm   = flag.String("search", "", "run a one-shot live indexer search, print the parsed and scored results, and exit")
 		searchRecent = flag.Bool("search-recent", false, "with --search: fetch the indexer's newest listing instead of searching a term")
 		grabMagnet   = flag.String("grab", "", "hand one magnet to the download client and follow it to completion, then exit")
@@ -106,6 +108,12 @@ func run() error {
 		}
 		return runGrab(ctx, cfg, log, *grabMagnet, category)
 	}
+	if *restorePath != "" {
+		if *backupPath != "" {
+			return errors.New("backup and restore cannot be combined")
+		}
+		return store.Restore(ctx, *restorePath, cfg.Database.Path)
+	}
 
 	st, err := store.Open(ctx, store.Options{
 		Path:      cfg.Database.Path,
@@ -124,6 +132,9 @@ func run() error {
 
 	if err := store.Migrate(ctx, st, log); err != nil {
 		return err
+	}
+	if *backupPath != "" {
+		return st.Backup(ctx, *backupPath)
 	}
 	seedProfiles := make([]model.QualityProfile, 0, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {

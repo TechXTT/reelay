@@ -177,6 +177,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/profiles/{id}", s.wrap(s.handleProfilePatch))
 	mux.HandleFunc("DELETE /api/v1/profiles/{id}", s.wrap(s.handleProfileDelete))
 	mux.HandleFunc("GET /api/v1/settings", s.wrap(s.handleSettings))
+	mux.HandleFunc("GET /api/v1/setup", s.wrap(s.handleSetup))
+	mux.HandleFunc("POST /api/v1/database/backup", s.wrap(s.handleDatabaseBackup))
 	mux.HandleFunc("POST /api/v1/system/trigger/{loop}", s.wrap(s.handleTrigger))
 	mux.HandleFunc("POST /api/v1/integrations/jellyfin/sync", s.wrap(s.handleJellyfinSync))
 	mux.HandleFunc("POST /api/v1/integrations/jellyfin/events", s.wrap(s.handleJellyfinEvents))

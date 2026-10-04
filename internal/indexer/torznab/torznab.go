@@ -41,10 +41,10 @@ func New(cfg config.Indexer, opt Options) (*Client, error) {
 	var base, err = url.Parse(cfg.BaseURL)
 
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
-		return nil, errors.New("Torznab requires an absolute HTTP(S) API endpoint")
+		return nil, errors.New("torznab requires an absolute HTTP(S) API endpoint")
 	}
 	if cfg.RateLimitPerSecond <= 0 || cfg.RateLimitBurst < 1 || cfg.RequestTimeout.Duration <= 0 {
-		return nil, errors.New("Torznab requires positive rate limits and timeout")
+		return nil, errors.New("torznab requires positive rate limits and timeout")
 	}
 	if opt.HTTPClient == nil {
 		opt.HTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -54,7 +54,7 @@ func New(cfg config.Indexer, opt Options) (*Client, error) {
 		if cfg.APIKeyEnv != "" {
 			opt.APIKey = os.Getenv(cfg.APIKeyEnv)
 			if opt.APIKey == "" && cfg.Enabled {
-				return nil, errors.New("Torznab api_key_env is not set")
+				return nil, errors.New("torznab api_key_env is not set")
 			}
 		}
 	}
@@ -84,11 +84,11 @@ func (c *Client) get(ctx context.Context, query url.Values) (*http.Response, err
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	response, err := c.http.Do(req)
 	if err != nil {
-		return nil, errors.New("Torznab endpoint could not be reached")
+		return nil, errors.New("torznab endpoint could not be reached")
 	}
 	if response.StatusCode != http.StatusOK {
 		_ = response.Body.Close()
-		return nil, fmt.Errorf("Torznab returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("torznab returned HTTP %d", response.StatusCode)
 	}
 	return response, nil
 }
@@ -163,12 +163,12 @@ func (c *Client) Search(ctx context.Context, query indexer.Query) (result []inde
 		}
 		if !rootSeen {
 			if start.Name.Local != "rss" {
-				return nil, errors.New("Torznab response is not RSS")
+				return nil, errors.New("torznab response is not RSS")
 			}
 			rootSeen = true
 		}
 		if start.Name.Local == "error" {
-			return nil, errors.New("Torznab reported an API error")
+			return nil, errors.New("torznab reported an API error")
 		}
 		if start.Name.Local != "item" {
 			continue

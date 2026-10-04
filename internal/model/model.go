@@ -220,6 +220,8 @@ type Recommendation struct {
 	Overview       string             `json:"overview,omitempty"`
 	PosterURL      string             `json:"poster_url,omitempty"`
 	Score          float64            `json:"score"`
+	VoteAverage    float64            `json:"vote_average"`
+	VoteCount      int                `json:"vote_count"`
 	Reasons        []string           `json:"reasons"`
 	Components     map[string]float64 `json:"components,omitempty"`
 	Genres         []string           `json:"genres,omitempty"`

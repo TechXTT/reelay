@@ -65,6 +65,19 @@ type DiscoveryItem struct {
 	VoteCount      int
 	IMDBID         string
 	TVDBID         int
+	Videos         []PreviewVideo
+	Seasons        []int
+}
+
+type PreviewVideo struct {
+	Name     string `json:"name"`
+	Key      string `json:"key"`
+	Type     string `json:"type"`
+	Official bool   `json:"official"`
+}
+
+type PreviewProvider interface {
+	DiscoveryPreview(ctx context.Context, mediaType string, tmdbID int) (DiscoveryItem, error)
 }
 
 type RecommendationProvider interface {

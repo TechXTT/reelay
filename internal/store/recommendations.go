@@ -214,7 +214,7 @@ func (r *RecommendationRepository) Replace(ctx context.Context, serverID, userID
 	return r.s.InTx(ctx, func(tx *sql.Tx) error {
 		for _, value := range values {
 			reasons, _ := encodeJSON(value.Reasons)
-			features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes})
+			features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount})
 			_, err := tx.ExecContext(ctx, `INSERT INTO recommendations(server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET title=excluded.title,year=excluded.year,overview=excluded.overview,poster_url=excluded.poster_url,score=excluded.score,reasons_json=excluded.reasons_json,features_json=excluded.features_json,generated_at=excluded.generated_at,expires_at=excluded.expires_at,status=CASE WHEN recommendations.status IN ('dismissed','requested','available') THEN recommendations.status ELSE 'active' END`,
 				serverID, userID, mediaType, value.TMDBID, value.Title, value.Year, value.Overview, value.PosterURL, value.Score, reasons, features, "active", FormatTime(value.GeneratedAt), FormatTime(value.ExpiresAt))
@@ -344,6 +344,8 @@ func scanRecommendation(row scanner) (model.Recommendation, error) {
 		Language       string             `json:"language"`
 		Country        string             `json:"country"`
 		RuntimeMinutes int                `json:"runtime_minutes"`
+		VoteAverage    float64            `json:"vote_average"`
+		VoteCount      int                `json:"vote_count"`
 	}
 	if err := decodeJSON(reasons, &v.Reasons); err != nil {
 		return v, err
@@ -353,6 +355,7 @@ func scanRecommendation(row scanner) (model.Recommendation, error) {
 	}
 	v.Components, v.Genres, v.Keywords, v.People = data.Components, data.Genres, data.Keywords, data.People
 	v.Language, v.Country, v.RuntimeMinutes = data.Language, data.Country, data.RuntimeMinutes
+	v.VoteAverage, v.VoteCount = data.VoteAverage, data.VoteCount
 	var err error
 	if v.GeneratedAt, err = ParseTime(generated); err != nil {
 		return v, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -59,6 +60,10 @@ func (s *Service) GenerateAll(ctx context.Context) error {
 }
 
 func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType string) error {
+	preferences, err := s.store.Recommendations().Preferences(ctx, serverID, userID)
+	if err != nil {
+		return err
+	}
 	seeds, err := s.store.Recommendations().PositiveSeeds(ctx, serverID, userID, mediaType, s.cfg.SeedLimit)
 	if err != nil {
 		return err
@@ -107,6 +112,20 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	add := func(values []metadata.DiscoveryItem, matched map[int]bool) {
 		for rank, item := range values {
 			if item.TMDBID <= 0 || excluded[item.TMDBID] {
+				continue
+			}
+			if item.Language != "" && len(preferences.Languages) > 0 && !slices.Contains(preferences.Languages, item.Language) {
+				continue
+			}
+			excludedGenre := false
+			for _, genre := range item.Genres {
+				for _, excluded := range preferences.ExcludedGenres {
+					if strings.EqualFold(genre, excluded) {
+						excludedGenre = true
+					}
+				}
+			}
+			if excludedGenre {
 				continue
 			}
 			score := 1 - float64(rank)/float64(max(1, len(values)))
@@ -174,7 +193,29 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		}
 		candidates[i].Item, candidates[i].VoteAverage, candidates[i].VoteCount = toModel(detail), detail.VoteAverage, detail.VoteCount
 	}
+	candidates = slices.DeleteFunc(candidates, func(candidate Candidate) bool {
+		if len(preferences.Languages) > 0 && !slices.Contains(preferences.Languages, candidate.Item.Language) {
+			return true
+		}
+		for _, genre := range candidate.Item.Genres {
+			for _, excluded := range preferences.ExcludedGenres {
+				if strings.EqualFold(genre, excluded) {
+					return true
+				}
+			}
+		}
+		return false
+	})
 	weights := Weights{Provider: float64(s.cfg.ProviderWeight), Affinity: float64(s.cfg.AffinityWeight), People: float64(s.cfg.PeopleWeight), MultiSeed: float64(s.cfg.MultiSeedWeight), Rating: float64(s.cfg.RatingWeight), Preference: float64(s.cfg.PreferenceWeight), Novelty: float64(s.cfg.NoveltyWeight)}
+	weights.Novelty *= float64(preferences.Diversity) / 100
+	if preferences.Familiarity == "familiar" {
+		weights.Affinity += weights.Novelty
+		weights.Novelty = 0
+	}
+	if preferences.Familiarity == "explore" {
+		weights.Novelty += weights.Affinity / 2
+		weights.Affinity /= 2
+	}
 	values := Rank(candidates, profile, weights, s.cfg.ResultLimit)
 	now := s.now().UTC()
 	for i := range values {
@@ -231,5 +272,5 @@ func tasteItem(item metadata.DiscoveryItem) model.JellyfinItem {
 }
 
 func toModel(item metadata.DiscoveryItem) model.Recommendation {
-	return model.Recommendation{TMDBID: item.TMDBID, Title: item.Title, Year: item.Year, Overview: item.Overview, PosterURL: item.PosterURL, Genres: item.Genres, Keywords: item.Keywords, People: item.People, Language: item.Language, Country: item.Country, RuntimeMinutes: item.RuntimeMinutes}
+	return model.Recommendation{TMDBID: item.TMDBID, Title: item.Title, Year: item.Year, Overview: item.Overview, PosterURL: item.PosterURL, Genres: item.Genres, Keywords: item.Keywords, People: item.People, Language: item.Language, Country: item.Country, RuntimeMinutes: item.RuntimeMinutes, VoteAverage: item.VoteAverage, VoteCount: item.VoteCount}
 }

@@ -82,4 +82,24 @@ func TestServiceGeneratesAndPersistsEnrichedRecommendations(t *testing.T) {
 	if values[0].TMDBID != 99 || values[0].Components["people"] == 0 || values[0].Components["affinity"] == 0 || len(values[0].Reasons) == 0 {
 		t.Fatalf("recommendation was not enriched: %+v", values[0])
 	}
+	for _, preferences := range []store.RecommendationPreferences{
+		{Languages: []string{"en"}, Familiarity: "balanced", Diversity: 100},
+		{ExcludedGenres: []string{"science fiction"}, Familiarity: "balanced", Diversity: 100},
+		{Languages: []string{"fr"}, Familiarity: "balanced", Diversity: 100},
+	} {
+		if err := repo.SavePreferences(ctx, "server", "user", preferences); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.Generate(ctx, "server", "user", "movie"); err != nil {
+			t.Fatal(err)
+		}
+		values, err := repo.List(ctx, "server", "user", "movie", "active", 10, 0)
+		want := 0
+		if len(preferences.Languages) > 0 && preferences.Languages[0] == "en" {
+			want = 1
+		}
+		if err != nil || len(values) != want {
+			t.Fatalf("preferences %+v produced %d results, want %d: %v", preferences, len(values), want, err)
+		}
+	}
 }

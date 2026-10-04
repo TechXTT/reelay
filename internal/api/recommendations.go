@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/engine"
+	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -116,6 +117,50 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
+func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Request) error {
+	var id, err = pathID(r)
+	var provider, supported = s.discovery.(metadata.PreviewProvider)
+	var response struct {
+		Title          string                  `json:"title"`
+		Year           int                     `json:"year"`
+		MediaType      string                  `json:"media_type"`
+		Overview       string                  `json:"overview"`
+		PosterURL      string                  `json:"poster_url"`
+		Genres         []string                `json:"genres"`
+		People         []string                `json:"people"`
+		RuntimeMinutes int                     `json:"runtime_minutes"`
+		VoteAverage    float64                 `json:"vote_average"`
+		VoteCount      int                     `json:"vote_count"`
+		Videos         []metadata.PreviewVideo `json:"videos"`
+		Seasons        []int                   `json:"seasons"`
+	}
+
+	if err != nil {
+		return err
+	}
+	rec, err := s.store.Recommendations().Get(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		return NotFound("recommendation %d not found", id)
+	}
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return Unavailable("recommendation previews are unavailable")
+	}
+	detail, err := provider.DiscoveryPreview(r.Context(), rec.MediaType, rec.TMDBID)
+	if err != nil {
+		return Unavailable("preview could not be loaded from TMDB").WithCause(err)
+	}
+	response.Title, response.Year, response.MediaType = detail.Title, detail.Year, rec.MediaType
+	response.Overview, response.PosterURL = detail.Overview, detail.PosterURL
+	response.Genres, response.People, response.RuntimeMinutes = detail.Genres, detail.People, detail.RuntimeMinutes
+	response.VoteAverage, response.VoteCount, response.Videos = detail.VoteAverage, detail.VoteCount, detail.Videos
+	response.Seasons = detail.Seasons
+	writeJSON(w, s.logFor(r), http.StatusOK, response)
+	return nil
+}
+
 func (s *Server) handleRecommendationGenerate(w http.ResponseWriter, r *http.Request) error {
 	if s.recommendations == nil || !s.cfg.Recommendations.Enabled {
 		return Unavailable("recommendations are disabled")
@@ -155,8 +200,8 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	if strings.TrimSpace(req.ActionID) == "" {
 		return BadRequest("action_id is required")
 	}
-	if req.Action != "request" && req.Action != "dismiss" && req.Action != "rate" {
-		return BadRequest("action must be request, dismiss, or rate")
+	if req.Action != "request" && req.Action != "dismiss" && req.Action != "rate" && req.Action != "undo" {
+		return BadRequest("action must be request, dismiss, rate, or undo")
 	}
 	if req.Action != "request" && req.MonitorMode != "" {
 		return BadRequest("monitor_mode is only valid for request actions")
@@ -215,7 +260,9 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	inserted := true
-	if req.Action == "rate" {
+	if req.Action == "undo" {
+		err = s.store.Recommendations().UndoDismissal(r.Context(), id)
+	} else if req.Action == "rate" {
 		_, err = s.store.Recommendations().RecordRating(r.Context(), id, req.ActionID, req.Rating)
 	} else {
 		_, inserted, err = s.store.Recommendations().RecordAction(r.Context(), id, req.ActionID, req.Action)

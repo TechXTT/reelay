@@ -283,7 +283,7 @@ then enable recommendation sync on the plugin page:
 
 1. Jellyfin 10.11 catalog:
   `https://github.bozhilov.me/reelay/manifest.json`
-2. Jellyfin 12 preview catalog:
+2. Jellyfin 12 catalog:
   `https://github.bozhilov.me/reelay/manifest-preview.json`
 
 The plugin configuration page shows two paths for every enabled Jellyfin user.
@@ -344,9 +344,7 @@ audience rating is out of 10; your personal rating is out of 5; the match score
 measures recommendation fit. YouTube loads only when you choose playback.
 
 The Jellyfin targets are pinned in `plugin/Directory.Build.props`. The Jellyfin
-12 artifact tracks the
-exact prerelease ABI and should be used only with the matching preview server
-until Jellyfin 12 is stable.
+12 artifact is built against Jellyfin 12.1.0; use it with a 12.1 server.
 
 ## Development
 

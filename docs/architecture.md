@@ -165,7 +165,7 @@ falls back to a verified copy.
    authentication or quota enforcement.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
-10.11.11 (`net9.0`) and Jellyfin 12 preview (`net10.0`). ABI-specific package
+10.11.11 (`net9.0`) and Jellyfin 12.1.0 (`net10.0`). ABI-specific package
 versions are selected at build time; behavioral code is shared.
 
 Availability delivery supports the default JSON event contract and direct ntfy

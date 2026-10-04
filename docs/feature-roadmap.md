@@ -97,6 +97,11 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
 20. **Scheduled automatic backups with retention (S).** Backup and restore exist
     but only run manually (`--backup`, settings view). Add a nightly snapshot that
     keeps the last N copies.
+   **Implemented 2026-10-04:** `database.backup_interval`, `backup_dir` and
+   `backup_keep` drive an hourly-checked engine loop that writes timestamped
+   `VACUUM INTO` snapshots and prunes only its own files; setup checks show the
+   status. Verified with go build, vet, staticcheck, and
+   `go test ./internal/... ./cmd/...` including new config and engine tests.
 21. **Activity and history page (S).** A searchable log of grabs, imports,
     failures and state changes across all items. The data is already in
     `state_transitions`.

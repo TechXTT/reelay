@@ -75,7 +75,10 @@ type Server struct {
 }
 
 type Database struct {
-	Path string `yaml:"path"`
+	Path           string   `yaml:"path"`
+	BackupInterval Duration `yaml:"backup_interval"`
+	BackupDir      string   `yaml:"backup_dir"`
+	BackupKeep     int      `yaml:"backup_keep"`
 }
 
 type Logging struct {

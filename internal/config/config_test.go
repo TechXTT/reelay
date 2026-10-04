@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeConfig materialises the shipped example with the two library roots
@@ -394,5 +395,55 @@ func TestPreferredGroupsDifferingOnlyByCaseAreRejected(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should mention %s, got: %v", want, err)
 		}
+	}
+}
+
+func backupConfigProblems(t *testing.T, mutate func(c *Config)) []string {
+	t.Helper()
+	cfg, _, err := Load(writeConfig(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(cfg)
+	_, err = cfg.Validate()
+	var probs *Problems
+	if err != nil && !asProblems(err, &probs) {
+		t.Fatalf("expected *Problems, got %T", err)
+	}
+	if probs == nil {
+		return nil
+	}
+	return probs.Items
+}
+
+func TestBackupRules(t *testing.T) {
+	enabled := func(c *Config) {
+		c.Database.BackupInterval = Dur(24 * time.Hour)
+		c.Database.BackupDir = filepath.Join(t.TempDir(), "backups")
+		c.Database.BackupKeep = 7
+	}
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+		want   string
+	}{
+		{"interval below one hour", func(c *Config) { enabled(c); c.Database.BackupInterval = Dur(30 * time.Minute) }, "database.backup_interval"},
+		{"enabled without dir", func(c *Config) { enabled(c); c.Database.BackupDir = " " }, "database.backup_dir"},
+		{"keep zero", func(c *Config) { enabled(c); c.Database.BackupKeep = 0 }, "database.backup_keep"},
+		{"dir is database dir", func(c *Config) { enabled(c); c.Database.BackupDir = filepath.Dir(c.Database.Path) }, "database.backup_dir"},
+	}
+	for _, tc := range cases {
+		if items := backupConfigProblems(t, tc.mutate); !hasWarning(items, tc.want) {
+			t.Errorf("%s: want a %s problem, got %v", tc.name, tc.want, items)
+		}
+	}
+	if items := backupConfigProblems(t, enabled); len(items) != 0 {
+		t.Errorf("valid enabled backup config rejected: %v", items)
+	}
+	disabled := func(c *Config) {
+		c.Database.BackupInterval, c.Database.BackupDir, c.Database.BackupKeep = Dur(0), "", 0
+	}
+	if items := backupConfigProblems(t, disabled); len(items) != 0 {
+		t.Errorf("disabled backups must need nothing else: %v", items)
 	}
 }

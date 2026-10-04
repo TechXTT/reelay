@@ -265,6 +265,18 @@ still need the checks below.
    not overwrite an existing destination. Retain configuration and media separately.
    Local snapshots are `data/backups/post-activation-20261004.db` and
    `data/backups/notifications-enabled-20261004.db`.
+
+   For scheduled snapshots, set these under `database:` (or as
+   `REELAY_DATABASE_*` variables); `backup_interval` of `0` disables them:
+
+   ```yaml
+   backup_interval: 24h        # at least 1h
+   backup_dir: "./data/backups" # required; not the database folder
+   backup_keep: 7              # newest reelay-YYYYMMDD-HHMMSSZ.db files kept
+   ```
+
+   Other files in `backup_dir` are never touched. Setup checks show the newest
+   scheduled backup and any error.
 2. [x] Test restore into an isolated destination. Stop Reelay before replacing
    its active database. Copy `config.yaml` to
    `config.restore.yaml` and change `database.path` in that copy to a new, absent

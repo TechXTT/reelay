@@ -50,6 +50,10 @@ type Engine struct {
 	searchSem         chan struct{}
 	downloadControlMu sync.Mutex
 
+	backupMu      sync.Mutex // guards the two fields below
+	backupAttempt time.Time
+	backupErr     string
+
 	searchTrigger         chan struct{}
 	statusTrigger         chan struct{}
 	metadataTrigger       chan struct{}
@@ -128,6 +132,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	if e.cfg.Recommendations.Enabled && e.recommendations != nil {
 		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll})
+	}
+	if interval := e.cfg.Database.BackupInterval.Duration; interval > 0 {
+		// Tick at most hourly so a restart never waits a full interval for the first check.
+		loops = append(loops, loopSpec{"backup", min(time.Hour, interval), nil, e.BackupOnce})
 	}
 	var wg sync.WaitGroup
 	for _, spec := range loops {

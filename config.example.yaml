@@ -41,6 +41,13 @@ database:
   # MUST live on a local filesystem. SQLite WAL is not safe over SMB or NFS;
   # Reelay warns loudly if this path looks like a network location.
   path: "./data/reelay.db"
+  # Scheduled snapshots (SQLite VACUUM INTO). 0 disables; otherwise at least 1h.
+  backup_interval: 24h
+  # Folder for reelay-YYYYMMDD-HHMMSSZ.db files. Required when enabled; must
+  # differ from the database folder. Local disk or a NAS share both work.
+  backup_dir: "./data/backups"
+  # Newest backups to keep; older ones in backup_dir are deleted. At least 1.
+  backup_keep: 7
 
 logging:
   level: info # debug | info | warn | error

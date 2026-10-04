@@ -141,8 +141,10 @@ falls back to a verified copy.
    so dashboard polling cannot create indexer traffic.
 3. Backups use SQLite `VACUUM INTO` for a consistent snapshot. Restore opens the
    source read-only, validates integrity and known migration checksums, and
-   creates a new destination without overwriting existing data. Configuration
-   and media files are outside the database snapshot.
+   creates a new destination without overwriting existing data. Scheduled backups
+   (`database.backup_interval`) write timestamped snapshots to `backup_dir` and
+   keep the newest `backup_keep`. Configuration and media files are outside the
+   database snapshot.
 4. The dashboard retains operator access through the existing bearer token.
    Selecting a Jellyfin user filters data; it does not create separate household
    authentication or quota enforcement.

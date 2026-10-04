@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -223,6 +224,47 @@ func (c *Config) validateDatabase(ck *checker) {
 		if st, err := os.Stat(dir); err == nil && !st.IsDir() {
 			ck.bad("database.path", "parent %q exists but is not a directory", dir)
 		}
+	}
+	c.validateBackup(ck, dir)
+}
+
+// validateBackup checks the scheduled-backup keys. They are ignored while
+// backup_interval is 0, so existing configs stay valid.
+func (c *Config) validateBackup(ck *checker, databaseDir string) {
+	var d = c.Database
+	var backupAbs, databaseAbs string
+	var err error
+
+	if d.BackupInterval.Duration < 0 {
+		ck.bad("database.backup_interval", "must not be negative (0 disables scheduled backups)")
+		return
+	}
+	if d.BackupInterval.Duration == 0 {
+		return
+	}
+	if d.BackupInterval.Duration < time.Hour {
+		ck.bad("database.backup_interval", "%s is too frequent; use at least 1h", d.BackupInterval.Duration)
+	}
+	ck.atLeast("database.backup_keep", d.BackupKeep, 1)
+	if strings.TrimSpace(d.BackupDir) == "" {
+		ck.bad("database.backup_dir", "must be set when backup_interval is enabled")
+		return
+	}
+	if !filepath.IsAbs(d.BackupDir) {
+		ck.warn("database.backup_dir (%s) is relative; it resolves against the working directory. Use an absolute path.", d.BackupDir)
+	}
+	backupAbs, err = filepath.Abs(d.BackupDir)
+	if err != nil {
+		ck.bad("database.backup_dir", "cannot resolve %q: %v", d.BackupDir, err)
+		return
+	}
+	databaseAbs, err = filepath.Abs(databaseDir)
+	if err != nil {
+		return
+	}
+	backupAbs, databaseAbs = filepath.Clean(backupAbs), filepath.Clean(databaseAbs)
+	if backupAbs == databaseAbs || (runtime.GOOS == "windows" && strings.EqualFold(backupAbs, databaseAbs)) {
+		ck.bad("database.backup_dir", "%q is the database directory; use a separate folder so a disk or folder loss cannot take the backups with it", d.BackupDir)
 	}
 }
 

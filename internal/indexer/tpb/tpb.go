@@ -271,14 +271,14 @@ func (c *Client) toReleases(rows []row, q indexer.Query) []indexer.Release {
 			continue
 		}
 
-		magnet, err := BuildMagnet(r.InfoHash, r.Name, c.trackers)
+		hash, err := NormalizeInfoHash(r.InfoHash)
 		if err != nil {
 			// One unusable hash must not discard the rest of the response.
 			c.log.Debug("skipping row with unusable info hash",
 				"name", r.Name, "info_hash", r.InfoHash, "error", err)
 			continue
 		}
-		hash, err := NormalizeInfoHash(r.InfoHash)
+		magnet, err := BuildMagnet(hash, r.Name, c.trackers)
 		if err != nil {
 			continue
 		}
@@ -308,10 +308,7 @@ func (c *Client) toReleases(rows []row, q indexer.Query) []indexer.Release {
 func (c *Client) fetch(ctx context.Context, endpoint string) ([]byte, error) {
 	var lastErr error
 
-	attempts := c.maxRetries + 1
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(c.maxRetries+1, 1)
 
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {

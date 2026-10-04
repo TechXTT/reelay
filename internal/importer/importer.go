@@ -79,6 +79,10 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 		return s.importEpisodeGrab(ctx, grab, release, parsed, videos)
 	}
 
+	return s.importMovieGrab(ctx, grab, parsed, videos)
+}
+
+func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback parser.Parsed, videos []string) error {
 	lock, err := s.store.Locks().Acquire(ctx, grab.SubjectType, grab.SubjectID,
 		"importer", 10*time.Minute)
 	if err != nil {
@@ -92,7 +96,7 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 	}
 	var primaryPath, quality string
 	for _, source := range videos {
-		var fileParsed = parseSource(source, parsed)
+		var fileParsed = parseSource(source, fallback)
 		var values = templateValues(fileParsed, strings.ToLower(filepath.Ext(source)))
 
 		values["Title"], values["Year"] = movie.Title, number(movie.Year, 4)

@@ -70,6 +70,24 @@ func collectRows[T any](rows *sql.Rows, scan func(scanner) (T, error)) ([]T, err
 	return values, rows.Err()
 }
 
+func scanColumn[T any](row scanner) (T, error) {
+	var value T
+	err := row.Scan(&value)
+	return value, err
+}
+
+func collectSet[T comparable](rows *sql.Rows) (map[T]bool, error) {
+	values, err := collectRows(rows, scanColumn[T])
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[T]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set, nil
+}
+
 func findOne[T any](row scanner, scan func(scanner) (T, error), label string) (T, error) {
 	value, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -87,4 +105,30 @@ func (s *Store) deleteOne(ctx context.Context, query, label string, id int64) er
 		return fmt.Errorf("%s %d: %w", label, id, ErrNotFound)
 	}
 	return nil
+}
+
+func placeholders(count int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
+}
+
+// maxSQLVariables keeps IN (...) lists well under the SQLite bound-variable limit.
+const maxSQLVariables = 500
+
+// chunkIDs splits ids into slices small enough for one IN (...) query each.
+func chunkIDs(ids []int64) [][]int64 {
+	var chunks [][]int64
+	for len(ids) > 0 {
+		size := min(maxSQLVariables, len(ids))
+		chunks = append(chunks, ids[:size])
+		ids = ids[size:]
+	}
+	return chunks
+}
+
+func int64Args(ids []int64) []any {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return args
 }

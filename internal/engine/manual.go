@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/downloader"
@@ -64,23 +63,14 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 		if err != nil {
 			return model.Grab{}, err
 		}
-		sort.Slice(episodes, func(i, j int) bool { return episodes[i].ID < episodes[j].ID })
-		for _, covered := range episodes {
-			if covered.ID == id || covered.State != model.StateWanted ||
-				!parsed.CoversEpisode(covered.Season, covered.Number) {
-				continue
-			}
-			coveredLock, lockErr := e.store.Locks().Acquire(ctx, model.SubjectEpisode,
-				covered.ID, "manual-season-pack", 5*time.Minute)
-			if lockErr != nil {
-				releaseItemLocks(locks[1:])
-				_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock,
-					e.clock.Now().Add(15*time.Minute), "manual grab coordination failed", lockErr.Error(), false)
-				return model.Grab{}, lockErr
-			}
-			locks = append(locks, coveredLock)
+		packLocks, _, packErr := e.lockPackEpisodes(ctx, episodes, id, parsed, "manual-season-pack", false)
+		if packErr != nil {
+			_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock,
+				e.clock.Now().Add(15*time.Minute), "manual grab coordination failed", packErr.Error(), false)
+			return model.Grab{}, packErr
 		}
-		defer releaseItemLocks(locks[1:])
+		defer releaseItemLocks(packLocks)
+		locks = append(locks, packLocks...)
 	}
 	category, savePath := e.cfg.Downloader.CategoryTV, e.cfg.Downloader.SavePathTV
 	if subject == model.SubjectMovie {

@@ -42,6 +42,7 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 	type rankedCandidate struct {
 		model.Recommendation
 		novelty float64
+		genres  map[string]bool
 	}
 	scored := make([]rankedCandidate, 0, len(candidates))
 
@@ -54,14 +55,11 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 			"rating":     bayesianRating(c.VoteAverage, c.VoteCount) * weights.Rating,
 			"preference": preference(c.Item, profile) * weights.Preference,
 		}
-		base := 0.0
-		for _, name := range []string{"provider", "affinity", "people", "multi_seed", "rating", "preference"} {
-			base += components[name]
-		}
+		base := components["provider"] + components["affinity"] + components["people"] + components["multi_seed"] + components["rating"] + components["preference"]
 		c.Item.Score = math.Round(base*10) / 10
 		c.Item.Components = components
 		c.Item.Reasons = reasons(components, c.SeedMatches)
-		scored = append(scored, rankedCandidate{Recommendation: c.Item, novelty: 1})
+		scored = append(scored, rankedCandidate{Recommendation: c.Item, novelty: 1, genres: genreSet(c.Item.Genres)})
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
 		if scored[i].Score != scored[j].Score {
@@ -71,23 +69,36 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 	})
 
 	// Greedy diversity bonus: reward a candidate that is unlike items already
-	// selected without allowing novelty to overwhelm relevance.
+	// selected without allowing novelty to overwhelm relevance. Picked entries
+	// are flagged instead of removed so ties keep resolving to the earliest
+	// (highest relevance, lowest TMDB id) candidate.
 	selected := make([]model.Recommendation, 0, min(limit, len(scored)))
-	for len(scored) > 0 && len(selected) < limit {
-		best, bestValue := 0, math.Inf(-1)
+	taken := make([]bool, len(scored))
+	for len(selected) < min(limit, len(scored)) {
+		best, bestValue := -1, math.Inf(-1)
 		for i := range scored {
+			if taken[i] {
+				continue
+			}
+			if best < 0 {
+				best = i
+			}
 			value := scored[i].Score + scored[i].novelty*weights.Novelty
 			if value > bestValue {
 				best, bestValue = i, value
 			}
 		}
-		scored[best].Components["novelty"] = math.Round((bestValue-scored[best].Score)*10) / 10
-		scored[best].Score = math.Min(100, math.Round(bestValue*10)/10)
-		selected = append(selected, scored[best].Recommendation)
-		scored = append(scored[:best], scored[best+1:]...)
-		if len(selected) < limit {
-			for i := range scored {
-				scored[i].novelty = math.Min(scored[i].novelty, 1-jaccard(scored[i].Genres, selected[len(selected)-1].Genres))
+		pick := &scored[best]
+		pick.Components["novelty"] = math.Round((bestValue-pick.Score)*10) / 10
+		pick.Score = math.Min(100, math.Round(bestValue*10)/10)
+		selected = append(selected, pick.Recommendation)
+		taken[best] = true
+		if len(selected) == limit {
+			break
+		}
+		for i := range scored {
+			if !taken[i] {
+				scored[i].novelty = math.Min(scored[i].novelty, 1-jaccard(scored[i].genres, pick.genres))
 			}
 		}
 	}
@@ -164,18 +175,14 @@ func reasons(parts map[string]float64, seedMatches int) []string {
 	return out
 }
 
-func jaccard(a, b []string) float64 {
-	var left = genreSet(a)
-	var right = genreSet(b)
-	var intersection int
-	var union int
-
+func jaccard(left, right map[string]bool) float64 {
+	intersection := 0
 	for genre := range left {
 		if right[genre] {
 			intersection++
 		}
 	}
-	union = len(left) + len(right) - intersection
+	union := len(left) + len(right) - intersection
 	if union == 0 {
 		return 0
 	}
@@ -183,8 +190,7 @@ func jaccard(a, b []string) float64 {
 }
 
 func genreSet(genres []string) map[string]bool {
-	var set = make(map[string]bool, len(genres))
-
+	set := make(map[string]bool, len(genres))
 	for _, genre := range genres {
 		set[strings.ToLower(genre)] = true
 	}
@@ -192,14 +198,9 @@ func genreSet(genres []string) map[string]bool {
 }
 
 func clamp(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
+	return min(max(v, 0), 1)
 }
+
 func abs(v int) int {
 	if v < 0 {
 		return -v

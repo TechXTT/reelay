@@ -68,7 +68,8 @@ func Hardlink(fromDir, toDir string) (res Result) {
 	res = Result{From: fromDir, To: toDir, Support: Unknown}
 	defer func() { res.Status = res.Support.String() }()
 
-	for label, dir := range map[string]string{"download path": fromDir, "library path": toDir} {
+	for _, probed := range []struct{ label, dir string }{{"download path", fromDir}, {"library path", toDir}} {
+		label, dir := probed.label, probed.dir
 		st, err := os.Stat(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			res.Detail = fmt.Sprintf("%s %s does not exist yet; probe skipped", label, dir)

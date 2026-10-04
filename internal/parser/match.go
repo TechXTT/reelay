@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/TechXTT/reelay/internal/model"
 )
@@ -19,7 +20,39 @@ func matchNo(f string, a ...any) MatchResult {
 	return MatchResult{Reason: fmt.Sprintf(f, a...)}
 }
 
+// Matcher checks parsed releases against one wanted item. The wanted title and
+// aliases are normalised once at construction, so matching a whole result set
+// does not re-normalise them per release.
+type Matcher struct {
+	want   model.Wanted
+	titles []wantedTitle
+}
+
+type wantedTitle struct {
+	raw        string
+	normalized string
+	budget     int
+}
+
+// NewMatcher prepares want for repeated matching.
+func NewMatcher(want model.Wanted) *Matcher {
+	m := &Matcher{want: want, titles: make([]wantedTitle, 0, 1+len(want.Aliases))}
+	for _, raw := range append([]string{want.Title}, want.Aliases...) {
+		if raw == "" {
+			continue
+		}
+		normalized := NormalizeForMatch(raw)
+		m.titles = append(m.titles, wantedTitle{raw: raw, normalized: normalized, budget: fuzzyBudget(len(normalized))})
+	}
+	return m
+}
+
 // Matches reports whether a parsed release satisfies what we want.
+func Matches(p Parsed, want model.Wanted) MatchResult {
+	return NewMatcher(want).Match(p)
+}
+
+// Match reports whether a parsed release satisfies the wanted item.
 //
 // Title matching accepts any of these comparisons against the title or aliases:
 //  1. normalised equality against the title or any alias
@@ -28,42 +61,35 @@ func matchNo(f string, a ...any) MatchResult {
 //
 // Numbering is then checked exactly. There is no fuzziness on season or
 // episode numbers: grabbing the wrong episode is worse than grabbing nothing.
-func Matches(p Parsed, want model.Wanted) MatchResult {
+func (m *Matcher) Match(p Parsed) MatchResult {
 	if p.Title == "" {
 		return matchNo("release name could not be parsed into a title")
 	}
-	if res := matchTitle(p, want); !res.OK {
+	if res := m.matchTitle(p); !res.OK {
 		return res
 	}
 
-	switch want.Kind {
+	switch m.want.Kind {
 	case model.SubjectMovie:
-		return matchMovie(p, want)
+		return matchMovie(p, m.want)
 	case model.SubjectEpisode:
-		return matchEpisode(p, want)
+		return matchEpisode(p, m.want)
 	default:
-		return matchNo("unsupported wanted kind %q", want.Kind)
+		return matchNo("unsupported wanted kind %q", m.want.Kind)
 	}
 }
 
-func matchTitle(p Parsed, want model.Wanted) MatchResult {
-	candidates := append([]string{want.Title}, want.Aliases...)
-
+func (m *Matcher) matchTitle(p Parsed) MatchResult {
 	pm := NormalizeForMatch(p.Title)
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		cm := NormalizeForMatch(c)
-		if p.Title == c || pm == cm {
+	for _, t := range m.titles {
+		if p.Title == t.raw || pm == t.normalized {
 			return matchOK()
 		}
-		budget := fuzzyBudget(len(cm))
-		if budget > 0 && Levenshtein(pm, cm, budget) <= budget {
+		if t.budget > 0 && Levenshtein(pm, t.normalized, t.budget) <= t.budget {
 			return matchOK()
 		}
 	}
-	return matchNo("title %q does not match %q", p.Title, want.Title)
+	return matchNo("title %q does not match %q", p.Title, m.want.Title)
 }
 
 func matchMovie(p Parsed, want model.Wanted) MatchResult {
@@ -129,11 +155,11 @@ func formatEpisodes(eps []int) string {
 	if len(eps) == 0 {
 		return " (season pack)"
 	}
-	out := ""
+	var b strings.Builder
 	for _, e := range eps {
-		out += fmt.Sprintf("E%02d", e)
+		fmt.Fprintf(&b, "E%02d", e)
 	}
-	return out
+	return b.String()
 }
 
 // WantedEpisodesCovered counts how many of the caller's still-missing episodes

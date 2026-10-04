@@ -13,6 +13,7 @@ import (
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metadata"
+	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -153,7 +154,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) publish(kind string, target searchTarget, data map[string]any) {
+func (e *Engine) publish(kind string, subject model.SubjectType, id int64, data map[string]any) {
 	e.events.Publish(Event{Type: kind, At: e.clock.Now().UTC(),
-		SubjectType: string(target.subject), SubjectID: target.id, Data: data})
+		SubjectType: string(subject), SubjectID: id, Data: data})
 }

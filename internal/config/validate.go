@@ -39,11 +39,47 @@ func (c *checker) warn(format string, args ...any) {
 	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
+func (c *checker) notEmpty(key, value string) {
+	if value == "" {
+		c.bad(key, "must not be empty")
+	}
+}
+
+func (c *checker) positive(key string, d Duration) {
+	if d.Duration <= 0 {
+		c.bad(key, "must be greater than zero")
+	}
+}
+
+func (c *checker) notNegative(key string, value int) {
+	if value < 0 {
+		c.bad(key, "must not be negative")
+	}
+}
+
+func (c *checker) atLeast(key string, value, minimum int) {
+	if value < minimum {
+		c.bad(key, "must be at least %d", minimum)
+	}
+}
+
+// oneOf reports value when it is not in allowed; the message lists the choices.
+func (c *checker) oneOf(key, value string, allowed []string) {
+	if !slices.Contains(allowed, value) {
+		c.bad(key, "%q is not one of %s", value, strings.Join(allowed, ", "))
+	}
+}
+
+func index(key string, i int) string {
+	return fmt.Sprintf("%s[%d]", key, i)
+}
+
 var (
 	validLogLevels  = []string{"debug", "info", "warn", "error"}
 	validLogFormats = []string{"json", "text"}
 	validResolution = []string{"2160p", "1080p", "720p", "480p"}
 	validSources    = []string{"remux", "bluray", "webdl", "webrip", "hdtv", "dvd", "cam"}
+	validHDR        = []string{"hdr10", "hdr10plus", "dv", "hlg"}
 	// Named placeholders permitted in the naming templates.
 	templatePlaceholders = map[string]bool{
 		"Title": true, "Year": true, "Season": true, "Episode": true,
@@ -70,18 +106,7 @@ func (c *Config) Validate() ([]string, error) {
 	c.validateProfiles(ck)
 	c.validateScoring(ck)
 	c.validateRecommendations(ck)
-	for name, rawURL := range c.Availability.JellyfinServers {
-		validateHTTPURL(ck, "availability.jellyfin_servers."+name, rawURL)
-		if parsed, err := url.Parse(rawURL); err == nil && parsed.RawQuery != "" {
-			ck.bad("availability.jellyfin_servers."+name, "must be a server base URL without a query")
-		}
-	}
-	if c.Availability.WebhookURL != "" {
-		validateHTTPURL(ck, "availability.webhook_url", c.Availability.WebhookURL)
-	}
-	if c.Availability.WebhookFormat != "" && c.Availability.WebhookFormat != "json" && c.Availability.WebhookFormat != "ntfy" {
-		ck.bad("availability.webhook_format", "must be json or ntfy")
-	}
+	c.validateAvailability(ck)
 
 	sort.Strings(ck.problems)
 	if len(ck.problems) > 0 {
@@ -90,11 +115,32 @@ func (c *Config) Validate() ([]string, error) {
 	return ck.warnings, nil
 }
 
-func validateHTTPURL(ck *checker, key, rawURL string) {
-	var parsed, err = url.Parse(rawURL)
+func (c *Config) validateAvailability(ck *checker) {
+	for name, rawURL := range c.Availability.JellyfinServers {
+		key := "availability.jellyfin_servers." + name
+		validateHTTPURL(ck, key, rawURL)
+		if parsed, err := url.Parse(rawURL); err == nil && parsed.RawQuery != "" {
+			ck.bad(key, "must be a server base URL without a query")
+		}
+	}
+	if c.Availability.WebhookURL != "" {
+		validateHTTPURL(ck, "availability.webhook_url", c.Availability.WebhookURL)
+	}
+	if format := c.Availability.WebhookFormat; format != "" && format != "json" && format != "ntfy" {
+		ck.bad("availability.webhook_format", "must be json or ntfy")
+	}
+}
 
+func validateHTTPURL(ck *checker, key, rawURL string) {
+	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
 		ck.bad(key, "must be an absolute HTTP(S) URL without user credentials or a fragment")
+	}
+}
+
+func checkAbsoluteURL(ck *checker, key, rawURL string) {
+	if u, err := url.Parse(rawURL); err != nil || u.Scheme == "" || u.Host == "" {
+		ck.bad(key, "%q is not an absolute http(s) URL", rawURL)
 	}
 }
 
@@ -106,9 +152,7 @@ func (c *Config) validateRecommendations(ck *checker) {
 	if c.Metadata.TMDBAPIKey == "" {
 		ck.bad("recommendations.enabled", "requires metadata.tmdb_api_key")
 	}
-	if r.RefreshInterval.Duration <= 0 {
-		ck.bad("recommendations.refresh_interval", "must be greater than zero")
-	}
+	ck.positive("recommendations.refresh_interval", r.RefreshInterval)
 	if r.Expiry.Duration < r.RefreshInterval.Duration {
 		ck.bad("recommendations.expiry", "must be at least refresh_interval")
 	}
@@ -152,18 +196,14 @@ func (c *Config) validateServer(ck *checker) {
 
 	for i, o := range c.Server.CORSOrigins {
 		if _, err := url.ParseRequestURI(o); err != nil {
-			ck.bad(fmt.Sprintf("server.cors_origins[%d]", i), "%q is not an absolute URL", o)
+			ck.bad(index("server.cors_origins", i), "%q is not an absolute URL", o)
 		}
 	}
-	if c.Server.ReadTimeout.Duration <= 0 {
-		ck.bad("server.read_timeout", "must be greater than zero")
-	}
+	ck.positive("server.read_timeout", c.Server.ReadTimeout)
 	if c.Server.WriteTimeout.Duration < 0 {
 		ck.bad("server.write_timeout", "must not be negative (0 disables the deadline, required for SSE)")
 	}
-	if c.Server.ShutdownTimeout.Duration <= 0 {
-		ck.bad("server.shutdown_timeout", "must be greater than zero")
-	}
+	ck.positive("server.shutdown_timeout", c.Server.ShutdownTimeout)
 }
 
 func (c *Config) validateDatabase(ck *checker) {
@@ -185,24 +225,16 @@ func (c *Config) validateDatabase(ck *checker) {
 }
 
 func (c *Config) validateLogging(ck *checker) {
-	if !slices.Contains(validLogLevels, c.Logging.Level) {
-		ck.bad("logging.level", "%q is not one of %s", c.Logging.Level, strings.Join(validLogLevels, ", "))
-	}
-	if !slices.Contains(validLogFormats, c.Logging.Format) {
-		ck.bad("logging.format", "%q is not one of %s", c.Logging.Format, strings.Join(validLogFormats, ", "))
-	}
+	ck.oneOf("logging.level", c.Logging.Level, validLogLevels)
+	ck.oneOf("logging.format", c.Logging.Format, validLogFormats)
 }
 
 func (c *Config) validateRuntime(ck *checker) {
 	if c.Runtime.SQLiteCacheKB < 64 {
 		ck.bad("runtime.sqlite_cache_kb", "%d is too small; use at least 64", c.Runtime.SQLiteCacheKB)
 	}
-	if c.Runtime.SearchConcurrency < 1 {
-		ck.bad("runtime.search_concurrency", "must be at least 1")
-	}
-	if c.Runtime.MaxSSEClients < 1 {
-		ck.bad("runtime.max_sse_clients", "must be at least 1")
-	}
+	ck.atLeast("runtime.search_concurrency", c.Runtime.SearchConcurrency, 1)
+	ck.atLeast("runtime.max_sse_clients", c.Runtime.MaxSSEClients, 1)
 	if c.Runtime.AuditRetention.Duration < 0 {
 		ck.bad("runtime.audit_retention", "must not be negative (0 disables pruning)")
 	}
@@ -236,30 +268,16 @@ func (c *Config) validateIndexers(ck *checker) {
 				ck.bad(k("api_key"), "choose api_key or api_key_env, not both")
 			}
 		}
-		if u, err := url.Parse(ix.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
-			ck.bad(k("base_url"), "%q is not an absolute http(s) URL", ix.BaseURL)
-		}
-		if ix.UserAgent == "" {
-			ck.bad(k("user_agent"), "must not be empty")
-		}
+		checkAbsoluteURL(ck, k("base_url"), ix.BaseURL)
+		ck.notEmpty(k("user_agent"), ix.UserAgent)
 		if ix.RateLimitPerSecond <= 0 {
 			ck.bad(k("rate_limit_per_second"), "must be greater than zero")
 		}
-		if ix.RateLimitBurst < 1 {
-			ck.bad(k("rate_limit_burst"), "must be at least 1")
-		}
-		if ix.RequestTimeout.Duration <= 0 {
-			ck.bad(k("request_timeout"), "must be greater than zero")
-		}
-		if ix.MaxRetries < 0 {
-			ck.bad(k("max_retries"), "must not be negative")
-		}
-		if ix.FailureThreshold < 1 {
-			ck.bad(k("failure_threshold"), "must be at least 1")
-		}
-		if ix.BreakerCooldown.Duration <= 0 {
-			ck.bad(k("breaker_cooldown"), "must be greater than zero")
-		}
+		ck.atLeast(k("rate_limit_burst"), ix.RateLimitBurst, 1)
+		ck.positive(k("request_timeout"), ix.RequestTimeout)
+		ck.notNegative(k("max_retries"), ix.MaxRetries)
+		ck.atLeast(k("failure_threshold"), ix.FailureThreshold, 1)
+		ck.positive(k("breaker_cooldown"), ix.BreakerCooldown)
 		if len(ix.Trackers) == 0 {
 			ck.warn("indexers[%d] (%s) has no trackers; magnets built from an info_hash alone may never find peers.", i, ix.Name)
 		}
@@ -277,56 +295,35 @@ func (c *Config) validateDownloader(ck *checker) {
 	if d.Type != "qbittorrent" {
 		ck.bad("downloader.type", "%q is not a supported download client (have: qbittorrent)", d.Type)
 	}
-	if u, err := url.Parse(d.URL); err != nil || u.Scheme == "" || u.Host == "" {
-		ck.bad("downloader.url", "%q is not an absolute http(s) URL", d.URL)
-	}
+	checkAbsoluteURL(ck, "downloader.url", d.URL)
 	// The category is the safety boundary: Reelay only ever touches torrents
 	// it labelled itself. An empty category would make every torrent in the
 	// client fair game.
-	if strings.TrimSpace(d.CategoryTV) == "" {
-		ck.bad("downloader.category_tv", "must not be empty; it is how Reelay avoids touching your other torrents")
-	}
-	if strings.TrimSpace(d.CategoryMovies) == "" {
-		ck.bad("downloader.category_movies", "must not be empty; it is how Reelay avoids touching your other torrents")
+	for key, category := range map[string]string{"downloader.category_tv": d.CategoryTV, "downloader.category_movies": d.CategoryMovies} {
+		if strings.TrimSpace(category) == "" {
+			ck.bad(key, "must not be empty; it is how Reelay avoids touching your other torrents")
+		}
 	}
 	if d.CategoryTV == d.CategoryMovies && d.CategoryTV != "" {
 		ck.warn("downloader.category_tv and category_movies are identical (%q); imports will still work but the client view is harder to read.", d.CategoryTV)
 	}
-	if d.SavePathTV == "" {
-		ck.bad("downloader.save_path_tv", "must not be empty")
-	}
-	if d.SavePathMovies == "" {
-		ck.bad("downloader.save_path_movies", "must not be empty")
-	}
-	if d.StallTimeout.Duration <= 0 {
-		ck.bad("downloader.stall_timeout", "must be greater than zero")
-	}
+	ck.notEmpty("downloader.save_path_tv", d.SavePathTV)
+	ck.notEmpty("downloader.save_path_movies", d.SavePathMovies)
+	ck.positive("downloader.stall_timeout", d.StallTimeout)
 	for i, m := range d.PathMappings {
-		if m.DownloaderPrefix == "" {
-			ck.bad(fmt.Sprintf("downloader.path_mappings[%d].downloader_prefix", i), "must not be empty")
-		}
-		if m.LocalPrefix == "" {
-			ck.bad(fmt.Sprintf("downloader.path_mappings[%d].local_prefix", i), "must not be empty")
-		}
+		ck.notEmpty(index("downloader.path_mappings", i)+".downloader_prefix", m.DownloaderPrefix)
+		ck.notEmpty(index("downloader.path_mappings", i)+".local_prefix", m.LocalPrefix)
 	}
 }
 
 func (c *Config) validateMetadata(ck *checker) {
-	if u, err := url.Parse(c.Metadata.TVmazeBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
-		ck.bad("metadata.tvmaze_base_url", "%q is not an absolute http(s) URL", c.Metadata.TVmazeBaseURL)
-	}
-	if u, err := url.Parse(c.Metadata.TMDBBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
-		ck.bad("metadata.tmdb_base_url", "%q is not an absolute http(s) URL", c.Metadata.TMDBBaseURL)
-	}
+	checkAbsoluteURL(ck, "metadata.tvmaze_base_url", c.Metadata.TVmazeBaseURL)
+	checkAbsoluteURL(ck, "metadata.tmdb_base_url", c.Metadata.TMDBBaseURL)
 	if c.Metadata.TMDBAPIKey == "" {
 		ck.warn("metadata.tmdb_api_key is empty; movie lookups fall back to the title and year you type.")
 	}
-	if c.Metadata.CacheTTL.Duration <= 0 {
-		ck.bad("metadata.cache_ttl", "must be greater than zero")
-	}
-	if c.Metadata.RequestTimeout.Duration <= 0 {
-		ck.bad("metadata.request_timeout", "must be greater than zero")
-	}
+	ck.positive("metadata.cache_ttl", c.Metadata.CacheTTL)
+	ck.positive("metadata.request_timeout", c.Metadata.RequestTimeout)
 }
 
 func (c *Config) validateLibrary(ck *checker) {
@@ -334,9 +331,7 @@ func (c *Config) validateLibrary(ck *checker) {
 	checkRoot(ck, "library.tv_root", l.TVRoot)
 	checkRoot(ck, "library.movie_root", l.MovieRoot)
 
-	if l.MinVideoSizeMB < 1 {
-		ck.bad("library.min_video_size_mb", "must be at least 1")
-	}
+	ck.atLeast("library.min_video_size_mb", l.MinVideoSizeMB, 1)
 	checkExts(ck, "library.video_extensions", l.VideoExtensions, true)
 	checkExts(ck, "library.subtitle_extensions", l.SubtitleExtensions, false)
 
@@ -370,9 +365,7 @@ func (c *Config) validateLibrary(ck *checker) {
 	}
 
 	if l.PostImportWebhook != "" {
-		if u, err := url.Parse(l.PostImportWebhook); err != nil || u.Scheme == "" || u.Host == "" {
-			ck.bad("library.post_import_webhook", "%q is not an absolute http(s) URL", l.PostImportWebhook)
-		}
+		checkAbsoluteURL(ck, "library.post_import_webhook", l.PostImportWebhook)
 	}
 }
 
@@ -384,9 +377,7 @@ func (c *Config) validateSchedules(ck *checker) {
 		"schedules.status_interval":   s.StatusInterval,
 		"schedules.metadata_interval": s.MetadataInterval,
 	} {
-		if d.Duration <= 0 {
-			ck.bad(key, "must be greater than zero")
-		}
+		ck.positive(key, d)
 	}
 	if s.StatusInterval.Duration > 0 && s.StatusInterval.Duration < 5*time.Second {
 		ck.warn("schedules.status_interval (%s) is very aggressive; the download client is polled that often forever.", s.StatusInterval)
@@ -398,17 +389,13 @@ func (c *Config) validateSchedules(ck *checker) {
 		ck.bad("schedules.search_backoff", "must contain at least one interval")
 	}
 	for i, d := range s.SearchBackoff {
-		if d.Duration <= 0 {
-			ck.bad(fmt.Sprintf("schedules.search_backoff[%d]", i), "must be greater than zero")
-		}
+		ck.positive(index("schedules.search_backoff", i), d)
 		if i > 0 && d.Duration < s.SearchBackoff[i-1].Duration {
-			ck.bad(fmt.Sprintf("schedules.search_backoff[%d]", i), "%s is shorter than the previous step %s; the list must be ascending",
+			ck.bad(index("schedules.search_backoff", i), "%s is shorter than the previous step %s; the list must be ascending",
 				d, s.SearchBackoff[i-1])
 		}
 	}
-	if s.SearchGiveUpAfter.Duration <= 0 {
-		ck.bad("schedules.search_give_up_after", "must be greater than zero")
-	}
+	ck.positive("schedules.search_give_up_after", s.SearchGiveUpAfter)
 }
 
 func (c *Config) validateProfiles(ck *checker) {
@@ -434,29 +421,19 @@ func (c *Config) validateProfiles(ck *checker) {
 			ck.bad(k("allowed_resolutions"), "must list at least one resolution, best first")
 		}
 		for j, r := range p.AllowedResolutions {
-			if !slices.Contains(validResolution, r) {
-				ck.bad(fmt.Sprintf("%s[%d]", k("allowed_resolutions"), j),
-					"%q is not one of %s", r, strings.Join(validResolution, ", "))
-			}
+			ck.oneOf(index(k("allowed_resolutions"), j), r, validResolution)
 		}
 		if len(p.AllowedSources) == 0 {
 			ck.bad(k("allowed_sources"), "must list at least one source, best first")
 		}
-		for j, s := range p.AllowedSources {
-			if !slices.Contains(validSources, s) {
-				ck.bad(fmt.Sprintf("%s[%d]", k("allowed_sources"), j),
-					"%q is not one of %s", s, strings.Join(validSources, ", "))
-			}
+		for j, src := range p.AllowedSources {
+			ck.oneOf(index(k("allowed_sources"), j), src, validSources)
 		}
-		if p.MinSizeMB < 0 {
-			ck.bad(k("min_size_mb"), "must not be negative")
-		}
+		ck.notNegative(k("min_size_mb"), p.MinSizeMB)
 		if p.MaxSizeMB <= p.MinSizeMB {
 			ck.bad(k("max_size_mb"), "%d must be greater than min_size_mb (%d)", p.MaxSizeMB, p.MinSizeMB)
 		}
-		if p.MinSeeders < 0 {
-			ck.bad(k("min_seeders"), "must not be negative")
-		}
+		ck.notNegative(k("min_seeders"), p.MinSeeders)
 		if p.MinSeeders == 0 {
 			ck.warn("profiles[%d] (%s) has min_seeders 0; dead releases will be grabbed and stall.", i, p.Name)
 		}
@@ -464,15 +441,11 @@ func (c *Config) validateProfiles(ck *checker) {
 			ck.bad(k("upgrade_until"), "%q is not in this profile's allowed_resolutions", p.UpgradeUntil)
 		}
 		for j, h := range p.HDRPrefs {
-			if !slices.Contains([]string{"hdr10", "hdr10plus", "dv", "hlg"}, h) {
-				ck.bad(fmt.Sprintf("%s[%d]", k("hdr_prefs"), j),
-					"%q is not one of hdr10, hdr10plus, dv, hlg", h)
-			}
+			ck.oneOf(index(k("hdr_prefs"), j), h, validHDR)
 		}
 		for j, lang := range p.LanguagePrefs {
 			if len(lang) != 2 {
-				ck.bad(fmt.Sprintf("%s[%d]", k("language_prefs"), j),
-					"%q is not a two-letter ISO-639-1 code", lang)
+				ck.bad(index(k("language_prefs"), j), "%q is not a two-letter ISO-639-1 code", lang)
 			}
 		}
 	}
@@ -593,10 +566,10 @@ func checkExts(ck *checker, key string, exts []string, required bool) {
 	}
 	for i, e := range exts {
 		if !strings.HasPrefix(e, ".") {
-			ck.bad(fmt.Sprintf("%s[%d]", key, i), "%q must start with a dot", e)
+			ck.bad(index(key, i), "%q must start with a dot", e)
 		}
 		if e != strings.ToLower(e) {
-			ck.bad(fmt.Sprintf("%s[%d]", key, i), "%q must be lowercase; matching is case-insensitive on the lowered form", e)
+			ck.bad(index(key, i), "%q must be lowercase; matching is case-insensitive on the lowered form", e)
 		}
 	}
 }

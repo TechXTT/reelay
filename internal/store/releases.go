@@ -82,3 +82,22 @@ func scanRelease(row scanner) (model.StoredRelease, error) {
 	v.SeenAt, err = ParseTime(seen)
 	return v, err
 }
+
+// GetMany returns the stored releases among ids keyed by ID; unknown ids are absent.
+func (r *ReleaseRepository) GetMany(ctx context.Context, ids []int64) (map[int64]model.StoredRelease, error) {
+	releases := make(map[int64]model.StoredRelease, len(ids))
+	for _, chunk := range chunkIDs(ids) {
+		rows, err := r.s.ro.QueryContext(ctx, selectReleaseSQL+" WHERE id IN ("+placeholders(len(chunk))+")", int64Args(chunk)...)
+		if err != nil {
+			return nil, fmt.Errorf("list releases: %w", err)
+		}
+		values, err := collectRows(rows, scanRelease)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			releases[value.ID] = value
+		}
+	}
+	return releases, nil
+}

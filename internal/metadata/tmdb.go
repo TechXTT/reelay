@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,25 +22,19 @@ type TMDBOptions struct {
 }
 
 type TMDB struct {
-	http  httpJSONClient
-	key   string
-	cache Cache
-	ttl   time.Duration
-	now   func() time.Time
+	client *cachedJSONClient
+	key    string
 }
 
 func NewTMDB(opt TMDBOptions) (*TMDB, error) {
-	h, err := newHTTPJSONClient(opt.BaseURL, opt.HTTPClient, opt.Timeout)
+	client, err := newCachedJSONClient(cachedJSONOptions{
+		Provider: "tmdb", BaseURL: opt.BaseURL, Client: opt.HTTPClient, Timeout: opt.Timeout,
+		Cache: opt.Cache, CacheTTL: opt.CacheTTL, Now: opt.Now,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if opt.CacheTTL <= 0 {
-		opt.CacheTTL = 24 * time.Hour
-	}
-	if opt.Now == nil {
-		opt.Now = time.Now
-	}
-	return &TMDB{http: h, key: opt.APIKey, cache: opt.Cache, ttl: opt.CacheTTL, now: opt.Now}, nil
+	return &TMDB{client: client, key: opt.APIKey}, nil
 }
 
 type tmdbSearchResponse struct {
@@ -123,7 +116,7 @@ func (t *TMDB) SearchMovies(ctx context.Context, title string, year int) ([]Movi
 	if year > 0 {
 		q.Set("primary_release_year", strconv.Itoa(year))
 	}
-	if _, err := t.cachedGET(ctx, cacheKey, "/search/movie", q, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, cacheKey, "/search/movie", q, &payload); err != nil {
 		return nil, err
 	}
 	out := make([]Movie, 0, len(payload.Results))
@@ -141,7 +134,7 @@ func (t *TMDB) MovieDetails(ctx context.Context, id int) (Movie, error) {
 	var payload tmdbMovie
 	var q = url.Values{"api_key": {t.key}, "append_to_response": {"external_ids"}}
 
-	if _, err := t.cachedGET(ctx, cacheKey, "/movie/"+strconv.Itoa(id), q, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, cacheKey, "/movie/"+strconv.Itoa(id), q, &payload); err != nil {
 		return Movie{}, err
 	}
 	return convertTMDBMovie(payload), nil
@@ -174,27 +167,6 @@ func yearFromDate(s string) int {
 	return y
 }
 
-func cacheLoad(ctx context.Context, cache Cache, provider, key string, now time.Time, dst any) ([]byte, bool, error) {
-	if cache == nil {
-		return nil, false, nil
-	}
-	raw, hit, err := cache.Get(ctx, provider, key, now)
-	if err != nil || !hit {
-		return raw, hit, err
-	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		return nil, false, fmt.Errorf("metadata: decode cached %s/%s: %w", provider, key, err)
-	}
-	return raw, true, nil
-}
-
-func cacheStore(ctx context.Context, cache Cache, provider, key string, raw []byte, now time.Time, ttl time.Duration) error {
-	if cache == nil {
-		return nil
-	}
-	return cache.Put(ctx, provider, key, raw, now, ttl)
-}
-
 var _ MovieProvider = (*TMDB)(nil)
 var _ RecommendationProvider = (*TMDB)(nil)
 var _ PreviewProvider = (*TMDB)(nil)
@@ -214,40 +186,31 @@ func (t *TMDB) Discover(ctx context.Context, mediaType string) ([]DiscoveryItem,
 	}
 	var payload tmdbSearchResponse
 	q := url.Values{"api_key": {t.key}, "include_adult": {"false"}, "sort_by": {"vote_average.desc"}, "vote_count.gte": {"250"}}
-	if _, err := t.cachedGET(ctx, "discover:"+kind, "/discover/"+kind, q, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, "discover:"+kind, "/discover/"+kind, q, &payload); err != nil {
 		return nil, err
 	}
 	return t.convertDiscovery(ctx, mediaType, payload.Results)
 }
 
 func (t *TMDB) DiscoveryDetails(ctx context.Context, mediaType string, id int) (DiscoveryItem, error) {
+	return t.discoveryItem(ctx, mediaType, id, "details", "tmdb: discovery details require a positive id and api key", "external_ids,credits,keywords")
+}
+
+func (t *TMDB) DiscoveryPreview(ctx context.Context, mediaType string, id int) (DiscoveryItem, error) {
+	return t.discoveryItem(ctx, mediaType, id, "preview", "tmdb: discovery preview requires a positive id and api key", "external_ids,credits,keywords,videos")
+}
+
+func (t *TMDB) discoveryItem(ctx context.Context, mediaType string, id int, cachePrefix, invalidMsg, appendToResponse string) (DiscoveryItem, error) {
 	kind, err := tmdbKind(mediaType)
 	if err != nil {
 		return DiscoveryItem{}, err
 	}
 	if id <= 0 || strings.TrimSpace(t.key) == "" {
-		return DiscoveryItem{}, errors.New("tmdb: discovery details require a positive id and api key")
+		return DiscoveryItem{}, errors.New(invalidMsg)
 	}
 	var payload tmdbMovie
-	q := url.Values{"api_key": {t.key}, "append_to_response": {"external_ids,credits,keywords"}}
-	if _, err := t.cachedGET(ctx, fmt.Sprintf("details:%s:%d", kind, id), "/"+kind+"/"+strconv.Itoa(id), q, &payload); err != nil {
-		return DiscoveryItem{}, err
-	}
-	return convertDiscoveryItem(mediaType, payload, nil), nil
-}
-
-func (t *TMDB) DiscoveryPreview(ctx context.Context, mediaType string, id int) (DiscoveryItem, error) {
-	var kind, err = tmdbKind(mediaType)
-	var payload tmdbMovie
-	var q = url.Values{"api_key": {t.key}, "append_to_response": {"external_ids,credits,keywords,videos"}}
-
-	if err != nil {
-		return DiscoveryItem{}, err
-	}
-	if id <= 0 || strings.TrimSpace(t.key) == "" {
-		return DiscoveryItem{}, errors.New("tmdb: discovery preview requires a positive id and api key")
-	}
-	if _, err := t.cachedGET(ctx, fmt.Sprintf("preview:%s:%d", kind, id), "/"+kind+"/"+strconv.Itoa(id), q, &payload); err != nil {
+	q := url.Values{"api_key": {t.key}, "append_to_response": {appendToResponse}}
+	if err := t.client.cachedGET(ctx, fmt.Sprintf("%s:%s:%d", cachePrefix, kind, id), "/"+kind+"/"+strconv.Itoa(id), q, &payload); err != nil {
 		return DiscoveryItem{}, err
 	}
 	return convertDiscoveryItem(mediaType, payload, nil), nil
@@ -264,26 +227,10 @@ func (t *TMDB) discoveryList(ctx context.Context, mediaType string, id int, endp
 	var payload tmdbSearchResponse
 	path := "/" + kind + "/" + strconv.Itoa(id) + "/" + endpoint
 	q := url.Values{"api_key": {t.key}, "page": {"1"}}
-	if _, err := t.cachedGET(ctx, fmt.Sprintf("%s:%s:%d", endpoint, kind, id), path, q, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, fmt.Sprintf("%s:%s:%d", endpoint, kind, id), path, q, &payload); err != nil {
 		return nil, err
 	}
 	return t.convertDiscovery(ctx, mediaType, payload.Results)
-}
-
-func (t *TMDB) cachedGET(ctx context.Context, cacheKey, path string, q url.Values, dst any) ([]byte, error) {
-	if _, hit, err := cacheLoad(ctx, t.cache, "tmdb", cacheKey, t.now(), dst); err != nil {
-		return nil, err
-	} else if hit {
-		return nil, nil
-	}
-	raw, err := t.http.get(ctx, path, q, dst)
-	if err != nil {
-		return nil, err
-	}
-	if err := cacheStore(ctx, t.cache, "tmdb", cacheKey, raw, t.now(), t.ttl); err != nil {
-		return nil, err
-	}
-	return raw, nil
 }
 
 func (t *TMDB) convertDiscovery(ctx context.Context, mediaType string, values []tmdbMovie) ([]DiscoveryItem, error) {
@@ -309,7 +256,7 @@ func (t *TMDB) genreMap(ctx context.Context, mediaType string) (map[int]string, 
 			Name string `json:"name"`
 		} `json:"genres"`
 	}
-	if _, err := t.cachedGET(ctx, "genres:"+kind, "/genre/"+kind+"/list", url.Values{"api_key": {t.key}}, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, "genres:"+kind, "/genre/"+kind+"/list", url.Values{"api_key": {t.key}}, &payload); err != nil {
 		return nil, err
 	}
 	out := make(map[int]string, len(payload.Genres))
@@ -373,26 +320,39 @@ func convertDiscoveryItem(mediaType string, value tmdbMovie, genreNames map[int]
 	} else if len(value.ProductionCountries) > 0 {
 		country = value.ProductionCountries[0].ISO
 	}
-	videos := make([]PreviewVideo, 0, 6)
 	seasons := make([]int, 0, len(value.Seasons))
 	for _, season := range value.Seasons {
 		seasons = append(seasons, season.Number)
 	}
-	// Only known YouTube IDs are exposed; never embed a provider-supplied URL.
+	return DiscoveryItem{MediaType: mediaType, TMDBID: value.ID, Title: title, Year: yearFromDate(date), Overview: value.Overview,
+		PosterURL: tmdbPoster(value.PosterPath), Genres: genres, Keywords: keywords, People: people, Language: value.OriginalLanguage,
+		Country: country, RuntimeMinutes: runtime, VoteAverage: value.VoteAverage, VoteCount: value.VoteCount,
+		IMDBID: value.ExternalIDs.IMDBID, TVDBID: value.ExternalIDs.TVDBID, Videos: previewVideos(value), Seasons: seasons}
+}
+
+// previewVideos keeps at most six official-first trailers and teasers.
+// Only known YouTube IDs are exposed; never embed a provider-supplied URL.
+func previewVideos(value tmdbMovie) []PreviewVideo {
+	var videos = make([]PreviewVideo, 0, 6)
+
 	for _, videoType := range []string{"Trailer", "Teaser"} {
 		for _, official := range []bool{true, false} {
 			for _, video := range value.Videos.Results {
-				if len(videos) >= 6 || video.Site != "YouTube" || video.Type != videoType || video.Official != official || len(video.Key) != 11 || strings.IndexFunc(video.Key, func(r rune) bool {
-					return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_')
-				}) >= 0 {
+				if len(videos) >= 6 {
+					return videos
+				}
+				if video.Site != "YouTube" || video.Type != videoType || video.Official != official || !isYouTubeKey(video.Key) {
 					continue
 				}
 				videos = append(videos, PreviewVideo{Name: video.Name, Key: video.Key, Type: video.Type, Official: video.Official})
 			}
 		}
 	}
-	return DiscoveryItem{MediaType: mediaType, TMDBID: value.ID, Title: title, Year: yearFromDate(date), Overview: value.Overview,
-		PosterURL: tmdbPoster(value.PosterPath), Genres: genres, Keywords: keywords, People: people, Language: value.OriginalLanguage,
-		Country: country, RuntimeMinutes: runtime, VoteAverage: value.VoteAverage, VoteCount: value.VoteCount,
-		IMDBID: value.ExternalIDs.IMDBID, TVDBID: value.ExternalIDs.TVDBID, Videos: videos, Seasons: seasons}
+	return videos
+}
+
+func isYouTubeKey(key string) bool {
+	return len(key) == 11 && strings.IndexFunc(key, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_')
+	}) < 0
 }

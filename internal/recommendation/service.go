@@ -60,32 +60,141 @@ func (s *Service) GenerateAll(ctx context.Context) error {
 }
 
 func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType string) error {
-	preferences, err := s.store.Recommendations().Preferences(ctx, serverID, userID)
+	repo := s.store.Recommendations()
+	preferences, err := repo.Preferences(ctx, serverID, userID)
 	if err != nil {
 		return err
 	}
-	seeds, err := s.store.Recommendations().PositiveSeeds(ctx, serverID, userID, mediaType, s.cfg.SeedLimit)
+	seeds, err := repo.PositiveSeeds(ctx, serverID, userID, mediaType, s.cfg.SeedLimit)
 	if err != nil {
 		return err
 	}
-	excluded, err := s.store.Recommendations().ExcludedTMDBIDs(ctx, serverID, userID, mediaType)
+	excluded, err := repo.ExcludedTMDBIDs(ctx, serverID, userID, mediaType)
 	if err != nil {
 		return err
 	}
-	ratings, err := s.store.Recommendations().Ratings(ctx, serverID, userID, mediaType)
+	ratings, err := repo.Ratings(ctx, serverID, userID, mediaType)
 	if err != nil {
 		return err
 	}
-	type aggregate struct {
-		item     metadata.DiscoveryItem
-		provider float64
-		matches  int
+	run := &generation{
+		service:   s,
+		ctx:       ctx,
+		mediaType: mediaType,
+		excluded:  excluded,
+		filter:    newPreferenceFilter(preferences),
+		details:   map[int]detailResult{},
 	}
-	pool := map[int]*aggregate{}
+	signals, searchSeeds := run.gatherSignals(seeds, ratings)
+	pool, err := run.fetchCandidates(searchSeeds)
+	if err != nil {
+		return err
+	}
+	candidates := run.enrich(pool)
+	values := Rank(candidates, tasteProfile(signals), s.weights(preferences), s.cfg.ResultLimit)
+	now := s.now().UTC()
+	for i := range values {
+		values[i].ServerID = serverID
+		values[i].UserID = userID
+		values[i].MediaType = mediaType
+		values[i].Status = "active"
+		values[i].GeneratedAt = now
+		values[i].ExpiresAt = now.Add(s.cfg.Expiry.Duration)
+	}
+	if err := repo.Replace(ctx, serverID, userID, mediaType, values); err != nil {
+		return err
+	}
+	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
+	return nil
+}
+
+func (s *Service) weights(preferences store.RecommendationPreferences) Weights {
+	weights := Weights{Provider: float64(s.cfg.ProviderWeight), Affinity: float64(s.cfg.AffinityWeight), People: float64(s.cfg.PeopleWeight), MultiSeed: float64(s.cfg.MultiSeedWeight), Rating: float64(s.cfg.RatingWeight), Preference: float64(s.cfg.PreferenceWeight), Novelty: float64(s.cfg.NoveltyWeight)}
+	weights.Novelty *= float64(preferences.Diversity) / 100
+	switch preferences.Familiarity {
+	case "familiar":
+		weights.Affinity += weights.Novelty
+		weights.Novelty = 0
+	case "explore":
+		weights.Novelty += weights.Affinity / 2
+		weights.Affinity /= 2
+	}
+	return weights
+}
+
+// preferenceFilter holds a user's language and excluded-genre preferences as
+// sets so each candidate is checked in constant time.
+type preferenceFilter struct {
+	languages map[string]bool
+	genres    map[string]bool
+}
+
+func newPreferenceFilter(preferences store.RecommendationPreferences) preferenceFilter {
+	filter := preferenceFilter{languages: make(map[string]bool, len(preferences.Languages)), genres: make(map[string]bool, len(preferences.ExcludedGenres))}
+	for _, language := range preferences.Languages {
+		filter.languages[language] = true
+	}
+	for _, genre := range preferences.ExcludedGenres {
+		filter.genres[strings.ToLower(genre)] = true
+	}
+	return filter
+}
+
+// allows reports whether a title passes the preferences. Provider listings may
+// omit the language, so an empty language is only rejected once details are
+// known (languageKnown).
+func (f preferenceFilter) allows(language string, genres []string, languageKnown bool) bool {
+	if len(f.languages) > 0 && (languageKnown || language != "") && !f.languages[language] {
+		return false
+	}
+	return !f.excludesGenre(genres)
+}
+
+func (f preferenceFilter) excludesGenre(genres []string) bool {
+	if len(f.genres) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(genres, func(genre string) bool { return f.genres[strings.ToLower(genre)] })
+}
+
+type detailResult struct {
+	item metadata.DiscoveryItem
+	err  error
+}
+
+type aggregate struct {
+	item     metadata.DiscoveryItem
+	provider float64
+	matches  int
+}
+
+// generation is the state of one Generate call. Provider details are memoized
+// so an id shared by seeds, ratings and candidates is fetched once.
+type generation struct {
+	service   *Service
+	ctx       context.Context
+	mediaType string
+	excluded  map[int]bool
+	filter    preferenceFilter
+	details   map[int]detailResult
+}
+
+func (g *generation) detail(tmdbID int) (metadata.DiscoveryItem, error) {
+	if cached, ok := g.details[tmdbID]; ok {
+		return cached.item, cached.err
+	}
+	item, err := g.service.provider.DiscoveryDetails(g.ctx, g.mediaType, tmdbID)
+	g.details[tmdbID] = detailResult{item: item, err: err}
+	return item, err
+}
+
+// gatherSignals turns positive seeds and signed ratings into taste signals and
+// the list of titles to query the provider with.
+func (g *generation) gatherSignals(seeds []model.JellyfinItem, ratings []model.RecommendationRating) ([]tasteSignal, []model.JellyfinItem) {
 	signals := make([]tasteSignal, 0, len(seeds)+len(ratings))
 	searchSeeds := make([]model.JellyfinItem, 0, len(seeds)+len(ratings))
 	for _, seed := range seeds {
-		if detail, detailErr := s.provider.DiscoveryDetails(ctx, mediaType, seed.TMDBID); detailErr == nil {
+		if detail, err := g.detail(seed.TMDBID); err == nil {
 			seed = tasteItem(detail)
 		}
 		signals = append(signals, tasteSignal{item: seed, weight: 1})
@@ -97,8 +206,8 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			continue
 		}
 		rated[rating.TMDBID] = true
-		detail, detailErr := s.provider.DiscoveryDetails(ctx, mediaType, rating.TMDBID)
-		if detailErr != nil {
+		detail, err := g.detail(rating.TMDBID)
+		if err != nil {
 			continue
 		}
 		weight := float64(rating.Rating-3) / 2
@@ -109,72 +218,75 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 			searchSeeds = append(searchSeeds, tasteItem(detail))
 		}
 	}
-	add := func(values []metadata.DiscoveryItem, matched map[int]bool) {
-		for rank, item := range values {
-			if item.TMDBID <= 0 || excluded[item.TMDBID] {
-				continue
-			}
-			if item.Language != "" && len(preferences.Languages) > 0 && !slices.Contains(preferences.Languages, item.Language) {
-				continue
-			}
-			excludedGenre := false
-			for _, genre := range item.Genres {
-				for _, excluded := range preferences.ExcludedGenres {
-					if strings.EqualFold(genre, excluded) {
-						excludedGenre = true
-					}
-				}
-			}
-			if excludedGenre {
-				continue
-			}
-			score := 1 - float64(rank)/float64(max(1, len(values)))
-			a := pool[item.TMDBID]
-			if a == nil {
-				a = &aggregate{item: item}
-				pool[item.TMDBID] = a
-			}
-			if score > a.provider {
-				a.provider = score
-			}
-			if !matched[item.TMDBID] {
-				a.matches++
-				matched[item.TMDBID] = true
-			}
-		}
-	}
-	if len(searchSeeds) == 0 {
-		values, err := s.provider.Discover(ctx, mediaType)
-		if err != nil {
-			return err
-		}
-		add(values, map[int]bool{})
-	} else {
-		queried := map[int]bool{}
-		for _, seed := range searchSeeds {
-			if queried[seed.TMDBID] {
-				continue
-			}
-			queried[seed.TMDBID] = true
-			values, err := s.provider.Recommendations(ctx, mediaType, seed.TMDBID)
-			if err != nil {
-				return fmt.Errorf("recommendations for %s: %w", seed.Title, err)
-			}
-			matched := map[int]bool{}
+	return signals, searchSeeds
+}
 
-			add(values, matched)
-			if similar, err := s.provider.Similar(ctx, mediaType, seed.TMDBID); err == nil {
-				add(similar, matched)
-			}
-			if len(pool) >= s.cfg.CandidateLimit {
-				break
-			}
+// fetchCandidates queries the provider once per distinct seed (or falls back to
+// discovery without seeds) and aggregates the listings into a candidate pool.
+func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]*aggregate, error) {
+	provider := g.service.provider
+	pool := map[int]*aggregate{}
+	if len(searchSeeds) == 0 {
+		values, err := provider.Discover(g.ctx, g.mediaType)
+		if err != nil {
+			return nil, err
+		}
+		g.addListing(pool, values, map[int]bool{})
+		return pool, nil
+	}
+	queried := map[int]bool{}
+	for _, seed := range searchSeeds {
+		if queried[seed.TMDBID] {
+			continue
+		}
+		queried[seed.TMDBID] = true
+		values, err := provider.Recommendations(g.ctx, g.mediaType, seed.TMDBID)
+		if err != nil {
+			return nil, fmt.Errorf("recommendations for %s: %w", seed.Title, err)
+		}
+		matched := map[int]bool{}
+		g.addListing(pool, values, matched)
+		if similar, err := provider.Similar(g.ctx, g.mediaType, seed.TMDBID); err == nil {
+			g.addListing(pool, similar, matched)
+		}
+		if len(pool) >= g.service.cfg.CandidateLimit {
+			break
 		}
 	}
-	profile := tasteProfile(signals)
-	candidates := make([]Candidate, 0, min(len(pool), s.cfg.CandidateLimit))
-	for _, a := range pool {
-		candidates = append(candidates, Candidate{Item: toModel(a.item), ProviderScore: a.provider, SeedMatches: a.matches, VoteAverage: a.item.VoteAverage, VoteCount: a.item.VoteCount})
+	return pool, nil
+}
+
+// addListing scores one provider listing by position and merges the allowed
+// items into the pool. matched tracks which ids this seed already counted.
+func (g *generation) addListing(pool map[int]*aggregate, values []metadata.DiscoveryItem, matched map[int]bool) {
+	for rank, item := range values {
+		if item.TMDBID <= 0 || g.excluded[item.TMDBID] || !g.filter.allows(item.Language, item.Genres, false) {
+			continue
+		}
+		score := 1 - float64(rank)/float64(max(1, len(values)))
+		entry := pool[item.TMDBID]
+		if entry == nil {
+			entry = &aggregate{item: item}
+			pool[item.TMDBID] = entry
+		}
+		if score > entry.provider {
+			entry.provider = score
+		}
+		if !matched[item.TMDBID] {
+			entry.matches++
+			matched[item.TMDBID] = true
+		}
+	}
+}
+
+// enrich orders the pool by provider score, keeps CandidateLimit entries,
+// fetches details for the best of them and re-applies the preferences with the
+// now-known language and genres.
+func (g *generation) enrich(pool map[int]*aggregate) []Candidate {
+	cfg := g.service.cfg
+	candidates := make([]Candidate, 0, len(pool))
+	for _, entry := range pool {
+		candidates = append(candidates, Candidate{Item: toModel(entry.item), ProviderScore: entry.provider, SeedMatches: entry.matches, VoteAverage: entry.item.VoteAverage, VoteCount: entry.item.VoteCount})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].ProviderScore != candidates[j].ProviderScore {
@@ -182,55 +294,18 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		}
 		return candidates[i].Item.TMDBID < candidates[j].Item.TMDBID
 	})
-	if len(candidates) > s.cfg.CandidateLimit {
-		candidates = candidates[:s.cfg.CandidateLimit]
-	}
-	enrichLimit := min(len(candidates), max(s.cfg.ResultLimit*2, 40))
-	for i := 0; i < enrichLimit; i++ {
-		detail, err := s.provider.DiscoveryDetails(ctx, mediaType, candidates[i].Item.TMDBID)
+	candidates = candidates[:min(len(candidates), cfg.CandidateLimit)]
+	enrichLimit := min(len(candidates), max(cfg.ResultLimit*2, 40))
+	for i := range candidates[:enrichLimit] {
+		detail, err := g.detail(candidates[i].Item.TMDBID)
 		if err != nil {
 			continue
 		}
 		candidates[i].Item, candidates[i].VoteAverage, candidates[i].VoteCount = toModel(detail), detail.VoteAverage, detail.VoteCount
 	}
-	candidates = slices.DeleteFunc(candidates, func(candidate Candidate) bool {
-		if len(preferences.Languages) > 0 && !slices.Contains(preferences.Languages, candidate.Item.Language) {
-			return true
-		}
-		for _, genre := range candidate.Item.Genres {
-			for _, excluded := range preferences.ExcludedGenres {
-				if strings.EqualFold(genre, excluded) {
-					return true
-				}
-			}
-		}
-		return false
+	return slices.DeleteFunc(candidates, func(candidate Candidate) bool {
+		return !g.filter.allows(candidate.Item.Language, candidate.Item.Genres, true)
 	})
-	weights := Weights{Provider: float64(s.cfg.ProviderWeight), Affinity: float64(s.cfg.AffinityWeight), People: float64(s.cfg.PeopleWeight), MultiSeed: float64(s.cfg.MultiSeedWeight), Rating: float64(s.cfg.RatingWeight), Preference: float64(s.cfg.PreferenceWeight), Novelty: float64(s.cfg.NoveltyWeight)}
-	weights.Novelty *= float64(preferences.Diversity) / 100
-	if preferences.Familiarity == "familiar" {
-		weights.Affinity += weights.Novelty
-		weights.Novelty = 0
-	}
-	if preferences.Familiarity == "explore" {
-		weights.Novelty += weights.Affinity / 2
-		weights.Affinity /= 2
-	}
-	values := Rank(candidates, profile, weights, s.cfg.ResultLimit)
-	now := s.now().UTC()
-	for i := range values {
-		values[i].ServerID = serverID
-		values[i].UserID = userID
-		values[i].MediaType = mediaType
-		values[i].Status = "active"
-		values[i].GeneratedAt = now
-		values[i].ExpiresAt = now.Add(s.cfg.Expiry.Duration)
-	}
-	if err := s.store.Recommendations().Replace(ctx, serverID, userID, mediaType, values); err != nil {
-		return err
-	}
-	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
-	return nil
 }
 
 type tasteSignal struct {

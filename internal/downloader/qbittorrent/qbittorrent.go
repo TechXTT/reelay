@@ -100,13 +100,10 @@ func New(cfg config.Downloader, opt Options) (*Client, error) {
 
 	httpClient := opt.HTTPClient
 	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
+	if httpClient.Jar == nil {
 		// A cookie jar is what makes the SID cookie persist across calls.
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			return nil, fmt.Errorf("qbittorrent: cookie jar: %w", err)
-		}
-		httpClient = &http.Client{Jar: jar}
-	} else if httpClient.Jar == nil {
 		jar, err := cookiejar.New(nil)
 		if err != nil {
 			return nil, fmt.Errorf("qbittorrent: cookie jar: %w", err)
@@ -143,11 +140,11 @@ func (c *Client) APIVersion() string {
 
 // Healthy checks the client is reachable and we are authenticated.
 func (c *Client) Healthy(ctx context.Context) error {
-	body, err := c.do(ctx, request{method: http.MethodGet, path: "/api/v2/app/version"})
+	v, err := c.Version(ctx)
 	if err != nil {
 		return err
 	}
-	if v := strings.TrimSpace(string(body)); v == "" {
+	if v == "" {
 		return errors.New("qbittorrent: app/version returned an empty response")
 	}
 	return nil
@@ -342,15 +339,7 @@ func (c *Client) Remove(ctx context.Context, hash string, deleteData bool) error
 // one of Reelay's categories. qBittorrent 5 renamed pause/resume to stop/start;
 // the legacy endpoint fallback keeps older supported clients working.
 func (c *Client) SetPaused(ctx context.Context, hashes []string, paused bool) error {
-	requested := make([]string, 0, len(hashes))
-	requestedSet := make(map[string]bool, len(hashes))
-	for _, hash := range hashes {
-		hash = strings.ToLower(strings.TrimSpace(hash))
-		if hash != "" && !requestedSet[hash] {
-			requestedSet[hash] = true
-			requested = append(requested, hash)
-		}
-	}
+	requested := uniqueHashes(hashes)
 	// Status with an empty hash list intentionally means "list all". Returning
 	// here prevents an empty queue operation from broadening into every owned
 	// torrent in the client.
@@ -361,15 +350,11 @@ func (c *Client) SetPaused(ctx context.Context, hashes []string, paused bool) er
 	if err != nil {
 		return fmt.Errorf("qbittorrent: verify torrents before changing pause state: %w", err)
 	}
-	owned := make([]string, 0, len(statuses))
-	seen := make(map[string]bool, len(statuses))
+	ownedHashes := make([]string, 0, len(statuses))
 	for _, status := range statuses {
-		hash := strings.ToLower(strings.TrimSpace(status.Hash))
-		if hash != "" && !seen[hash] {
-			seen[hash] = true
-			owned = append(owned, hash)
-		}
+		ownedHashes = append(ownedHashes, status.Hash)
 	}
+	owned := uniqueHashes(ownedHashes)
 	if len(owned) == 0 {
 		return nil
 	}
@@ -380,16 +365,32 @@ func (c *Client) SetPaused(ctx context.Context, hashes []string, paused bool) er
 	}
 	req := request{method: http.MethodPost, path: path,
 		form: url.Values{"hashes": {strings.Join(owned, "|")}}}
-	if _, err := c.do(ctx, req); errors.Is(err, downloader.ErrNotFound) {
+	_, err = c.do(ctx, req)
+	if errors.Is(err, downloader.ErrNotFound) {
 		req.path = legacyPath
-		if _, err = c.do(ctx, req); err != nil {
-			return fmt.Errorf("qbittorrent: set paused=%t: %w", paused, err)
-		}
-	} else if err != nil {
+		_, err = c.do(ctx, req)
+	}
+	if err != nil {
 		return fmt.Errorf("qbittorrent: set paused=%t: %w", paused, err)
 	}
 	c.log.Info("torrent pause state changed", "paused", paused, "count", len(owned))
 	return nil
+}
+
+// uniqueHashes lowercases and trims hashes, dropping blanks and duplicates
+// while keeping first-seen order.
+func uniqueHashes(hashes []string) []string {
+	var unique = make([]string, 0, len(hashes))
+	var seen = make(map[string]bool, len(hashes))
+
+	for _, hash := range hashes {
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if hash != "" && !seen[hash] {
+			seen[hash] = true
+			unique = append(unique, hash)
+		}
+	}
+	return unique
 }
 
 func multipartBody(fields map[string]string) (string, string, error) {

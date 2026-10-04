@@ -31,16 +31,13 @@ func NormalizeTitle(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
-		case unicode.IsSpace(r):
-			b.WriteRune(' ')
-		default:
-			// Any other punctuation becomes a separator: "spider-man" and
-			// "spider man" must normalise identically.
-			b.WriteRune(' ')
+			continue
 		}
+		// Whitespace and punctuation alike become a separator: "spider-man" and
+		// "spider man" must normalise identically.
+		b.WriteRune(' ')
 	}
 	return strings.TrimSpace(multiSpaceRe.ReplaceAllString(b.String(), " "))
 }

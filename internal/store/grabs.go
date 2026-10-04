@@ -129,10 +129,7 @@ func (r *GrabRepository) CreateGrabbedFor(ctx context.Context, locks []*ItemLock
 		if err != nil {
 			return err
 		}
-		table := "episodes"
-		if lock.Subject == model.SubjectMovie {
-			table = "movies"
-		}
+		var table = itemTable(lock.Subject)
 		for _, itemLock := range locks {
 			from := states[itemLock.ID]
 			res, err = tx.ExecContext(ctx, `UPDATE `+table+` SET state='grabbed',
@@ -244,4 +241,27 @@ func scanGrab(row scanner) (model.Grab, error) {
 		v.ProgressedAt = *t
 	}
 	return v, nil
+}
+
+// BySubjects returns the grabs of every listed subject keyed by subject ID, newest first per subject.
+func (r *GrabRepository) BySubjects(ctx context.Context, subject model.SubjectType, ids []int64) (map[int64][]model.Grab, error) {
+	if !subject.ValidItem() {
+		return nil, errors.New("list subject grabs: invalid subject")
+	}
+	grabs := make(map[int64][]model.Grab, len(ids))
+	for _, chunk := range chunkIDs(ids) {
+		rows, err := r.s.ro.QueryContext(ctx, selectGrabSQL+" WHERE subject_type=? AND subject_id IN ("+placeholders(len(chunk))+
+			") ORDER BY created_at DESC, id DESC", append([]any{subject}, int64Args(chunk)...)...)
+		if err != nil {
+			return nil, fmt.Errorf("list grabs for %s subjects: %w", subject, err)
+		}
+		values, err := collectRows(rows, scanGrab)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			grabs[value.SubjectID] = append(grabs[value.SubjectID], value)
+		}
+	}
+	return grabs, nil
 }

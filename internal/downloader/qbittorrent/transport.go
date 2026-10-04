@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/downloader"
@@ -89,12 +90,7 @@ func statusOK(status int, allowed []int) bool {
 	if len(allowed) == 0 {
 		return status == http.StatusOK
 	}
-	for _, a := range allowed {
-		if status == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, status)
 }
 
 func (c *Client) roundTrip(ctx context.Context, req request) ([]byte, int, error) {

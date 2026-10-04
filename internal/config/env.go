@@ -29,22 +29,23 @@ func applyEnv(c *Config) error {
 
 type lookupFunc func(key string) (string, bool)
 
+var durationType = reflect.TypeOf(Duration{})
+
 func walkEnv(v reflect.Value, prefix string, look lookupFunc) error {
-	var t = v.Type()
-
+	t := v.Type()
 	for i := 0; i < t.NumField(); i++ {
-		var tag = t.Field(i).Tag.Get("yaml")
-		var path = strings.Split(tag, ",")[0]
-		var fv = v.Field(i)
-
+		tag := t.Field(i).Tag.Get("yaml")
 		if tag == "" || tag == "-" {
 			continue
 		}
+		path := strings.Split(tag, ",")[0]
 		if prefix != "" {
 			path = prefix + "." + path
 		}
-		if fv.Kind() == reflect.Struct && fv.Type() != reflect.TypeOf(Duration{}) {
-			if err := walkEnv(fv, path, look); err != nil {
+		field := v.Field(i)
+		// Duration is a struct but behaves as a scalar.
+		if field.Kind() == reflect.Struct && field.Type() != durationType {
+			if err := walkEnv(field, path, look); err != nil {
 				return err
 			}
 			continue
@@ -54,43 +55,48 @@ func walkEnv(v reflect.Value, prefix string, look lookupFunc) error {
 		if !ok {
 			continue
 		}
-		// Duration is a struct but behaves as a scalar.
-		if fv.Type() == reflect.TypeOf(Duration{}) {
-			d := Duration{}
+		if err := setFromEnv(field, key, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			if err := d.Set(raw); err != nil {
-				return fmt.Errorf("%s: %w", key, err)
-			}
-			fv.Set(reflect.ValueOf(d))
-			continue
+func setFromEnv(field reflect.Value, key, raw string) error {
+	if field.Type() == durationType {
+		var d Duration
+		if err := d.Set(raw); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
-		switch fv.Kind() {
-		case reflect.Slice:
-			// Struct slices are intentionally not configurable through the environment.
-			if fv.Type().Elem().Kind() == reflect.String {
-				fv.Set(reflect.ValueOf(splitList(raw)))
-			}
-		case reflect.String:
-			fv.SetString(raw)
-		case reflect.Bool:
-			b, err := strconv.ParseBool(raw)
-			if err != nil {
-				return fmt.Errorf("%s: invalid boolean %q (want true/false)", key, raw)
-			}
-			fv.SetBool(b)
-		case reflect.Int, reflect.Int64:
-			n, err := strconv.ParseInt(raw, 10, 64)
-			if err != nil {
-				return fmt.Errorf("%s: invalid integer %q", key, raw)
-			}
-			fv.SetInt(n)
-		case reflect.Float64:
-			f, err := strconv.ParseFloat(raw, 64)
-			if err != nil {
-				return fmt.Errorf("%s: invalid number %q", key, raw)
-			}
-			fv.SetFloat(f)
+		field.Set(reflect.ValueOf(d))
+		return nil
+	}
+	switch field.Kind() {
+	case reflect.Slice:
+		// Struct slices are intentionally not configurable through the environment.
+		if field.Type().Elem().Kind() == reflect.String {
+			field.Set(reflect.ValueOf(splitList(raw)))
 		}
+	case reflect.String:
+		field.SetString(raw)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("%s: invalid boolean %q (want true/false)", key, raw)
+		}
+		field.SetBool(b)
+	case reflect.Int, reflect.Int64:
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return fmt.Errorf("%s: invalid integer %q", key, raw)
+		}
+		field.SetInt(n)
+	case reflect.Float64:
+		f, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("%s: invalid number %q", key, raw)
+		}
+		field.SetFloat(f)
 	}
 	return nil
 }

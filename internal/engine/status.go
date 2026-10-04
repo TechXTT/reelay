@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/downloader"
@@ -15,9 +16,9 @@ func (e *Engine) StatusOnce(ctx context.Context) error {
 	if err != nil || len(grabs) == 0 {
 		return err
 	}
-	hashes := make([]string, 0, len(grabs))
-	for _, grab := range grabs {
-		hashes = append(hashes, grab.TorrentHash)
+	hashes := make([]string, len(grabs))
+	for i, grab := range grabs {
+		hashes[i] = grab.TorrentHash
 	}
 	statuses, err := e.downloader.Status(ctx, hashes)
 	if err != nil {
@@ -27,55 +28,75 @@ func (e *Engine) StatusOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read download pause state: %w", err)
 	}
+	covered, err := e.coveredEpisodesByRelease(ctx, grabs)
+	if err != nil {
+		return err
+	}
 	byHash := make(map[string]downloader.TorrentStatus, len(statuses))
 	for _, status := range statuses {
 		byHash[strings.ToLower(status.Hash)] = status
 	}
 	var errs []error
 	for _, grab := range grabs {
+		var grabErr error
+
 		status, ok := byHash[strings.ToLower(grab.TorrentHash)]
-		if !ok {
-			if downloadsPaused {
-				// Persist the pause observation so a torrent that vanished while
-				// paused gets a full disappearance grace after the operator resumes.
-				grab.ProgressedAt = e.clock.Now().UTC()
-				if err := e.store.Grabs().Update(ctx, grab); err != nil {
-					errs = append(errs, fmt.Errorf("grab %d: %w", grab.ID, err))
-				}
-				continue
+		if ok {
+			if e.pathMapper != nil {
+				status.ContentPath = e.pathMapper.Local(status.ContentPath)
 			}
-			now := e.clock.Now().UTC()
-			lastSeen := grab.UpdatedAt
-			if lastSeen.IsZero() {
-				lastSeen = grab.CreatedAt
-			}
-			if now.Sub(lastSeen) >= e.cfg.Downloader.StallTimeout.Duration {
-				var recoveryErr error
-				if grab.State == model.GrabCompleted || grab.State == model.GrabImporting {
-					recoveryErr = e.completeGrab(ctx, grab)
-				} else {
-					recoveryErr = e.failGrab(ctx, grab,
-						"torrent disappeared from download client before completion", true)
-				}
-				if recoveryErr != nil {
-					errs = append(errs, fmt.Errorf("grab %d: %w", grab.ID, recoveryErr))
-				}
-			}
-			continue
+			grabErr = e.updateGrabStatus(ctx, grab, covered[grab.ReleaseID], status, downloadsPaused)
+		} else {
+			grabErr = e.handleMissingTorrent(ctx, grab, downloadsPaused)
 		}
-		if e.pathMapper != nil {
-			status.ContentPath = e.pathMapper.Local(status.ContentPath)
-		}
-		if err := e.updateGrabStatus(ctx, grab, status, downloadsPaused); err != nil {
-			errs = append(errs, fmt.Errorf("grab %d: %w", grab.ID, err))
+		if grabErr != nil {
+			errs = append(errs, fmt.Errorf("grab %d: %w", grab.ID, grabErr))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status downloader.TorrentStatus,
-	downloadsPaused bool) error {
+// coveredEpisodesByRelease loads the active episodes of every episode grab in
+// one query, so the per-grab stages do not each look them up.
+func (e *Engine) coveredEpisodesByRelease(ctx context.Context, grabs []model.Grab) (map[int64][]model.Episode, error) {
+	var releaseIDs []int64
+	for _, grab := range grabs {
+		if grab.SubjectType == model.SubjectEpisode && !slices.Contains(releaseIDs, grab.ReleaseID) {
+			releaseIDs = append(releaseIDs, grab.ReleaseID)
+		}
+	}
+	return e.store.Episodes().ActiveByReleases(ctx, releaseIDs)
+}
+
+// handleMissingTorrent gives a torrent absent from the client a full stall
+// timeout since the last observation before recovering the grab.
+func (e *Engine) handleMissingTorrent(ctx context.Context, grab model.Grab, downloadsPaused bool) error {
 	now := e.clock.Now().UTC()
+	if downloadsPaused {
+		// Persist the pause observation so a torrent that vanished while
+		// paused gets a full disappearance grace after the operator resumes.
+		grab.ProgressedAt = now
+		return e.store.Grabs().Update(ctx, grab)
+	}
+	lastSeen := grab.UpdatedAt
+	if lastSeen.IsZero() {
+		lastSeen = grab.CreatedAt
+	}
+	if now.Sub(lastSeen) < e.cfg.Downloader.StallTimeout.Duration {
+		return nil
+	}
+	if grab.State == model.GrabCompleted || grab.State == model.GrabImporting {
+		return e.completeGrab(ctx, grab)
+	}
+	return e.failGrab(ctx, grab,
+		"torrent disappeared from download client before completion", true)
+}
+
+func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered []model.Episode,
+	status downloader.TorrentStatus, downloadsPaused bool) error {
+	now := e.clock.Now().UTC()
+	queuedOrMaintenance := status.State == downloader.StateMaintenance || status.State == downloader.StateQueued
+	idle := queuedOrMaintenance || status.State == downloader.StatePaused
 	if status.Progress > grab.Progress {
 		grab.ProgressedAt = now
 	}
@@ -84,14 +105,12 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 	if status.Failed() && !downloadsPaused {
 		return e.failGrab(ctx, grab, "download client error: "+status.ErrorMessage, true)
 	}
-	if status.State == downloader.StatePaused || downloadsPaused ||
-		status.State == downloader.StateMaintenance || status.State == downloader.StateQueued {
+	if idle || downloadsPaused {
 		// These states can legitimately leave the byte count unchanged. Refresh
 		// the timer so recovery starts only after the torrent can transfer again.
 		grab.ProgressedAt = now
 	}
-	if status.State != downloader.StatePaused && status.State != downloader.StateMaintenance &&
-		status.State != downloader.StateQueued && !downloadsPaused && !status.Complete() && status.Progress < 1 &&
+	if !idle && !downloadsPaused && !status.Complete() && status.Progress < 1 &&
 		now.Sub(grab.ProgressedAt) >= e.cfg.Downloader.StallTimeout.Duration {
 		return e.failGrab(ctx, grab, "torrent made no progress before stall timeout", true)
 	}
@@ -104,15 +123,14 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 		if err := e.store.Grabs().Update(ctx, grab); err != nil {
 			return err
 		}
-		if err := e.advanceGrabItems(ctx, grab, model.StateDownloading, "download started", status.State); err != nil {
+		if err := e.advanceGrabItems(ctx, grab, covered, model.StateDownloading,
+			"download started", status.State); err != nil {
 			return err
 		}
-		e.events.Publish(Event{Type: "progress", At: now, SubjectType: string(grab.SubjectType),
-			SubjectID: grab.SubjectID, Data: map[string]any{"grab_id": grab.ID,
-				"progress": grab.Progress, "state": status.State}})
+		e.publishProgress(grab, status.State)
 		return nil
 	}
-	if status.State == downloader.StateMaintenance || status.State == downloader.StateQueued {
+	if queuedOrMaintenance {
 		grab.State = model.GrabDownloading
 	}
 	// Persist every successful status poll. UpdatedAt is the last observation
@@ -120,10 +138,8 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, status d
 	if err := e.store.Grabs().Update(ctx, grab); err != nil {
 		return err
 	}
-	if status.State == downloader.StateMaintenance || status.State == downloader.StateQueued {
-		e.events.Publish(Event{Type: "progress", At: now, SubjectType: string(grab.SubjectType),
-			SubjectID: grab.SubjectID, Data: map[string]any{"grab_id": grab.ID,
-				"progress": grab.Progress, "state": status.State}})
+	if queuedOrMaintenance {
+		e.publishProgress(grab, status.State)
 	}
 	return nil
 }
@@ -133,25 +149,22 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 	var imported bool
 
 	if grab.SubjectType == model.SubjectEpisode {
-		episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
+		covered, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
 		if err != nil {
 			return err
 		}
-		if len(episodes) == 0 {
+		if len(covered) == 0 {
 			state, getErr := e.itemState(ctx, grab.SubjectType, grab.SubjectID)
 			if getErr != nil || state != model.StateImported {
 				return fmt.Errorf("completed episode grab has no active covered episodes")
 			}
 			imported = true
 		} else {
-			if err := e.advanceGrabItems(ctx, grab, model.StateImporting,
+			if err := e.advanceGrabItems(ctx, grab, covered, model.StateImporting,
 				"download completed", grab.ContentPath); err != nil {
 				return err
 			}
-			subjectIDs = make([]int64, len(episodes))
-			for i, episode := range episodes {
-				subjectIDs[i] = episode.ID
-			}
+			subjectIDs = episodeIDs(covered)
 		}
 	} else {
 		state, err := e.itemState(ctx, grab.SubjectType, grab.SubjectID)
@@ -211,15 +224,28 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 	return nil
 }
 
+func episodeIDs(episodes []model.Episode) []int64 {
+	ids := make([]int64, len(episodes))
+	for i, episode := range episodes {
+		ids[i] = episode.ID
+	}
+	return ids
+}
+
 func (e *Engine) publishGrabState(grab model.Grab, subjectIDs []int64, state string) {
 	for _, id := range subjectIDs {
-		e.events.Publish(Event{Type: "state_transition", At: e.clock.Now().UTC(),
-			SubjectType: string(grab.SubjectType), SubjectID: id,
-			Data: map[string]any{"grab_id": grab.ID, "state": state}})
+		e.publish("state_transition", grab.SubjectType, id,
+			map[string]any{"grab_id": grab.ID, "state": state})
 	}
 }
 
-func (e *Engine) advanceGrabItems(ctx context.Context, grab model.Grab, to model.ItemState, reason, detail string) error {
+func (e *Engine) publishProgress(grab model.Grab, clientState string) {
+	e.publish("progress", grab.SubjectType, grab.SubjectID, map[string]any{"grab_id": grab.ID,
+		"progress": grab.Progress, "state": clientState})
+}
+
+func (e *Engine) advanceGrabItems(ctx context.Context, grab model.Grab, covered []model.Episode,
+	to model.ItemState, reason, detail string) error {
 	if grab.SubjectType == model.SubjectMovie {
 		state, err := e.itemState(ctx, grab.SubjectType, grab.SubjectID)
 		if err != nil || state == to || state == model.StateImported {
@@ -234,11 +260,7 @@ func (e *Engine) advanceGrabItems(ctx context.Context, grab model.Grab, to model
 		_, err = e.store.Transitions().Transition(ctx, model.SubjectMovie, grab.SubjectID, to, reason, detail)
 		return err
 	}
-	episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
-	if err != nil {
-		return err
-	}
-	for _, episode := range episodes {
+	for _, episode := range covered {
 		state := episode.State
 		if state == to {
 			continue
@@ -281,11 +303,11 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 		return err
 	}
 	if grab.SubjectType == model.SubjectEpisode {
-		episodes, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
+		covered, err := e.store.Episodes().ActiveByRelease(ctx, grab.ReleaseID)
 		if err != nil {
 			return err
 		}
-		for _, episode := range episodes {
+		for _, episode := range covered {
 			if err := e.store.Decisions().Blacklist(ctx, model.SubjectEpisode, episode.ID,
 				release.InfoHash, reason); err != nil {
 				return err
@@ -296,11 +318,8 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 			}
 		}
 		subjectIDs := []int64{grab.SubjectID}
-		if len(episodes) > 0 {
-			subjectIDs = make([]int64, len(episodes))
-			for i, episode := range episodes {
-				subjectIDs[i] = episode.ID
-			}
+		if len(covered) > 0 {
+			subjectIDs = episodeIDs(covered)
 		}
 		e.publishGrabState(grab, subjectIDs, string(model.GrabStalled))
 		return nil

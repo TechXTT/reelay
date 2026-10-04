@@ -6,6 +6,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -41,12 +42,7 @@ var AllItemStates = []ItemState{
 }
 
 func (s ItemState) Valid() bool {
-	for _, v := range AllItemStates {
-		if s == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(AllItemStates, s)
 }
 
 // Active reports whether the item is mid-flight, so the status loop should be
@@ -152,10 +148,6 @@ const (
 	MonitorNone         MonitorMode = "none"
 )
 
-func (s SubjectType) ValidItem() bool {
-	return s == SubjectEpisode || s == SubjectMovie
-}
-
 func (m MonitorMode) Valid() bool {
 	switch m {
 	case MonitorAll, MonitorFutureOnly, MonitorLatestSeason, MonitorNone:
@@ -188,6 +180,10 @@ const (
 	SubjectMovie   SubjectType = "movie"
 	SubjectGrab    SubjectType = "grab"
 )
+
+func (s SubjectType) ValidItem() bool {
+	return s == SubjectEpisode || s == SubjectMovie
+}
 
 type Series struct {
 	ID                  int64        `json:"id"`
@@ -362,15 +358,6 @@ type CandidateEvaluation struct {
 	Reason      string      `json:"reason,omitempty"`
 	Score       int         `json:"score"`
 	EvaluatedAt time.Time   `json:"evaluated_at"`
-}
-
-type BlacklistEntry struct {
-	ID          int64       `json:"id"`
-	SubjectType SubjectType `json:"subject_type"`
-	SubjectID   int64       `json:"subject_id"`
-	InfoHash    string      `json:"info_hash"`
-	Reason      string      `json:"reason"`
-	CreatedAt   time.Time   `json:"created_at"`
 }
 
 type Grab struct {

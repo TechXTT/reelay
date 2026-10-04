@@ -3,25 +3,26 @@ package scoring
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/parser"
 )
 
-// componentsFor computes the stage-2 breakdown for an accepted candidate.
+// components computes the stage-2 breakdown for an accepted candidate.
 //
 // Every component is returned even when it scores zero, because "why did this
 // lose" is answered by the zeroes as often as by the points.
-func componentsFor(c Candidate, in Input) []Component {
-	w := in.Weights
+func (e *evaluator) components(c Candidate) []Component {
+	in := e.in
 	out := make([]Component, 0, 9)
 
 	out = append(out, resolutionComponent(c, in))
 	out = append(out, sourceComponent(c, in))
-	out = append(out, groupComponent(c, in))
+	out = append(out, groupComponentFor(c, in, e.groupScores))
 	out = append(out, languageComponent(c, in))
-	out = append(out, properComponent(c, w.ProperRepackWeight))
-	out = append(out, seederComponent(c, w.SeederWeightMax))
+	out = append(out, properComponent(c, in.Weights.ProperRepackWeight))
+	out = append(out, seederComponent(c, in.Weights.SeederWeightMax))
 	out = append(out, hdrComponent(c, in))
 	if comp, ok := seasonPackComponent(c, in); ok {
 		out = append(out, comp)
@@ -82,6 +83,12 @@ const groupWeightBaseline = 300
 // group, no bonus" is right; scoring it as a penalty would systematically
 // prefer the minority of releases whose names happened to fit.
 func groupComponent(c Candidate, in Input) Component {
+	return groupComponentFor(c, in, lowerGroupScores(in.Profile.PreferredGroups))
+}
+
+// groupComponentFor is groupComponent with the profile's group scores already
+// lowercased, so a search lowercases them once rather than once per candidate.
+func groupComponentFor(c Candidate, in Input, groupScores map[string]int) Component {
 	if c.Parsed.ReleaseGroup == "" {
 		detail := "no release group in the name"
 		if c.Parsed.Truncated {
@@ -89,26 +96,21 @@ func groupComponent(c Candidate, in Input) Component {
 		}
 		return Component{Name: "group", Points: 0, Detail: detail}
 	}
-	if len(in.Profile.PreferredGroups) == 0 {
+	if len(groupScores) == 0 {
 		return Component{Name: "group", Points: 0,
 			Detail: fmt.Sprintf("%s (profile lists no group preferences)", c.Parsed.ReleaseGroup)}
 	}
 
 	// Group names are compared case-insensitively: indexers are inconsistent
 	// about capitalisation and "NTb" versus "ntb" is the same team.
-	want := strings.ToLower(c.Parsed.ReleaseGroup)
-	for name, score := range in.Profile.PreferredGroups {
-		if strings.ToLower(name) != want {
-			continue
-		}
-		points := score * in.Weights.GroupWeight / groupWeightBaseline
+	if score, ok := groupScores[strings.ToLower(c.Parsed.ReleaseGroup)]; ok {
 		verb := "preferred"
 		if score < 0 {
 			verb = "disliked"
 		}
 		return Component{
 			Name:   "group",
-			Points: points,
+			Points: score * in.Weights.GroupWeight / groupWeightBaseline,
 			Detail: fmt.Sprintf("%s (%s, profile score %d)", c.Parsed.ReleaseGroup, verb, score),
 		}
 	}
@@ -129,22 +131,22 @@ func languageComponent(c Candidate, in Input) Component {
 		// penalised.
 		return Component{Name: "language", Points: 0, Detail: "no language markers (assumed original audio)"}
 	}
-	for i, pref := range prefs {
-		for _, got := range c.Parsed.Language {
-			if got != pref {
-				continue
-			}
-			points := in.Weights.LanguageWeight * (len(prefs) - i) / len(prefs)
-			return Component{
-				Name:   "language",
-				Points: points,
-				Detail: fmt.Sprintf("%s (preference %d of %d)", pref, i+1, len(prefs)),
-			}
+	if i := firstPreferred(prefs, c.Parsed.Language); i >= 0 {
+		return Component{
+			Name:   "language",
+			Points: in.Weights.LanguageWeight * (len(prefs) - i) / len(prefs),
+			Detail: fmt.Sprintf("%s (preference %d of %d)", prefs[i], i+1, len(prefs)),
 		}
 	}
 	return Component{Name: "language", Points: 0,
 		Detail: fmt.Sprintf("languages %s match none of %s",
 			strings.Join(c.Parsed.Language, "/"), strings.Join(prefs, "/"))}
+}
+
+// firstPreferred returns the index of the earliest entry in prefs that appears
+// in got, or -1.
+func firstPreferred(prefs, got []string) int {
+	return slices.IndexFunc(prefs, func(pref string) bool { return slices.Contains(got, pref) })
 }
 
 func properComponent(c Candidate, weight int) Component {
@@ -190,17 +192,11 @@ func hdrComponent(c Candidate, in Input) Component {
 	if len(c.Parsed.HDR) == 0 {
 		return Component{Name: "hdr", Points: 0, Detail: "SDR"}
 	}
-	for i, pref := range prefs {
-		for _, got := range c.Parsed.HDR {
-			if got != pref {
-				continue
-			}
-			points := in.Weights.HDRWeight * (len(prefs) - i) / len(prefs)
-			return Component{
-				Name:   "hdr",
-				Points: points,
-				Detail: fmt.Sprintf("%s (preference %d of %d)", pref, i+1, len(prefs)),
-			}
+	if i := firstPreferred(prefs, c.Parsed.HDR); i >= 0 {
+		return Component{
+			Name:   "hdr",
+			Points: in.Weights.HDRWeight * (len(prefs) - i) / len(prefs),
+			Detail: fmt.Sprintf("%s (preference %d of %d)", prefs[i], i+1, len(prefs)),
 		}
 	}
 	return Component{Name: "hdr", Points: 0,

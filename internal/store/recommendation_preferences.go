@@ -100,14 +100,16 @@ WHERE server_id=? AND user_id=? AND media_type=? AND tmdb_id IN
 	if err != nil {
 		return nil, err
 	}
-	return collectRows(rows, func(row scanner) (model.RecommendationRating, error) {
-		var value model.RecommendationRating
-		var updated string
-		if err := row.Scan(&value.ServerID, &value.UserID, &value.MediaType, &value.TMDBID, &value.Rating, &updated); err != nil {
-			return value, err
-		}
-		var err error
-		value.UpdatedAt, err = ParseTime(updated)
+	return collectRows(rows, scanRecommendationRating)
+}
+
+func scanRecommendationRating(row scanner) (model.RecommendationRating, error) {
+	var value model.RecommendationRating
+	var updated string
+	if err := row.Scan(&value.ServerID, &value.UserID, &value.MediaType, &value.TMDBID, &value.Rating, &updated); err != nil {
 		return value, err
-	})
+	}
+	var err error
+	value.UpdatedAt, err = ParseTime(updated)
+	return value, err
 }

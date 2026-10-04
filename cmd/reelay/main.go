@@ -18,15 +18,33 @@ import (
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/engine"
-	"github.com/TechXTT/reelay/internal/fsprobe"
 	"github.com/TechXTT/reelay/internal/importer"
 	"github.com/TechXTT/reelay/internal/indexer"
-	"github.com/TechXTT/reelay/internal/indexer/tpb"
 	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 )
+
+type cliFlags struct {
+	configPath   string
+	dev          bool
+	showVersion  bool
+	checkOnly    bool
+	backupPath   string
+	restorePath  string
+	searchTerm   string
+	searchRecent bool
+	grabMagnet   string
+	grabType     string
+	domain       domainCLIOptions
+}
+
+// clients are the external systems Reelay talks to, built once from config.
+type clients struct {
+	indexers   []indexer.Indexer
+	downloader downloader.Downloader
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -39,55 +57,15 @@ func main() {
 }
 
 func run() error {
-	var (
-		configPath   = flag.String("config", "config.yaml", "path to the configuration file")
-		dev          = flag.Bool("dev", false, "human-readable text logs at debug level")
-		showVersion  = flag.Bool("version", false, "print version and exit")
-		checkOnly    = flag.Bool("check", false, "validate the config and the schema, then exit")
-		backupPath   = flag.String("backup", "", "write a consistent SQLite backup to a new file, then exit")
-		restorePath  = flag.String("restore", "", "restore a backup into the configured database path, which must not exist; stop the service first")
-		searchTerm   = flag.String("search", "", "run a one-shot live indexer search, print the parsed and scored results, and exit")
-		searchRecent = flag.Bool("search-recent", false, "with --search: fetch the indexer's newest listing instead of searching a term")
-		grabMagnet   = flag.String("grab", "", "hand one magnet to the download client and follow it to completion, then exit")
-		grabType     = flag.String("grab-type", "tv", `with --grab: "tv" or "movie", selecting which category and save path to use`)
-		addMovie     = flag.String("add-movie", "", "persist a wanted movie and exit")
-		movieYear    = flag.Int("movie-year", 0, "with --add-movie: release year, or 0 if unknown")
-		addSeries    = flag.String("add-series", "", "persist a followed series and exit")
-		monitorMode  = flag.String("monitor-mode", "future_only", "with --add-series: all, future_only, latest_season, or none")
-		addEpisode   = flag.String("add-episode", "", "persist a wanted episode as <series-id>:SxxEyy and exit")
-		episodeTitle = flag.String("episode-title", "", "with --add-episode: optional episode title")
-		airDate      = flag.String("air-date", "", "with --add-episode: optional YYYY-MM-DD air date")
-		listItems    = flag.Bool("list-items", false, "list persisted series, episodes, and movies, then exit")
-		transition   = flag.String("transition", "", "transition an item as <episode|movie>:<id>:<state> and exit")
-		reason       = flag.String("reason", "manual CLI action", "reason recorded for --transition")
-		history      = flag.String("history", "", "show transition history for <episode|movie>:<id> and exit")
-	)
-	flag.Parse()
-
-	if *showVersion {
+	flags := parseFlags()
+	if flags.showVersion {
 		fmt.Println(buildinfo.Get())
 		return nil
 	}
 
-	cfg, warnings, err := config.Load(*configPath)
+	cfg, log, err := loadConfig(flags)
 	if err != nil {
 		return err
-	}
-
-	log := newLogger(cfg, *dev)
-	slog.SetDefault(log)
-
-	log.Info("starting reelay",
-		"version", buildinfo.Version,
-		"commit", buildinfo.Commit,
-		"platform", buildinfo.Get().Platform,
-		"config", *configPath)
-
-	// Warnings are conditions we allow but the operator must see. They are
-	// logged after the logger exists, which is why Load returns rather than
-	// prints them.
-	for _, w := range warnings {
-		log.Warn("configuration", "warning", w)
 	}
 
 	// SIGINT/SIGTERM cancel the root context; every loop and the HTTP server
@@ -95,31 +73,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// --search and --grab are diagnostics: no database, no server, no state.
-	// They run before the store is opened so they work against a config whose
-	// database path is not writable.
-	if *searchTerm != "" || *searchRecent {
-		return runSearch(ctx, cfg, log, *searchTerm, *searchRecent)
-	}
-	if *grabMagnet != "" {
-		category, err := grabCategoryFor(cfg, *grabType)
-		if err != nil {
-			return err
-		}
-		return runGrab(ctx, cfg, log, *grabMagnet, category)
-	}
-	if *restorePath != "" {
-		if *backupPath != "" {
-			return errors.New("backup and restore cannot be combined")
-		}
-		return store.Restore(ctx, *restorePath, cfg.Database.Path)
+	if handled, err := runStorelessMode(ctx, cfg, log, flags); handled {
+		return err
 	}
 
-	st, err := store.Open(ctx, store.Options{
-		Path:      cfg.Database.Path,
-		CacheKB:   cfg.Runtime.SQLiteCacheKB,
-		ReadConns: cfg.Runtime.SearchConcurrency + 1,
-	})
+	st, err := openStore(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -128,45 +86,150 @@ func run() error {
 			log.Error("closing database", "error", err)
 		}
 	}()
+
+	if flags.backupPath != "" {
+		return st.Backup(ctx, flags.backupPath)
+	}
+	if err := seedProfiles(ctx, st, cfg, log); err != nil {
+		return err
+	}
+	if flags.domain.Active() {
+		return runDomainCLI(ctx, st, cfg, flags.domain)
+	}
+
+	cl, err := buildClients(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	if flags.checkOnly {
+		log.Info("configuration and schema are valid")
+		return nil
+	}
+	return serve(ctx, cfg, log, st, cl)
+}
+
+func parseFlags() cliFlags {
+	var f cliFlags
+
+	flag.StringVar(&f.configPath, "config", "config.yaml", "path to the configuration file")
+	flag.BoolVar(&f.dev, "dev", false, "human-readable text logs at debug level")
+	flag.BoolVar(&f.showVersion, "version", false, "print version and exit")
+	flag.BoolVar(&f.checkOnly, "check", false, "validate the config and the schema, then exit")
+	flag.StringVar(&f.backupPath, "backup", "", "write a consistent SQLite backup to a new file, then exit")
+	flag.StringVar(&f.restorePath, "restore", "", "restore a backup into the configured database path, which must not exist; stop the service first")
+	flag.StringVar(&f.searchTerm, "search", "", "run a one-shot live indexer search, print the parsed and scored results, and exit")
+	flag.BoolVar(&f.searchRecent, "search-recent", false, "with --search: fetch the indexer's newest listing instead of searching a term")
+	flag.StringVar(&f.grabMagnet, "grab", "", "hand one magnet to the download client and follow it to completion, then exit")
+	flag.StringVar(&f.grabType, "grab-type", "tv", `with --grab: "tv" or "movie", selecting which category and save path to use`)
+	flag.StringVar(&f.domain.AddMovie, "add-movie", "", "persist a wanted movie and exit")
+	flag.IntVar(&f.domain.MovieYear, "movie-year", 0, "with --add-movie: release year, or 0 if unknown")
+	flag.StringVar(&f.domain.AddSeries, "add-series", "", "persist a followed series and exit")
+	flag.StringVar(&f.domain.MonitorMode, "monitor-mode", "future_only", "with --add-series: all, future_only, latest_season, or none")
+	flag.StringVar(&f.domain.AddEpisode, "add-episode", "", "persist a wanted episode as <series-id>:SxxEyy and exit")
+	flag.StringVar(&f.domain.EpisodeTitle, "episode-title", "", "with --add-episode: optional episode title")
+	flag.StringVar(&f.domain.AirDate, "air-date", "", "with --add-episode: optional YYYY-MM-DD air date")
+	flag.BoolVar(&f.domain.ListItems, "list-items", false, "list persisted series, episodes, and movies, then exit")
+	flag.StringVar(&f.domain.Transition, "transition", "", "transition an item as <episode|movie>:<id>:<state> and exit")
+	flag.StringVar(&f.domain.Reason, "reason", "manual CLI action", "reason recorded for --transition")
+	flag.StringVar(&f.domain.History, "history", "", "show transition history for <episode|movie>:<id> and exit")
+	flag.Parse()
+
+	return f
+}
+
+// loadConfig reads the config file and builds the process logger from it.
+func loadConfig(flags cliFlags) (*config.Config, *slog.Logger, error) {
+	cfg, warnings, err := config.Load(flags.configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log := newLogger(cfg, flags.dev)
+	slog.SetDefault(log)
+
+	log.Info("starting reelay",
+		"version", buildinfo.Version,
+		"commit", buildinfo.Commit,
+		"platform", buildinfo.Get().Platform,
+		"config", flags.configPath)
+
+	// Warnings are conditions we allow but the operator must see. They are
+	// logged after the logger exists, which is why Load returns rather than
+	// prints them.
+	for _, w := range warnings {
+		log.Warn("configuration", "warning", w)
+	}
+	return cfg, log, nil
+}
+
+// runStorelessMode handles --search, --grab and --restore. The first two are
+// diagnostics: no database, no server, no state. All three run before the store
+// is opened so they work against a config whose database path is not writable.
+// handled reports whether one of them ran, in which case err is the result.
+func runStorelessMode(ctx context.Context, cfg *config.Config, log *slog.Logger, flags cliFlags) (bool, error) {
+	switch {
+	case flags.searchTerm != "" || flags.searchRecent:
+		return true, runSearch(ctx, cfg, log, flags.searchTerm, flags.searchRecent)
+	case flags.grabMagnet != "":
+		category, err := grabCategoryFor(cfg, flags.grabType)
+		if err != nil {
+			return true, err
+		}
+		return true, runGrab(ctx, cfg, log, flags.grabMagnet, category)
+	case flags.restorePath != "":
+		if flags.backupPath != "" {
+			return true, errors.New("backup and restore cannot be combined")
+		}
+		return true, store.Restore(ctx, flags.restorePath, cfg.Database.Path)
+	}
+	return false, nil
+}
+
+func openStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (*store.Store, error) {
+	st, err := store.Open(ctx, store.Options{
+		Path:      cfg.Database.Path,
+		CacheKB:   cfg.Runtime.SQLiteCacheKB,
+		ReadConns: cfg.Runtime.SearchConcurrency + 1,
+	})
+	if err != nil {
+		return nil, err
+	}
 	log.Info("database open", "path", st.Path(), "cache_kb", cfg.Runtime.SQLiteCacheKB)
 
 	if err := store.Migrate(ctx, st, log); err != nil {
-		return err
+		if closeErr := st.Close(); closeErr != nil {
+			log.Error("closing database", "error", closeErr)
+		}
+		return nil, err
 	}
-	if *backupPath != "" {
-		return st.Backup(ctx, *backupPath)
-	}
-	seedProfiles := make([]model.QualityProfile, 0, len(cfg.Profiles))
+	return st, nil
+}
+
+func seedProfiles(ctx context.Context, st *store.Store, cfg *config.Config, log *slog.Logger) error {
+	profiles := make([]model.QualityProfile, 0, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {
-		seedProfiles = append(seedProfiles, p.ToModel())
+		profiles = append(profiles, p.ToModel())
 	}
-	seeded, err := st.Profiles().Seed(ctx, seedProfiles)
+	seeded, err := st.Profiles().Seed(ctx, profiles)
 	if err != nil {
 		return err
 	}
 	if seeded {
-		log.Info("seeded quality profiles", "count", len(seedProfiles))
+		log.Info("seeded quality profiles", "count", len(profiles))
 	}
+	return nil
+}
 
-	domainCLI := domainCLIOptions{
-		AddMovie: *addMovie, MovieYear: *movieYear,
-		AddSeries: *addSeries, MonitorMode: *monitorMode,
-		AddEpisode: *addEpisode, EpisodeTitle: *episodeTitle, AirDate: *airDate,
-		ListItems: *listItems, Transition: *transition, Reason: *reason, History: *history,
-	}
-	if domainCLI.Active() {
-		return runDomainCLI(ctx, st, cfg, domainCLI)
-	}
-
+func buildClients(ctx context.Context, cfg *config.Config, log *slog.Logger) (clients, error) {
 	indexers, err := buildIndexers(cfg, log, clock.Real{})
 	if err != nil {
-		return err
+		return clients{}, err
 	}
 	log.Info("indexers ready", "count", len(indexers))
 
 	dl, err := buildDownloader(cfg, log)
 	if err != nil {
-		return err
+		return clients{}, err
 	}
 	// Create the categories now rather than at first grab. A missing category
 	// at grab time means either failing the grab or adding the torrent
@@ -176,12 +239,12 @@ func run() error {
 		log.Warn("could not prepare download client categories; grabs will fail until this is fixed",
 			"error", err)
 	}
+	return clients{indexers: indexers, downloader: dl}, nil
+}
 
-	if *checkOnly {
-		log.Info("configuration and schema are valid")
-		return nil
-	}
-
+// serve wires the engine and the HTTP API together and runs them until ctx is
+// cancelled or either fails.
+func serve(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, cl clients) error {
 	tmdb, err := metadata.NewTMDB(metadata.TMDBOptions{BaseURL: cfg.Metadata.TMDBBaseURL,
 		APIKey: cfg.Metadata.TMDBAPIKey, Timeout: cfg.Metadata.RequestTimeout.Duration,
 		Cache: st.Metadata(), CacheTTL: cfg.Metadata.CacheTTL.Duration})
@@ -199,18 +262,18 @@ func run() error {
 		return err
 	}
 	recommendations := recommendation.NewService(st, tmdb, cfg.Recommendations, time.Now, log)
-	eng, err := engine.New(engine.Options{Store: st, Config: cfg, Indexers: indexers,
-		Downloader: dl, TVmaze: tvmaze, Importer: mediaImporter, Clock: clock.Real{},
+	eng, err := engine.New(engine.Options{Store: st, Config: cfg, Indexers: cl.indexers,
+		Downloader: cl.downloader, TVmaze: tvmaze, Importer: mediaImporter, Clock: clock.Real{},
 		Logger: log, PathMapper: pathMapperFor(cfg), Recommendations: recommendations})
 	if err != nil {
 		return err
 	}
 	srv := api.New(api.Options{Config: cfg, Store: st, Logger: log, Clock: clock.Real{},
-		Engine: eng, Movies: tmdb, Series: tvmaze, Indexers: indexers, Downloader: dl,
+		Engine: eng, Movies: tmdb, Series: tvmaze, Indexers: cl.indexers, Downloader: cl.downloader,
 		Recommendations: recommendations, ExternalSeries: tvmaze, Discovery: tmdb})
 	registerHardlinkProbes(srv, cfg, log)
-	registerIndexerHealth(srv, indexers)
-	registerDownloaderHealth(srv, dl, cfg)
+	registerIndexerHealth(srv, cl.indexers)
+	registerDownloaderHealth(srv, cl.downloader, cfg)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -232,171 +295,4 @@ func run() error {
 	}
 	log.Info("shutdown complete")
 	return nil
-}
-
-func newLogger(cfg *config.Config, dev bool) *slog.Logger {
-	level := slog.LevelInfo
-	switch cfg.Logging.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	}
-
-	format := cfg.Logging.Format
-	if dev {
-		format = "text"
-		level = slog.LevelDebug
-	}
-
-	opts := &slog.HandlerOptions{Level: level}
-	if format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stderr, opts))
-	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
-}
-
-// registerHardlinkProbes runs one probe per (download path, library root) pair
-// and freezes the result. Filesystem capability does not change under a running
-// process, so re-probing on every health request would only add I/O.
-func registerHardlinkProbes(srv *api.Server, cfg *config.Config, log *slog.Logger) {
-	pairs := []struct {
-		name string
-		from string
-		to   string
-	}{
-		{"hardlink:tv", cfg.Downloader.SavePathTV, cfg.Library.TVRoot},
-		{"hardlink:movies", cfg.Downloader.SavePathMovies, cfg.Library.MovieRoot},
-	}
-
-	// The download paths are what the CLIENT reports, so they go through the
-	// path mapper before the probe touches the filesystem — the same
-	// translation the importer will apply.
-	mapper := pathMapperFor(cfg)
-
-	for _, p := range pairs {
-		res := fsprobe.Hardlink(mapper.Local(p.from), p.to)
-
-		switch res.Support {
-		case fsprobe.Supported:
-			log.Info("hardlink probe", "pair", p.name, "result", "supported",
-				"from", res.From, "to", res.To)
-		case fsprobe.Unsupported:
-			log.Warn("hardlink probe", "pair", p.name, "result", "unsupported",
-				"from", res.From, "to", res.To,
-				"cross_device", res.CrossDevice, "detail", res.Detail)
-		default:
-			log.Warn("hardlink probe", "pair", p.name, "result", "unknown",
-				"detail", res.Detail)
-		}
-
-		status := api.StatusOK
-		switch res.Support {
-		case fsprobe.Unsupported:
-			// Not down: imports still work, they just copy. Degraded is the
-			// honest description.
-			status = api.StatusDegraded
-		case fsprobe.Unknown:
-			status = api.StatusSkipped
-		}
-		if !cfg.Library.Hardlink {
-			status = api.StatusSkipped
-			res.Detail = "library.hardlink is disabled in config; every import copies"
-		}
-
-		frozen := res
-		frozenStatus := status
-		srv.Register(api.FuncChecker{
-			Name:     p.name,
-			Kind:     "filesystem",
-			Critical: false,
-			Fn: func(context.Context) api.CheckResult {
-				return api.CheckResult{
-					Status: frozenStatus,
-					Detail: frozen.Detail,
-					Extra: map[string]any{
-						"from":         frozen.From,
-						"to":           frozen.To,
-						"hardlink":     frozen.Status,
-						"cross_device": frozen.CrossDevice,
-					},
-				}
-			},
-		})
-	}
-}
-
-// registerIndexerHealth surfaces each indexer's circuit breaker on the health
-// endpoint. An unhealthy indexer is degraded, not down: the rest of the service
-// keeps working and the other indexers keep being searched.
-func registerIndexerHealth(srv *api.Server, indexers []indexer.Indexer) {
-	for _, ix := range indexers {
-		srv.Register(api.FuncChecker{
-			Name:     "indexer:" + ix.Name(),
-			Kind:     "indexer",
-			Critical: false,
-			Fn: func(ctx context.Context) api.CheckResult {
-				res := api.CheckResult{Status: api.StatusOK}
-				if err := ix.Healthy(ctx); err != nil {
-					res.Status = api.StatusDegraded
-					res.Detail = err.Error()
-				}
-				// Statser is optional: the interface does not require it, but
-				// an implementation that offers counters should have them
-				// shown, because the no-results ratio is how throttling
-				// becomes visible.
-				if s, ok := ix.(interface{ Stats() tpb.Stats }); ok {
-					st := s.Stats()
-					res.Extra = map[string]any{
-						"searches":        st.Searches,
-						"no_results":      st.NoResults,
-						"failed_requests": st.FailedRequests,
-						"rows_returned":   st.Rows,
-						"breaker_trips":   st.Trips,
-					}
-					if st.Searches > 0 && st.NoResults*2 > st.Searches {
-						res.Status = api.StatusDegraded
-						res.Detail = fmt.Sprintf(
-							"%d of %d searches returned the no-results marker; the indexer is probably throttling. Lower indexers[].rate_limit_per_second.",
-							st.NoResults, st.Searches)
-					}
-				}
-				return res
-			},
-		})
-	}
-}
-
-// registerDownloaderHealth surfaces the download client on the health
-// endpoint. Critical: with no download client nothing can be grabbed, so the
-// service is genuinely not working rather than merely degraded.
-func registerDownloaderHealth(srv *api.Server, dl downloader.Downloader, cfg *config.Config) {
-	srv.Register(api.FuncChecker{
-		Name:     "downloader:" + cfg.Downloader.Type,
-		Kind:     "downloader",
-		Critical: true,
-		Fn: func(ctx context.Context) api.CheckResult {
-			if err := dl.Healthy(ctx); err != nil {
-				return api.CheckResult{Status: api.StatusDown, Detail: err.Error()}
-			}
-			extra := map[string]any{
-				"url":        cfg.Downloader.URL,
-				"categories": []string{cfg.Downloader.CategoryTV, cfg.Downloader.CategoryMovies},
-			}
-			// Version reporting is optional on the interface; show it when the
-			// implementation offers it.
-			if v, ok := dl.(interface {
-				Version(context.Context) (string, error)
-				APIVersion() string
-			}); ok {
-				if ver, err := v.Version(ctx); err == nil {
-					extra["version"] = ver
-				}
-				extra["web_api"] = v.APIVersion()
-			}
-			return api.CheckResult{Status: api.StatusOK, Extra: extra}
-		},
-	})
 }

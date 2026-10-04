@@ -99,13 +99,21 @@ var languageAlias = map[string]string{
 	"romanian": "ro", "rum": "ro", "ron": "ro",
 }
 
-// tokenSplitRe splits the remainder into candidate tokens. Dashes are split on
-// too, because "WEB-DL" is handled by a two-token lookahead below rather than
-// by keeping the hyphen.
+// splitTokens splits a lowercased name into candidate tokens. Dashes are split
+// on too, because "WEB-DL" is handled by a two-token lookahead below rather
+// than by keeping the hyphen.
 //
 // '+' is NOT a separator: it is part of "HDR10+" and "DD+", and splitting on it
 // silently downgraded every HDR10+ release to plain HDR10.
-var tokenSplitRe = regexp.MustCompile(`[\s\-()\[\]{},]+`)
+func splitTokens(lower string) []string {
+	return strings.FieldsFunc(lower, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\f', '\r', '-', '(', ')', '[', ']', '{', '}', ',':
+			return true
+		}
+		return false
+	})
+}
 
 // extractTokens pulls quality metadata out of the post-title remainder.
 //
@@ -113,7 +121,7 @@ var tokenSplitRe = regexp.MustCompile(`[\s\-()\[\]{},]+`)
 // becomes "H 264" and "WEB-DL" survives as "WEB DL", so a single-token scan
 // would find neither.
 func extractTokens(rest string, p *Parsed) {
-	tokens := tokenSplitRe.Split(strings.ToLower(rest), -1)
+	tokens := splitTokens(strings.ToLower(rest))
 	hdrSeen := map[string]bool{}
 
 	// Numeric display resolution describes the encoded output. Source markers
@@ -135,54 +143,35 @@ func extractTokens(rest string, p *Parsed) {
 		}
 	}
 
-	// lookupPairFirst tries the two-token form before the single token.
-	//
-	// Order matters and cost real bugs: "DTS-HD" splits into "dts" and "hd",
-	// and checking the single token first matches plain "dts" and then never
-	// looks at the pair, silently downgrading every DTS-HD release. Same story
-	// for "WEB DL" versus bare "WEB".
-	lookupPairFirst := func(table map[string]string, t, pair string) string {
-		if pair != "" {
-			if v := table[strings.ReplaceAll(pair, " ", "")]; v != "" {
-				return v
-			}
-			if v := table[pair]; v != "" {
-				return v
-			}
-		}
-		return table[t]
-	}
-
 	for i, t := range tokens {
-		if t == "" {
-			continue
-		}
-		pair := ""
-		if i+1 < len(tokens) && tokens[i+1] != "" {
+		pair, joined := "", ""
+		if i+1 < len(tokens) {
 			pair = t + " " + tokens[i+1]
+			joined = t + tokens[i+1]
 		}
+		lookup := func(table map[string]string) string { return lookupPairFirst(table, t, pair, joined) }
 
 		// Resolution aliases are a fallback when no numeric output resolution
 		// exists anywhere in the name.
 		if p.Resolution == "" {
-			if v := lookupPairFirst(resolutionAlias, t, pair); v != "" {
+			if v := lookup(resolutionAlias); v != "" {
 				p.Resolution = v
 			}
 		}
 
 		// Source: keep the strongest signal seen anywhere, because "BluRay
 		// REMUX" mentions both and remux is the real answer.
-		if v := lookupPairFirst(sourceAlias, t, pair); v != "" {
+		if v := lookup(sourceAlias); v != "" {
 			p.Source = strongerSource(p.Source, v)
 		}
 
 		if p.VideoCodec == "" {
-			if v := lookupPairFirst(videoAlias, t, pair); v != "" {
+			if v := lookup(videoAlias); v != "" {
 				p.VideoCodec = v
 			}
 		}
 
-		if v := lookupPairFirst(audioAlias, t, pair); v != "" {
+		if v := lookup(audioAlias); v != "" {
 			p.AudioCodec = strongerAudio(p.AudioCodec, v)
 		}
 		// "DDP5 1" / "DD5 1": the channel count is glued to the codec.
@@ -190,7 +179,7 @@ func extractTokens(rest string, p *Parsed) {
 			p.AudioCodec = strongerAudio(p.AudioCodec, v)
 		}
 
-		if v := lookupPairFirst(hdrAlias, t, pair); v != "" && !hdrSeen[v] {
+		if v := lookup(hdrAlias); v != "" && !hdrSeen[v] {
 			hdrSeen[v] = true
 			p.HDR = append(p.HDR, v)
 		}
@@ -203,14 +192,41 @@ func extractTokens(rest string, p *Parsed) {
 	sort.Strings(p.HDR)
 }
 
-var channelSuffixRe = regexp.MustCompile(`^([a-z+]+?)\d(?:\s?\d)?$`)
-
-// trimChannelSuffix turns "ddp5" into "ddp" and "dd5" into "dd".
-func trimChannelSuffix(t string) string {
-	if m := channelSuffixRe.FindStringSubmatch(t); m != nil {
-		return m[1]
+// lookupPairFirst tries the two-token form before the single token.
+//
+// Order matters and cost real bugs: "DTS-HD" splits into "dts" and "hd", and
+// checking the single token first matches plain "dts" and then never looks at
+// the pair, silently downgrading every DTS-HD release. Same story for "WEB DL"
+// versus bare "WEB".
+func lookupPairFirst(table map[string]string, token, pair, joined string) string {
+	if pair != "" {
+		if v := table[joined]; v != "" {
+			return v
+		}
+		if v := table[pair]; v != "" {
+			return v
+		}
 	}
-	return ""
+	return table[token]
+}
+
+// trimChannelSuffix turns "ddp5" into "ddp" and "dd5" into "dd": a nonempty run
+// of [a-z+] followed by one or two digits. Returns "" for anything else.
+func trimChannelSuffix(t string) string {
+	letters := 0
+	for letters < len(t) && (t[letters] >= 'a' && t[letters] <= 'z' || t[letters] == '+') {
+		letters++
+	}
+	digits := len(t) - letters
+	if letters == 0 || digits < 1 || digits > 2 {
+		return ""
+	}
+	for _, c := range []byte(t[letters:]) {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return t[:letters]
 }
 
 // sourceRank orders sources by how close they are to the master. Used only to
@@ -256,15 +272,17 @@ var (
 	repackRe = regexp.MustCompile(`(?i)\brepack\d?\b`)
 )
 
-func extractFlags(s string, p *Parsed) {
-	p.Proper = properRe.MatchString(s)
-	p.Repack = repackRe.MatchString(s)
+// extractFlags scans the pre-group name; lower is its lowercased form, used to
+// skip the regex when the keyword is absent.
+func extractFlags(s, lower string, p *Parsed) {
+	p.Proper = strings.Contains(lower, "proper") && properRe.MatchString(s)
+	p.Repack = strings.Contains(lower, "repack") && repackRe.MatchString(s)
 }
 
-// extractLanguages scans the whole name, not just the remainder: language
-// markers are commonly prefixed ("FRENCH.Show.S01E01.1080p").
-func extractLanguages(s string, p *Parsed) {
-	tokens := tokenSplitRe.Split(strings.ToLower(s), -1)
+// extractLanguages scans the whole lowercased name, not just the remainder:
+// language markers are commonly prefixed ("FRENCH.Show.S01E01.1080p").
+func extractLanguages(lower string, p *Parsed) {
+	tokens := splitTokens(lower)
 	seen := map[string]bool{}
 	var out []string
 	for i, t := range tokens {

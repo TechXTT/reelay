@@ -8,32 +8,91 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const maxMetadataResponse = 16 << 20
 
-type httpJSONClient struct {
+// cachedJSONClient is the shared HTTP layer of the metadata providers: an
+// optional rate limiter, a bounded JSON GET, and a read-through cache.
+type cachedJSONClient struct {
+	provider  string
 	base      *url.URL
 	http      *http.Client
 	timeout   time.Duration
 	userAgent string
+	limiter   *rate.Limiter
+	cache     Cache
+	ttl       time.Duration
+	now       func() time.Time
 }
 
-func newHTTPJSONClient(baseURL string, client *http.Client, timeout time.Duration) (httpJSONClient, error) {
-	base, err := url.Parse(baseURL)
+type cachedJSONOptions struct {
+	Provider string
+	BaseURL  string
+	Client   *http.Client
+	Timeout  time.Duration
+	Limiter  *rate.Limiter
+	Cache    Cache
+	CacheTTL time.Duration
+	Now      func() time.Time
+}
+
+func newCachedJSONClient(opt cachedJSONOptions) (*cachedJSONClient, error) {
+	base, err := url.Parse(opt.BaseURL)
 	if err != nil || base.Scheme == "" || base.Host == "" {
-		return httpJSONClient{}, fmt.Errorf("metadata: invalid base url %q", baseURL)
+		return nil, fmt.Errorf("metadata: invalid base url %q", opt.BaseURL)
 	}
-	if client == nil {
-		client = &http.Client{}
+	if opt.Client == nil {
+		opt.Client = &http.Client{}
 	}
-	if timeout <= 0 {
-		timeout = 15 * time.Second
+	if opt.Timeout <= 0 {
+		opt.Timeout = 15 * time.Second
 	}
-	return httpJSONClient{base: base, http: client, timeout: timeout, userAgent: "Reelay/1.0"}, nil
+	if opt.CacheTTL <= 0 {
+		opt.CacheTTL = 24 * time.Hour
+	}
+	if opt.Now == nil {
+		opt.Now = time.Now
+	}
+	return &cachedJSONClient{
+		provider: opt.Provider, base: base, http: opt.Client, timeout: opt.Timeout, userAgent: "Reelay/1.0",
+		limiter: opt.Limiter, cache: opt.Cache, ttl: opt.CacheTTL, now: opt.Now,
+	}, nil
 }
 
-func (c httpJSONClient) get(ctx context.Context, path string, query url.Values, dst any) ([]byte, error) {
+// cachedGET fills dst from the cache, or from a rate-limited GET that is then
+// cached.
+func (c *cachedJSONClient) cachedGET(ctx context.Context, cacheKey, path string, query url.Values, dst any) error {
+	if c.cache != nil {
+		raw, hit, err := c.cache.Get(ctx, c.provider, cacheKey, c.now())
+		if err != nil {
+			return err
+		}
+		if hit {
+			if err := json.Unmarshal(raw, dst); err != nil {
+				return fmt.Errorf("metadata: decode cached %s/%s: %w", c.provider, cacheKey, err)
+			}
+			return nil
+		}
+	}
+	if c.limiter != nil {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return fmt.Errorf("%s: rate limit wait: %w", c.provider, err)
+		}
+	}
+	raw, err := c.get(ctx, path, query, dst)
+	if err != nil {
+		return err
+	}
+	if c.cache == nil {
+		return nil
+	}
+	return c.cache.Put(ctx, c.provider, cacheKey, raw, c.now(), c.ttl)
+}
+
+func (c *cachedJSONClient) get(ctx context.Context, path string, query url.Values, dst any) ([]byte, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	u := *c.base

@@ -8,6 +8,55 @@ import (
 	"github.com/TechXTT/reelay/internal/parser"
 )
 
+// evaluator holds everything derived from the Input once per search, so the
+// per-candidate work is only what depends on the candidate.
+type evaluator struct {
+	in Input
+
+	// bannedTerms and requiredTerms are lowercased, trimmed and stripped of
+	// blanks, ready for containsTerm.
+	bannedTerms   []string
+	requiredTerms []string
+
+	// matcher is nil when there is no single wanted item to match against.
+	matcher *parser.Matcher
+
+	// groupScores is PreferredGroups keyed by lowercased group name.
+	groupScores map[string]int
+}
+
+func newEvaluator(in Input) *evaluator {
+	e := &evaluator{
+		in:            in,
+		bannedTerms:   normalizeTerms(in.Profile.BannedTerms),
+		requiredTerms: normalizeTerms(in.Profile.RequiredTerms),
+		groupScores:   lowerGroupScores(in.Profile.PreferredGroups),
+	}
+	if in.Want != nil {
+		e.matcher = parser.NewMatcher(*in.Want)
+	}
+	return e
+}
+
+func normalizeTerms(terms []string) []string {
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term != "" {
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
+func lowerGroupScores(groups map[string]int) map[string]int {
+	out := make(map[string]int, len(groups))
+	for name, score := range groups {
+		out[strings.ToLower(name)] = score
+	}
+	return out
+}
+
 // reject runs the stage-1 hard filters in order and returns the first failure
 // as (category, reason), or ("", "") if the candidate is acceptable.
 //
@@ -15,23 +64,22 @@ import (
 // decisive checks come first — a blacklisted hash or the wrong episode
 // entirely — because reporting "wrong resolution" for a release of a different
 // show is technically true and completely unhelpful.
-func reject(c *Candidate, in Input) (category, reason string) {
+func (e *evaluator) reject(c *Candidate) (category, reason string) {
 	for _, f := range filters {
-		if cat, why := f(c, in); cat != "" {
+		if cat, why := f(c, e); cat != "" {
 			return cat, why
 		}
 	}
 	return "", ""
 }
 
-type filterFunc func(c *Candidate, in Input) (category, reason string)
+type filterFunc func(c *Candidate, e *evaluator) (category, reason string)
 
 var filters = []filterFunc{
 	filterUnparseable,
 	filterBlacklisted,
 	filterItemMatch,
-	filterBannedTerms,
-	filterRequiredTerms,
+	filterTerms,
 	filterResolution,
 	filterSource,
 	filterSeeders,
@@ -39,7 +87,7 @@ var filters = []filterFunc{
 	filterUpgrade,
 }
 
-func filterUnparseable(c *Candidate, _ Input) (string, string) {
+func filterUnparseable(c *Candidate, _ *evaluator) (string, string) {
 	if c.Parsed.Title == "" {
 		return RejectUnparseable, "release name could not be parsed into a title"
 	}
@@ -51,35 +99,37 @@ func filterUnparseable(c *Candidate, _ Input) (string, string) {
 // Per-item rather than global: a torrent that stalled for one episode may be
 // the only source for another, and a global blacklist would quietly remove it
 // from consideration everywhere.
-func filterBlacklisted(c *Candidate, in Input) (string, string) {
-	if in.Blacklist[c.Release.InfoHash] {
+func filterBlacklisted(c *Candidate, e *evaluator) (string, string) {
+	if e.in.Blacklist[c.Release.InfoHash] {
 		return RejectBlacklisted, "info hash was blacklisted after a previous failed grab for this item"
 	}
 	return "", ""
 }
 
-func filterItemMatch(c *Candidate, in Input) (string, string) {
-	if in.Want == nil {
+func filterItemMatch(c *Candidate, e *evaluator) (string, string) {
+	if e.matcher == nil {
 		return "", ""
 	}
-	if m := parser.Matches(c.Parsed, *in.Want); !m.OK {
+	if m := e.matcher.Match(c.Parsed); !m.OK {
 		return RejectWrongItem, m.Reason
 	}
 	return "", ""
 }
 
-// filterBannedTerms matches against the RAW release name, not the parsed form.
+// filterTerms applies the banned terms, the cam-family check and the required
+// terms, in that order.
 //
-// Deliberate: the parser normalises and discards, and a banned term is often
-// exactly the thing it threw away. Matching the raw name means a marker cannot
-// be laundered by successful parsing.
-func filterBannedTerms(c *Candidate, in Input) (string, string) {
-	haystack := " " + strings.ToLower(c.Release.Title) + " "
-	for _, term := range in.Profile.BannedTerms {
-		term = strings.ToLower(strings.TrimSpace(term))
-		if term == "" {
-			continue
-		}
+// Terms match against the RAW release name, not the parsed form. Deliberate:
+// the parser normalises and discards, and a banned term is often exactly the
+// thing it threw away. Matching the raw name means a marker cannot be laundered
+// by successful parsing.
+func filterTerms(c *Candidate, e *evaluator) (string, string) {
+	var haystack string
+	if len(e.bannedTerms) > 0 || len(e.requiredTerms) > 0 {
+		haystack = " " + strings.ToLower(c.Release.Title) + " "
+	}
+
+	for _, term := range e.bannedTerms {
 		if containsTerm(haystack, term) {
 			return RejectBannedTerm, fmt.Sprintf("release name contains the banned term %q", term)
 		}
@@ -87,19 +137,10 @@ func filterBannedTerms(c *Candidate, in Input) (string, string) {
 	// A cam-family source is banned whether or not the profile spelled out
 	// every marker, because the parser recognises far more spellings of it
 	// than any hand-written term list will.
-	if c.Parsed.Source == "cam" && in.Profile.SourceRank("cam") < 0 {
+	if c.Parsed.Source == "cam" && e.in.Profile.SourceRank("cam") < 0 {
 		return RejectBannedTerm, "release is a cam/telesync/screener rip"
 	}
-	return "", ""
-}
-
-func filterRequiredTerms(c *Candidate, in Input) (string, string) {
-	haystack := " " + strings.ToLower(c.Release.Title) + " "
-	for _, term := range in.Profile.RequiredTerms {
-		term = strings.ToLower(strings.TrimSpace(term))
-		if term == "" {
-			continue
-		}
+	for _, term := range e.requiredTerms {
 		if !containsTerm(haystack, term) {
 			return RejectRequiredTerm, fmt.Sprintf("release name is missing the required term %q", term)
 		}
@@ -107,8 +148,8 @@ func filterRequiredTerms(c *Candidate, in Input) (string, string) {
 	return "", ""
 }
 
-func filterResolution(c *Candidate, in Input) (string, string) {
-	if len(in.Profile.AllowedResolutions) == 0 {
+func filterResolution(c *Candidate, e *evaluator) (string, string) {
+	if len(e.in.Profile.AllowedResolutions) == 0 {
 		return "", ""
 	}
 	if c.Parsed.Resolution == "" {
@@ -118,15 +159,15 @@ func filterResolution(c *Candidate, in Input) (string, string) {
 		// profile did not authorise.
 		return RejectResolution, "release does not state a resolution"
 	}
-	if in.Profile.ResolutionRank(c.Parsed.Resolution) < 0 {
+	if e.in.Profile.ResolutionRank(c.Parsed.Resolution) < 0 {
 		return RejectResolution, fmt.Sprintf("resolution %s is not in the profile's allowed list (%s)",
-			c.Parsed.Resolution, strings.Join(in.Profile.AllowedResolutions, ", "))
+			c.Parsed.Resolution, strings.Join(e.in.Profile.AllowedResolutions, ", "))
 	}
 	return "", ""
 }
 
-func filterSource(c *Candidate, in Input) (string, string) {
-	if len(in.Profile.AllowedSources) == 0 {
+func filterSource(c *Candidate, e *evaluator) (string, string) {
+	if len(e.in.Profile.AllowedSources) == 0 {
 		return "", ""
 	}
 	if c.Parsed.Source == "" {
@@ -136,17 +177,17 @@ func filterSource(c *Candidate, in Input) (string, string) {
 		// good candidates from this indexer.
 		return "", ""
 	}
-	if in.Profile.SourceRank(c.Parsed.Source) < 0 {
+	if e.in.Profile.SourceRank(c.Parsed.Source) < 0 {
 		return RejectSource, fmt.Sprintf("source %s is not in the profile's allowed list (%s)",
-			c.Parsed.Source, strings.Join(in.Profile.AllowedSources, ", "))
+			c.Parsed.Source, strings.Join(e.in.Profile.AllowedSources, ", "))
 	}
 	return "", ""
 }
 
-func filterSeeders(c *Candidate, in Input) (string, string) {
-	if c.Release.Seeders < in.Profile.MinSeeders {
+func filterSeeders(c *Candidate, e *evaluator) (string, string) {
+	if c.Release.Seeders < e.in.Profile.MinSeeders {
 		return RejectSeeders, fmt.Sprintf("%d seeders is below the profile floor of %d",
-			c.Release.Seeders, in.Profile.MinSeeders)
+			c.Release.Seeders, e.in.Profile.MinSeeders)
 	}
 	return "", ""
 }
@@ -157,18 +198,18 @@ func filterSeeders(c *Candidate, in Input) (string, string) {
 // A flat window cannot work for both a single episode and a ten-episode season
 // pack: a limit that admits the pack admits an absurdly oversized single
 // episode, and one that bounds the episode rejects every pack.
-func filterSize(c *Candidate, in Input) (string, string) {
-	if in.Profile.MaxSizeMB <= 0 && in.Profile.MinSizeMB <= 0 {
+func filterSize(c *Candidate, e *evaluator) (string, string) {
+	if e.in.Profile.MaxSizeMB <= 0 && e.in.Profile.MinSizeMB <= 0 {
 		return "", ""
 	}
 	units := contentUnits(c.Parsed, c.Release.Files)
 	scale := 1.0
-	if in.Want != nil && in.Want.Kind == model.SubjectEpisode {
-		scale = runtimeScale(in.RuntimeMinutes)
+	if e.in.Want != nil && e.in.Want.Kind == model.SubjectEpisode {
+		scale = runtimeScale(e.in.RuntimeMinutes)
 	}
 
-	minMB := int(float64(in.Profile.MinSizeMB) * float64(units) * scale)
-	maxMB := int(float64(in.Profile.MaxSizeMB) * float64(units) * scale)
+	minMB := int(float64(e.in.Profile.MinSizeMB) * float64(units) * scale)
+	maxMB := int(float64(e.in.Profile.MaxSizeMB) * float64(units) * scale)
 	sizeMB := c.Release.SizeMB()
 
 	// A zero or missing size cannot be judged; let it through rather than
@@ -176,13 +217,13 @@ func filterSize(c *Candidate, in Input) (string, string) {
 	if c.Release.SizeBytes <= 0 {
 		return "", ""
 	}
-	if in.Profile.MinSizeMB > 0 && sizeMB < minMB {
+	if e.in.Profile.MinSizeMB > 0 && sizeMB < minMB {
 		return RejectSize, fmt.Sprintf("%d MB is below the %d MB floor (%d %s x %d MB%s)",
-			sizeMB, minMB, units, unitWord(units), in.Profile.MinSizeMB, scaleNote(scale))
+			sizeMB, minMB, units, unitWord(units), e.in.Profile.MinSizeMB, scaleNote(scale))
 	}
-	if in.Profile.MaxSizeMB > 0 && sizeMB > maxMB {
+	if e.in.Profile.MaxSizeMB > 0 && sizeMB > maxMB {
 		return RejectSize, fmt.Sprintf("%d MB exceeds the %d MB ceiling (%d %s x %d MB%s)",
-			sizeMB, maxMB, units, unitWord(units), in.Profile.MaxSizeMB, scaleNote(scale))
+			sizeMB, maxMB, units, unitWord(units), e.in.Profile.MaxSizeMB, scaleNote(scale))
 	}
 	return "", ""
 }
@@ -230,22 +271,22 @@ func runtimeScale(runtimeMinutes int) float64 {
 // Runs last: it is the only filter whose answer depends on our own library
 // rather than on the release, and it produces the most confusing message, so
 // every simpler reason gets to speak first.
-func filterUpgrade(c *Candidate, in Input) (string, string) {
-	if in.Imported == nil {
+func filterUpgrade(c *Candidate, e *evaluator) (string, string) {
+	if e.in.Imported == nil {
 		return "", ""
 	}
 
-	haveRes := in.Profile.ResolutionRank(in.Imported.Resolution)
-	wantRes := in.Profile.ResolutionRank(c.Parsed.Resolution)
-	haveSrc := in.Profile.SourceRank(in.Imported.Source)
-	wantSrc := in.Profile.SourceRank(c.Parsed.Source)
+	haveRes := e.in.Profile.ResolutionRank(e.in.Imported.Resolution)
+	wantRes := e.in.Profile.ResolutionRank(c.Parsed.Resolution)
+	haveSrc := e.in.Profile.SourceRank(e.in.Imported.Source)
+	wantSrc := e.in.Profile.SourceRank(c.Parsed.Source)
 
 	switch {
 	case wantRes > haveRes:
 		return "", "" // better resolution is always an upgrade
 	case wantRes < haveRes:
 		return RejectNotAnUpgrade, fmt.Sprintf(
-			"already imported at %s; %s is lower", in.Imported.Resolution, c.Parsed.Resolution)
+			"already imported at %s; %s is lower", e.in.Imported.Resolution, c.Parsed.Resolution)
 	}
 
 	// Same resolution: a better source still counts.
@@ -255,25 +296,25 @@ func filterUpgrade(c *Candidate, in Input) (string, string) {
 	case wantSrc < haveSrc:
 		return RejectNotAnUpgrade, fmt.Sprintf(
 			"already imported at %s %s; %s is a lower-quality source",
-			in.Imported.Resolution, in.Imported.Source, c.Parsed.Source)
+			e.in.Imported.Resolution, e.in.Imported.Source, c.Parsed.Source)
 	}
 
 	// Identical quality. A PROPER or REPACK of the same quality is a fix for a
 	// broken release, which is the one case worth re-downloading for.
 	isFix := c.Parsed.Proper || c.Parsed.Repack
-	hadFix := in.Imported.Proper || in.Imported.Repack
+	hadFix := e.in.Imported.Proper || e.in.Imported.Repack
 	if isFix && !hadFix {
 		return "", ""
 	}
 
 	// At the profile's cutoff there is nothing left to chase.
-	if in.Profile.UpgradeUntil != "" &&
-		in.Profile.ResolutionRank(in.Imported.Resolution) >= in.Profile.ResolutionRank(in.Profile.UpgradeUntil) {
+	if e.in.Profile.UpgradeUntil != "" &&
+		e.in.Profile.ResolutionRank(e.in.Imported.Resolution) >= e.in.Profile.ResolutionRank(e.in.Profile.UpgradeUntil) {
 		return RejectNotAnUpgrade, fmt.Sprintf(
-			"already imported at the profile's upgrade cutoff (%s)", in.Profile.UpgradeUntil)
+			"already imported at the profile's upgrade cutoff (%s)", e.in.Profile.UpgradeUntil)
 	}
 	return RejectNotAnUpgrade, fmt.Sprintf(
-		"already imported at the same quality (%s %s)", in.Imported.Resolution, in.Imported.Source)
+		"already imported at the same quality (%s %s)", e.in.Imported.Resolution, e.in.Imported.Source)
 }
 
 // containsTerm does a whole-word-ish match.

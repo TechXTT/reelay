@@ -11,52 +11,8 @@ import (
 
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/downloader"
-	"github.com/TechXTT/reelay/internal/downloader/qbittorrent"
 	"github.com/TechXTT/reelay/internal/indexer"
 )
-
-// buildDownloader constructs the configured download client.
-//
-// The only place a concrete client type is named. Everything downstream sees
-// downloader.Downloader, which is what will let a Transmission implementation
-// drop in for topology B without an engine change.
-func buildDownloader(cfg *config.Config, log *slog.Logger) (downloader.Downloader, error) {
-	switch cfg.Downloader.Type {
-	case "qbittorrent":
-		return qbittorrent.New(cfg.Downloader, qbittorrent.Options{Logger: log})
-	default:
-		return nil, fmt.Errorf("unsupported download client type %q", cfg.Downloader.Type)
-	}
-}
-
-// ensureCategories creates Reelay's categories in the client if they are
-// missing.
-//
-// Done at startup rather than at first grab: the category is the safety
-// boundary, and discovering it does not exist at the moment we are trying to
-// add a torrent means either failing the grab or — much worse — adding it
-// uncategorised, where Reelay could never see it again and could not tell it
-// apart from the operator's own torrents.
-func ensureCategories(ctx context.Context, dl downloader.Downloader, cfg *config.Config, log *slog.Logger) error {
-	type ensurer interface {
-		EnsureCategory(ctx context.Context, name, savePath string) error
-	}
-	e, ok := dl.(ensurer)
-	if !ok {
-		return nil
-	}
-	pairs := []struct{ name, path string }{
-		{cfg.Downloader.CategoryTV, cfg.Downloader.SavePathTV},
-		{cfg.Downloader.CategoryMovies, cfg.Downloader.SavePathMovies},
-	}
-	for _, p := range pairs {
-		if err := e.EnsureCategory(ctx, p.name, p.path); err != nil {
-			return fmt.Errorf("ensure category %q: %w", p.name, err)
-		}
-		log.Debug("category ready", "category", p.name, "save_path", p.path)
-	}
-	return nil
-}
 
 // runGrab implements --grab: hand one magnet to the download client and follow
 // it to completion.
@@ -103,18 +59,6 @@ func runGrab(ctx context.Context, cfg *config.Config, log *slog.Logger, magnet, 
 
 	return followGrab(ctx, dl, hash,
 		cfg.Downloader.StallTimeout.Duration, pathMapperFor(cfg))
-}
-
-// pathMapperFor builds the client-path translator from config.
-func pathMapperFor(cfg *config.Config) *downloader.PathMapper {
-	mappings := make([]downloader.Mapping, 0, len(cfg.Downloader.PathMappings))
-	for _, m := range cfg.Downloader.PathMappings {
-		mappings = append(mappings, downloader.Mapping{
-			DownloaderPrefix: m.DownloaderPrefix,
-			LocalPrefix:      m.LocalPrefix,
-		})
-	}
-	return downloader.NewPathMapper(mappings)
 }
 
 // followGrab polls until the torrent completes, stalls or fails.

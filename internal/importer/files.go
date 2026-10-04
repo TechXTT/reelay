@@ -68,22 +68,30 @@ func (s *Service) land(source, dest, root string) (method, replaced string, skip
 		return "", "", false, statErr
 	}
 
+	method, err = s.place(source, dest)
+	return method, replaced, false, err
+}
+
+// place lands source at dest using the first enabled strategy that works:
+// hardlink, move, then a verified copy. Only hardlink failures other than
+// cross-device or unsupported filesystems are fatal; move errors fall through.
+func (s *Service) place(source, dest string) (string, error) {
 	if s.cfg.Library.Hardlink {
-		if err = s.link(source, dest); err == nil {
-			return "hardlink", replaced, false, nil
-		} else if !errors.Is(err, syscall.EXDEV) && !isUnsupportedLink(err) {
-			return "", replaced, false, fmt.Errorf("hardlink %s: %w", dest, err)
+		err := s.link(source, dest)
+		if err == nil {
+			return "hardlink", nil
+		}
+		if !errors.Is(err, syscall.EXDEV) && !isUnsupportedLink(err) {
+			return "", fmt.Errorf("hardlink %s: %w", dest, err)
 		}
 	}
-	if s.cfg.Library.AllowMove {
-		if err = os.Rename(source, dest); err == nil {
-			return "move", replaced, false, nil
-		}
+	if s.cfg.Library.AllowMove && os.Rename(source, dest) == nil {
+		return "move", nil
 	}
-	if err = copyVerified(source, dest); err != nil {
-		return "", replaced, false, err
+	if err := copyVerified(source, dest); err != nil {
+		return "", err
 	}
-	return "copy", replaced, false, nil
+	return "copy", nil
 }
 
 func (s *Service) recycle(dest, root string) (string, error) {

@@ -77,10 +77,7 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 	now := r.s.nowUTC()
 	var out model.StateTransition
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
-		table := "episodes"
-		if lock.Subject == model.SubjectMovie {
-			table = "movies"
-		}
+		var table = itemTable(lock.Subject)
 		var from model.ItemState
 		var importedPath string
 		err := tx.QueryRowContext(ctx, `SELECT state, imported_path FROM `+table+` WHERE id=?`,
@@ -138,11 +135,7 @@ func (r *TransitionRepository) MarkImportedLocked(ctx context.Context, lock *Ite
 		if from != model.StateImporting {
 			return fmt.Errorf("%s:%d %s -> imported: %w", lock.Subject, lock.ID, from, ErrInvalidTransition)
 		}
-		table := "episodes"
-		if lock.Subject == model.SubjectMovie {
-			table = "movies"
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET state='imported',
+		res, err := tx.ExecContext(ctx, `UPDATE `+itemTable(lock.Subject)+` SET state='imported',
  imported_path=?, imported_quality=?, last_error='', next_search_at=NULL
  WHERE id=? AND state='importing'`, path, quality, lock.ID)
 		if err != nil {
@@ -190,16 +183,10 @@ func (r *TransitionRepository) retryNow(ctx context.Context, subject model.Subje
 		if !allowBusy && (from == model.StateSearching || from.Active()) {
 			return fmt.Errorf("%s:%d is %s: %w", subject, id, from, ErrItemBusy)
 		}
-		if from != model.StateWanted {
-			if !from.CanTransitionTo(model.StateWanted) {
-				return fmt.Errorf("%s:%d %s -> wanted: %w", subject, id, from, ErrInvalidTransition)
-			}
+		if from != model.StateWanted && !from.CanTransitionTo(model.StateWanted) {
+			return fmt.Errorf("%s:%d %s -> wanted: %w", subject, id, from, ErrInvalidTransition)
 		}
-		table := "episodes"
-		if subject == model.SubjectMovie {
-			table = "movies"
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET state='wanted',
+		res, err := tx.ExecContext(ctx, `UPDATE `+itemTable(subject)+` SET state='wanted',
  next_search_at=NULL, search_attempts=0, last_error='', first_wanted_at=COALESCE(first_wanted_at, ?)
  WHERE id=? AND state=?`, FormatTime(r.s.nowUTC()), id, from)
 		if err != nil {
@@ -249,13 +236,16 @@ func (r *TransitionRepository) History(ctx context.Context, subject model.Subjec
 	return out, rows.Err()
 }
 
-func itemState(ctx context.Context, tx *sql.Tx, subject model.SubjectType, id int64) (model.ItemState, error) {
-	table := "episodes"
+func itemTable(subject model.SubjectType) string {
 	if subject == model.SubjectMovie {
-		table = "movies"
+		return "movies"
 	}
+	return "episodes"
+}
+
+func itemState(ctx context.Context, tx *sql.Tx, subject model.SubjectType, id int64) (model.ItemState, error) {
 	var state model.ItemState
-	err := tx.QueryRowContext(ctx, "SELECT state FROM "+table+" WHERE id = ?", id).Scan(&state)
+	err := tx.QueryRowContext(ctx, "SELECT state FROM "+itemTable(subject)+" WHERE id = ?", id).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("%s:%d: %w", subject, id, ErrNotFound)
 	}
@@ -266,11 +256,7 @@ func itemState(ctx context.Context, tx *sql.Tx, subject model.SubjectType, id in
 }
 
 func updateItemState(ctx context.Context, tx *sql.Tx, subject model.SubjectType, id int64, from, to model.ItemState, now time.Time) (sql.Result, error) {
-	table := "episodes"
-	if subject == model.SubjectMovie {
-		table = "movies"
-	}
-	q := `UPDATE ` + table + ` SET state = ?,
+	q := `UPDATE ` + itemTable(subject) + ` SET state = ?,
  first_wanted_at = CASE WHEN ? = 'wanted' THEN COALESCE(first_wanted_at, ?) ELSE first_wanted_at END,
  next_search_at = CASE WHEN ? IN ('searching','grabbed','downloading','importing','imported') THEN NULL ELSE next_search_at END
  WHERE id = ? AND state = ?`

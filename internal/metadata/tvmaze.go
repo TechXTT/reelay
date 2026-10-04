@@ -24,30 +24,21 @@ type TVmazeOptions struct {
 }
 
 type TVmaze struct {
-	http    httpJSONClient
-	cache   Cache
-	ttl     time.Duration
-	now     func() time.Time
-	limiter *rate.Limiter
+	client *cachedJSONClient
 }
 
 func NewTVmaze(opt TVmazeOptions) (*TVmaze, error) {
-	h, err := newHTTPJSONClient(opt.BaseURL, opt.HTTPClient, opt.Timeout)
+	client, err := newCachedJSONClient(cachedJSONOptions{
+		Provider: "tvmaze", BaseURL: opt.BaseURL, Client: opt.HTTPClient, Timeout: opt.Timeout,
+		// TVmaze guarantees at least 20 requests per 10 seconds. A burst of
+		// two keeps search responsive while staying inside that floor.
+		Limiter: rate.NewLimiter(rate.Limit(2), 2),
+		Cache:   opt.Cache, CacheTTL: opt.CacheTTL, Now: opt.Now,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if opt.CacheTTL <= 0 {
-		opt.CacheTTL = 24 * time.Hour
-	}
-	if opt.Now == nil {
-		opt.Now = time.Now
-	}
-	return &TVmaze{
-		http: h, cache: opt.Cache, ttl: opt.CacheTTL, now: opt.Now,
-		// TVmaze guarantees at least 20 requests per 10 seconds. A burst of
-		// two keeps search responsive while staying inside that floor.
-		limiter: rate.NewLimiter(rate.Limit(2), 2),
-	}, nil
+	return &TVmaze{client: client}, nil
 }
 
 type tvmazeSearchResult struct {
@@ -90,7 +81,7 @@ func (t *TVmaze) SearchSeries(ctx context.Context, title string) ([]Series, erro
 	}
 	cacheKey := "search:" + strings.ToLower(title)
 	var payload []tvmazeSearchResult
-	if err := t.cachedGET(ctx, cacheKey, "/search/shows", url.Values{"q": {title}}, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, cacheKey, "/search/shows", url.Values{"q": {title}}, &payload); err != nil {
 		return nil, err
 	}
 	out := make([]Series, 0, len(payload))
@@ -106,7 +97,7 @@ func (t *TVmaze) SeriesEpisodes(ctx context.Context, id int) ([]Episode, error) 
 	}
 	cacheKey := "episodes:" + strconv.Itoa(id)
 	var payload []tvmazeEpisode
-	if err := t.cachedGET(ctx, cacheKey, "/shows/"+strconv.Itoa(id)+"/episodes", nil, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, cacheKey, "/shows/"+strconv.Itoa(id)+"/episodes", nil, &payload); err != nil {
 		return nil, err
 	}
 	out := make([]Episode, 0, len(payload))
@@ -179,22 +170,8 @@ func (t *TVmaze) LookupSeries(ctx context.Context, tvdbID int, imdbID string) (S
 		return Series{}, fmt.Errorf("tvmaze: lookup requires a TVDB or IMDb id")
 	}
 	var payload tvmazeShow
-	if err := t.cachedGET(ctx, "lookup:"+key, "/lookup/shows", q, &payload); err != nil {
+	if err := t.client.cachedGET(ctx, "lookup:"+key, "/lookup/shows", q, &payload); err != nil {
 		return Series{}, err
 	}
 	return convertTVmazeShow(payload), nil
-}
-
-func (t *TVmaze) cachedGET(ctx context.Context, key, path string, query url.Values, dst any) error {
-	if _, hit, err := cacheLoad(ctx, t.cache, "tvmaze", key, t.now(), dst); err != nil || hit {
-		return err
-	}
-	if err := t.limiter.Wait(ctx); err != nil {
-		return fmt.Errorf("tvmaze: rate limit wait: %w", err)
-	}
-	raw, err := t.http.get(ctx, path, query, dst)
-	if err != nil {
-		return err
-	}
-	return cacheStore(ctx, t.cache, "tvmaze", key, raw, t.now(), t.ttl)
 }

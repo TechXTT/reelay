@@ -1,17 +1,19 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/parser"
 	"github.com/TechXTT/reelay/internal/scoring"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -27,7 +29,6 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	groups := make(map[string][]searchTarget)
 	for _, target := range targets {
 		key := targetKey(target)
-
 		groups[key] = append(groups[key], target)
 	}
 
@@ -40,55 +41,54 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 			e.log.Info("recent indexer query unsupported; loop disabled for this run")
 			return nil
 		}
-		if err != nil && len(recentReleases) == 0 {
+		if err != nil {
 			return err
 		}
 	}
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(groups))
+	groupErrs := make([]error, len(groups))
+	index := 0
 	for _, group := range groups {
+		slot := &groupErrs[index]
+		index++
 		wg.Add(1)
 		go func() {
-			var errs []error
-
 			defer wg.Done()
-			select {
-			case e.searchSem <- struct{}{}:
-				defer func() { <-e.searchSem }()
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			}
-			releases := recentReleases
-			queryErr := err
-			if !recent {
-				minSeeders := group[0].profile.MinSeeders
-				for _, target := range group[1:] {
-					if target.profile.MinSeeders < minSeeders {
-						minSeeders = target.profile.MinSeeders
-					}
-				}
-				releases, queryErr = e.queryIndexers(ctx, indexer.Query{
-					Term: targetQuery(group[0]), Categories: targetCategories(group[0]),
-					MinSeeders: minSeeders,
-				})
-			}
-			for _, target := range group {
-				if processErr := e.processSearchTarget(ctx, target, releases, queryErr); processErr != nil && !errors.Is(processErr, store.ErrLocked) {
-					errs = append(errs, processErr)
-				}
-			}
-			// Each group sends at most once, so the channel cannot fill before Wait returns.
-			errCh <- errors.Join(errs...)
+			*slot = e.searchGroup(ctx, group, recent, recentReleases)
 		}()
 	}
 	wg.Wait()
-	close(errCh)
+	return errors.Join(groupErrs...)
+}
+
+// searchGroup evaluates targets that share one indexer query. A recent run
+// reuses the feed already fetched; otherwise the group queries once with the
+// loosest seeder floor among its profiles.
+func (e *Engine) searchGroup(ctx context.Context, group []searchTarget, recent bool,
+	recentReleases []indexer.Release) error {
+	select {
+	case e.searchSem <- struct{}{}:
+		defer func() { <-e.searchSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	releases := recentReleases
+	var queryErr error
+	if !recent {
+		minSeeders := group[0].profile.MinSeeders
+		for _, target := range group[1:] {
+			minSeeders = min(minSeeders, target.profile.MinSeeders)
+		}
+		releases, queryErr = e.queryIndexers(ctx, indexer.Query{
+			Term: targetQuery(group[0]), Categories: targetCategories(group[0]),
+			MinSeeders: minSeeders,
+		})
+	}
 	var errs []error
-	for loopErr := range errCh {
-		if loopErr != nil {
-			errs = append(errs, loopErr)
+	for _, target := range group {
+		if err := e.processSearchTarget(ctx, target, releases, queryErr); err != nil && !errors.Is(err, store.ErrLocked) {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -175,31 +175,17 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	}
 	locks := []*store.ItemLock{lock}
 	if target.subject == model.SubjectEpisode {
-		covered := make([]model.Episode, 0, len(target.episodes))
-		for _, episode := range target.episodes {
-			if episode.ID != target.id && best.Parsed.CoversEpisode(episode.Season, episode.Number) {
-				covered = append(covered, episode)
+		packLocks, failure, packErr := e.lockPackEpisodes(ctx, target.episodes, target.id,
+			best.Parsed, "engine-season-pack", true)
+		if packErr != nil {
+			reason := "pack_coordination_error"
+			if failure == packLockBusy {
+				reason = "pack_coordination_busy"
 			}
+			return e.retrySearch(ctx, lock, target, reason, packErr.Error())
 		}
-		sort.Slice(covered, func(i, j int) bool { return covered[i].ID < covered[j].ID })
-		for _, episode := range covered {
-			current, getErr := e.store.Episodes().Get(ctx, episode.ID)
-			if getErr != nil {
-				releaseItemLocks(locks[1:])
-				return e.retrySearch(ctx, lock, target, "pack_coordination_error", getErr.Error())
-			}
-			if current.State != model.StateWanted {
-				continue
-			}
-			coveredLock, lockErr := e.store.Locks().Acquire(ctx, model.SubjectEpisode,
-				episode.ID, "engine-season-pack", 5*time.Minute)
-			if lockErr != nil {
-				releaseItemLocks(locks[1:])
-				return e.retrySearch(ctx, lock, target, "pack_coordination_busy", lockErr.Error())
-			}
-			locks = append(locks, coveredLock)
-		}
-		defer releaseItemLocks(locks[1:])
+		defer releaseItemLocks(packLocks)
+		locks = append(locks, packLocks...)
 	}
 	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
 		Category: target.category, SavePath: target.savePath, Paused: e.cfg.Downloader.AddPaused})
@@ -213,10 +199,53 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		_ = e.downloader.Remove(context.WithoutCancel(ctx), hash, false)
 		return fmt.Errorf("record grab: %w", err)
 	}
-	e.publish("state_transition", target, map[string]any{"state": model.StateGrabbed,
+	e.publish("state_transition", target.subject, target.id, map[string]any{"state": model.StateGrabbed,
 		"grab_id": grab.ID, "release": best.Release.Title, "score": best.Score,
 		"covered_items": len(locks)})
 	return nil
+}
+
+type packLockFailure int
+
+const (
+	packLockLookup packLockFailure = iota + 1
+	packLockBusy
+)
+
+// lockPackEpisodes locks every still-wanted episode among candidates that the
+// parsed release covers, in ascending ID order, excluding primaryID which the
+// caller already holds. With refresh set each episode is re-read first because
+// candidates may be stale. On failure nothing stays locked.
+func (e *Engine) lockPackEpisodes(ctx context.Context, candidates []model.Episode, primaryID int64,
+	parsed parser.Parsed, reason string, refresh bool) ([]*store.ItemLock, packLockFailure, error) {
+	covered := make([]model.Episode, 0, len(candidates))
+	for _, episode := range candidates {
+		if episode.ID != primaryID && parsed.CoversEpisode(episode.Season, episode.Number) {
+			covered = append(covered, episode)
+		}
+	}
+	slices.SortFunc(covered, func(a, b model.Episode) int { return cmp.Compare(a.ID, b.ID) })
+	var locks []*store.ItemLock
+	for _, episode := range covered {
+		if refresh {
+			current, err := e.store.Episodes().Get(ctx, episode.ID)
+			if err != nil {
+				releaseItemLocks(locks)
+				return nil, packLockLookup, err
+			}
+			episode.State = current.State
+		}
+		if episode.State != model.StateWanted {
+			continue
+		}
+		lock, err := e.store.Locks().Acquire(ctx, model.SubjectEpisode, episode.ID, reason, 5*time.Minute)
+		if err != nil {
+			releaseItemLocks(locks)
+			return nil, packLockBusy, err
+		}
+		locks = append(locks, lock)
+	}
+	return locks, 0, nil
 }
 
 func releaseItemLocks(locks []*store.ItemLock) {
@@ -270,7 +299,7 @@ func (e *Engine) retrySearch(ctx context.Context, lock *store.ItemLock, target s
 		} else if terminal {
 			state = model.StateFailed
 		}
-		e.publish("state_transition", target, map[string]any{"state": state, "reason": reason})
+		e.publish("state_transition", target.subject, target.id, map[string]any{"state": state, "reason": reason})
 	}
 	return err
 }

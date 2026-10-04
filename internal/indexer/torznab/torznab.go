@@ -120,6 +120,23 @@ func (c *Client) Probe(ctx context.Context) error {
 	return nil
 }
 
+// maxItems bounds how many feed items one search decodes and considers.
+const maxItems = 100
+
+type feedItem struct {
+	Title     string `xml:"title"`
+	Link      string `xml:"link"`
+	Published string `xml:"pubDate"`
+	Enclosure struct {
+		URL    string `xml:"url,attr"`
+		Length int64  `xml:"length,attr"`
+	} `xml:"enclosure"`
+	Attributes []struct {
+		Name  string `xml:"name,attr"`
+		Value string `xml:"value,attr"`
+	} `xml:"attr"`
+}
+
 func (c *Client) Search(ctx context.Context, query indexer.Query) (result []indexer.Release, searchErr error) {
 	var bounded, cancel = context.WithTimeout(ctx, c.cfg.RequestTimeout.Duration)
 	var parameters = url.Values{"t": {"search"}, "q": {query.Term}, "cat": {"2000,5000"}, "limit": {"100"}, "extended": {"1"}}
@@ -142,11 +159,30 @@ func (c *Client) Search(ctx context.Context, query indexer.Query) (result []inde
 		return nil, err
 	}
 	defer response.Body.Close()
-	decoder := xml.NewDecoder(io.LimitReader(response.Body, 4<<20))
-	rootSeen := false
-	rootClosed := false
-	count := 0
-	for count < 100 {
+	items, err := decodeFeed(io.LimitReader(response.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		release, ok := c.toRelease(item, query)
+		if !ok || seen[release.InfoHash] {
+			continue
+		}
+		seen[release.InfoHash] = true
+		releases = append(releases, release)
+	}
+	return releases, nil
+}
+
+// decodeFeed streams the RSS document and returns at most maxItems items. It
+// stops reading at the cap, so the closing tag is only required when the feed
+// ended before it.
+func decodeFeed(reader io.Reader) ([]feedItem, error) {
+	var decoder = xml.NewDecoder(reader)
+	var items []feedItem
+	var rootSeen, rootClosed bool
+
+	for len(items) < maxItems {
 		token, err := decoder.Token()
 		if err == io.EOF {
 			break
@@ -173,98 +209,91 @@ func (c *Client) Search(ctx context.Context, query indexer.Query) (result []inde
 		if start.Name.Local != "item" {
 			continue
 		}
-		var entry struct {
-			Title     string `xml:"title"`
-			Link      string `xml:"link"`
-			Published string `xml:"pubDate"`
-			Enclosure struct {
-				URL    string `xml:"url,attr"`
-				Length int64  `xml:"length,attr"`
-			} `xml:"enclosure"`
-			Attributes []struct {
-				Name  string `xml:"name,attr"`
-				Value string `xml:"value,attr"`
-			} `xml:"attr"`
-		}
-		if err := decoder.DecodeElement(&entry, &start); err != nil {
+		var item feedItem
+		if err := decoder.DecodeElement(&item, &start); err != nil {
 			return nil, errors.New("invalid Torznab item")
 		}
-		count++
-		release := indexer.Release{Title: entry.Title, SizeBytes: entry.Enclosure.Length, Indexer: c.cfg.Name}
-		magnet, hash := "", ""
-		for _, attribute := range entry.Attributes {
-			switch attribute.Name {
-			case "magneturl":
-				magnet = attribute.Value
-			case "infohash":
-				hash = attribute.Value
-			case "size":
-				release.SizeBytes, _ = strconv.ParseInt(attribute.Value, 10, 64)
-			case "seeders":
-				release.Seeders, _ = strconv.Atoi(attribute.Value)
-			case "leechers":
-				release.Leechers, _ = strconv.Atoi(attribute.Value)
-			case "files":
-				release.Files, _ = strconv.Atoi(attribute.Value)
-			case "imdb":
-				release.IMDBID = "tt" + strings.TrimPrefix(attribute.Value, "tt")
-			case "category":
-				category, _ := strconv.Atoi(attribute.Value)
-				if category >= 2000 && category < 3000 {
-					release.Category = indexer.CatMoviesHD
-				}
-				if category >= 5000 && category < 6000 {
-					release.Category = indexer.CatTVShowsHD
-				}
-			}
-		}
-		if magnet == "" && strings.HasPrefix(entry.Enclosure.URL, "magnet:") {
-			magnet = entry.Enclosure.URL
-		}
-		if magnet == "" && strings.HasPrefix(entry.Link, "magnet:") {
-			magnet = entry.Link
-		}
-		if magnet != "" {
-			uri, err := url.Parse(magnet)
-			if err != nil || uri.Scheme != "magnet" {
-				continue
-			}
-			magnetHash := strings.TrimPrefix(uri.Query().Get("xt"), "urn:btih:")
-			if hash != "" {
-				expected, err := tpb.NormalizeInfoHash(hash)
-				actual, otherErr := tpb.NormalizeInfoHash(magnetHash)
-				if err != nil || otherErr != nil || expected != actual {
-					continue
-				}
-			}
-			hash = magnetHash
-		}
-		hash, err = tpb.NormalizeInfoHash(hash)
-		if err != nil || seen[hash] || release.SizeBytes <= 0 || release.Title == "" || !indexer.IsVideoCategory(release.Category) || release.Seeders < query.MinSeeders {
-			continue
-		}
-		if len(query.Categories) > 0 && !slices.Contains(query.Categories, release.Category) {
-			continue
-		}
-		if magnet == "" {
-			magnet, err = tpb.BuildMagnet(hash, entry.Title, c.cfg.Trackers)
-			if err != nil {
-				continue
-			}
-		}
-		release.InfoHash, release.Magnet = hash, magnet
-		release.PublishedAt, _ = time.Parse(time.RFC1123Z, entry.Published)
-		if release.PublishedAt.IsZero() {
-			release.PublishedAt, _ = time.Parse(time.RFC1123, entry.Published)
-		}
-		seen[hash] = true
-		releases = append(releases, release)
+		items = append(items, item)
 	}
 	if !rootSeen {
 		return nil, errors.New("empty Torznab XML response")
 	}
-	if count < 100 && !rootClosed {
+	if len(items) < maxItems && !rootClosed {
 		return nil, errors.New("incomplete Torznab XML response")
 	}
-	return releases, nil
+	return items, nil
+}
+
+// toRelease converts a feed item into a release, reporting false when the item
+// is unusable or filtered out by the query. Deduplication is the caller's job.
+func (c *Client) toRelease(item feedItem, query indexer.Query) (indexer.Release, bool) {
+	var release = indexer.Release{Title: item.Title, SizeBytes: item.Enclosure.Length, Indexer: c.cfg.Name}
+	var magnet, hash string
+
+	for _, attribute := range item.Attributes {
+		switch attribute.Name {
+		case "magneturl":
+			magnet = attribute.Value
+		case "infohash":
+			hash = attribute.Value
+		case "size":
+			release.SizeBytes, _ = strconv.ParseInt(attribute.Value, 10, 64)
+		case "seeders":
+			release.Seeders, _ = strconv.Atoi(attribute.Value)
+		case "leechers":
+			release.Leechers, _ = strconv.Atoi(attribute.Value)
+		case "files":
+			release.Files, _ = strconv.Atoi(attribute.Value)
+		case "imdb":
+			release.IMDBID = "tt" + strings.TrimPrefix(attribute.Value, "tt")
+		case "category":
+			category, _ := strconv.Atoi(attribute.Value)
+			if category >= 2000 && category < 3000 {
+				release.Category = indexer.CatMoviesHD
+			}
+			if category >= 5000 && category < 6000 {
+				release.Category = indexer.CatTVShowsHD
+			}
+		}
+	}
+	if magnet == "" && strings.HasPrefix(item.Enclosure.URL, "magnet:") {
+		magnet = item.Enclosure.URL
+	}
+	if magnet == "" && strings.HasPrefix(item.Link, "magnet:") {
+		magnet = item.Link
+	}
+	if magnet != "" {
+		uri, err := url.Parse(magnet)
+		if err != nil || uri.Scheme != "magnet" {
+			return indexer.Release{}, false
+		}
+		magnetHash := strings.TrimPrefix(uri.Query().Get("xt"), "urn:btih:")
+		if hash != "" {
+			expected, err := tpb.NormalizeInfoHash(hash)
+			actual, otherErr := tpb.NormalizeInfoHash(magnetHash)
+			if err != nil || otherErr != nil || expected != actual {
+				return indexer.Release{}, false
+			}
+		}
+		hash = magnetHash
+	}
+	hash, err := tpb.NormalizeInfoHash(hash)
+	if err != nil || release.SizeBytes <= 0 || release.Title == "" || !indexer.IsVideoCategory(release.Category) || release.Seeders < query.MinSeeders {
+		return indexer.Release{}, false
+	}
+	if len(query.Categories) > 0 && !slices.Contains(query.Categories, release.Category) {
+		return indexer.Release{}, false
+	}
+	if magnet == "" {
+		magnet, err = tpb.BuildMagnet(hash, item.Title, c.cfg.Trackers)
+		if err != nil {
+			return indexer.Release{}, false
+		}
+	}
+	release.InfoHash, release.Magnet = hash, magnet
+	release.PublishedAt, _ = time.Parse(time.RFC1123Z, item.Published)
+	if release.PublishedAt.IsZero() {
+		release.PublishedAt, _ = time.Parse(time.RFC1123, item.Published)
+	}
+	return release, true
 }

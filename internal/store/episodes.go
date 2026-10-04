@@ -112,6 +112,28 @@ func (r *EpisodeRepository) ActiveByRelease(ctx context.Context, releaseID int64
 	return collectRows(rows, scanEpisode)
 }
 
+// ActiveByReleases groups the episodes ActiveByRelease would return by chosen
+// release id, using one query for all releases.
+func (r *EpisodeRepository) ActiveByReleases(ctx context.Context, releaseIDs []int64) (map[int64][]model.Episode, error) {
+	grouped := make(map[int64][]model.Episode, len(releaseIDs))
+	for _, chunk := range chunkIDs(releaseIDs) {
+		rows, err := r.s.ro.QueryContext(ctx, selectEpisodeSQL+`
+ WHERE chosen_release_id IN (`+placeholders(len(chunk))+`) AND state IN ('grabbed','downloading','importing')
+ ORDER BY series_id, season, number`, int64Args(chunk)...)
+		if err != nil {
+			return nil, fmt.Errorf("list active episodes for releases: %w", err)
+		}
+		episodes, err := collectRows(rows, scanEpisode)
+		if err != nil {
+			return nil, err
+		}
+		for _, episode := range episodes {
+			grouped[episode.ChosenReleaseID] = append(grouped[episode.ChosenReleaseID], episode)
+		}
+	}
+	return grouped, nil
+}
+
 // UpsertMetadata refreshes provider-owned fields without overwriting lifecycle
 // state. It returns created=true only when this episode was newly announced.
 func (r *EpisodeRepository) UpsertMetadata(ctx context.Context, in model.Episode, initial model.ItemState, reason string) (model.Episode, bool, error) {

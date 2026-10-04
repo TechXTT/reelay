@@ -51,6 +51,16 @@ func (r *RecommendationRepository) Users(ctx context.Context) ([]model.JellyfinU
 	})
 }
 
+// UserExists reports whether the Jellyfin user is known.
+func (r *RecommendationRepository) UserExists(ctx context.Context, serverID, userID string) (bool, error) {
+	var exists bool
+	err := r.s.ro.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jellyfin_users WHERE server_id=? AND user_id=?)`, serverID, userID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check jellyfin user: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *RecommendationRepository) UpsertItems(ctx context.Context, items []model.JellyfinItem, syncToken string) error {
 	if len(items) == 0 {
 		return nil
@@ -153,16 +163,7 @@ UNION SELECT tmdb_id FROM recommendation_ratings WHERE server_id=? AND user_id=?
 	if err != nil {
 		return nil, fmt.Errorf("list excluded recommendation ids: %w", err)
 	}
-	defer rows.Close()
-	out := map[int]bool{}
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
+	return collectSet[int](rows)
 }
 
 func (r *RecommendationRepository) Ratings(ctx context.Context, serverID, userID, mediaType string) ([]model.RecommendationRating, error) {
@@ -181,16 +182,7 @@ SELECT server_id,user_id,media_type,tmdb_id,rating,updated_at FROM rating_values
 	if err != nil {
 		return nil, fmt.Errorf("list recommendation ratings: %w", err)
 	}
-	return collectRows(rows, func(row scanner) (model.RecommendationRating, error) {
-		var value model.RecommendationRating
-		var updated string
-		if err := row.Scan(&value.ServerID, &value.UserID, &value.MediaType, &value.TMDBID, &value.Rating, &updated); err != nil {
-			return value, err
-		}
-		parsed, parseErr := ParseTime(updated)
-		value.UpdatedAt = parsed
-		return value, parseErr
-	})
+	return collectRows(rows, scanRecommendationRating)
 }
 
 func (r *RecommendationRepository) OwnedTMDBIDs(ctx context.Context, serverID, mediaType string) (map[int]bool, error) {
@@ -198,16 +190,7 @@ func (r *RecommendationRepository) OwnedTMDBIDs(ctx context.Context, serverID, m
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[int]bool{}
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
+	return collectSet[int](rows)
 }
 
 func (r *RecommendationRepository) Replace(ctx context.Context, serverID, userID, mediaType string, values []model.Recommendation) error {
@@ -225,8 +208,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmd
 		query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`
 		args := []any{serverID, userID, mediaType}
 		if len(values) > 0 {
-			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")
-			query += ` AND tmdb_id NOT IN (` + placeholders + `)`
+			query += ` AND tmdb_id NOT IN (` + placeholders(len(values)) + `)`
 			for _, value := range values {
 				args = append(args, value.TMDBID)
 			}

@@ -190,11 +190,12 @@ func Evaluate(in Input) Result {
 	if in.Now.IsZero() {
 		in.Now = time.Now()
 	}
+	e := newEvaluator(in)
 
 	for _, rel := range in.Releases {
 		c := Candidate{Release: rel, Parsed: parser.Parse(rel.Title)}
 
-		if cat, reason := reject(&c, in); cat != "" {
+		if cat, reason := e.reject(&c); cat != "" {
 			c.RejectedBy = cat
 			c.Reason = reason
 			res.Rejected = append(res.Rejected, c)
@@ -202,7 +203,7 @@ func Evaluate(in Input) Result {
 			continue
 		}
 
-		c.Components = componentsFor(c, in)
+		c.Components = e.components(c)
 		for _, comp := range c.Components {
 			c.Score += comp.Points
 		}
@@ -210,7 +211,7 @@ func Evaluate(in Input) Result {
 	}
 
 	sort.SliceStable(res.Accepted, func(i, j int) bool {
-		a, b := res.Accepted[i], res.Accepted[j]
+		a, b := &res.Accepted[i], &res.Accepted[j]
 		if a.Score != b.Score {
 			return a.Score > b.Score
 		}

@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/config"
@@ -32,8 +31,7 @@ type domainCLIOptions struct {
 }
 
 func (o domainCLIOptions) Active() bool {
-	return o.AddMovie != "" || o.AddSeries != "" || o.AddEpisode != "" ||
-		o.ListItems || o.Transition != "" || o.History != ""
+	return o.actionCount() > 0
 }
 
 func (o domainCLIOptions) actionCount() int {
@@ -58,78 +56,90 @@ func runDomainCLI(ctx context.Context, st *store.Store, cfg *config.Config, o do
 
 	switch {
 	case o.AddMovie != "":
-		movie, err := st.Movies().Create(ctx, model.Movie{
-			Title: o.AddMovie, SortTitle: parser.SortTitle(o.AddMovie), Year: o.MovieYear,
-			ProfileID: profile.ID, RootFolder: cfg.Library.MovieRoot, State: model.StateWanted,
-		}, "movie added from CLI")
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stdout, "added movie:%d %q (%d) state=%s profile=%q\n",
-			movie.ID, movie.Title, movie.Year, movie.State, profile.Name)
-		return nil
-
+		return addMovie(ctx, st, cfg, profile, o)
 	case o.AddSeries != "":
-		mode := model.MonitorMode(o.MonitorMode)
-		if !mode.Valid() {
-			return fmt.Errorf("invalid --monitor-mode %q", o.MonitorMode)
-		}
-		series, err := st.Series().Create(ctx, model.Series{
-			Title: o.AddSeries, SortTitle: parser.SortTitle(o.AddSeries),
-			MonitorMode: mode, Status: model.SeriesFollowing,
-			ProfileID: profile.ID, RootFolder: cfg.Library.TVRoot,
-		})
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stdout, "added series:%d %q monitor=%s profile=%q\n",
-			series.ID, series.Title, series.MonitorMode, profile.Name)
-		return nil
-
+		return addSeries(ctx, st, cfg, profile, o)
 	case o.AddEpisode != "":
-		seriesID, season, number, err := parseEpisodeSpec(o.AddEpisode)
-		if err != nil {
-			return err
-		}
-		var air *time.Time
-		if o.AirDate != "" {
-			v, err := time.Parse("2006-01-02", o.AirDate)
-			if err != nil {
-				return fmt.Errorf("parse --air-date: %w", err)
-			}
-			air = &v
-		}
-		ep, err := st.Episodes().Create(ctx, model.Episode{
-			SeriesID: seriesID, Season: season, Number: number,
-			Title: o.EpisodeTitle, AirDate: air, State: model.StateWanted,
-		}, "episode added from CLI")
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stdout, "added episode:%d series:%d S%02dE%02d state=%s\n",
-			ep.ID, ep.SeriesID, ep.Season, ep.Number, ep.State)
-		return nil
-
+		return addEpisode(ctx, st, o)
 	case o.ListItems:
 		return printItems(ctx, st)
 	case o.Transition != "":
-		subject, id, state, err := parseTransitionSpec(o.Transition)
-		if err != nil {
-			return err
-		}
-		v, err := st.Transitions().Transition(ctx, subject, id, state, o.Reason, "manual CLI transition")
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stdout, "%s:%d %s -> %s (%s)\n", subject, id, v.From, v.To, v.Reason)
-		return nil
-	case o.History != "":
+		return transitionItem(ctx, st, o)
+	default:
 		subject, id, err := parseSubjectSpec(o.History)
 		if err != nil {
 			return err
 		}
 		return printHistory(ctx, st, subject, id)
 	}
+}
+
+func addMovie(ctx context.Context, st *store.Store, cfg *config.Config, profile model.QualityProfile, o domainCLIOptions) error {
+	movie, err := st.Movies().Create(ctx, model.Movie{
+		Title: o.AddMovie, SortTitle: parser.SortTitle(o.AddMovie), Year: o.MovieYear,
+		ProfileID: profile.ID, RootFolder: cfg.Library.MovieRoot, State: model.StateWanted,
+	}, "movie added from CLI")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "added movie:%d %q (%d) state=%s profile=%q\n",
+		movie.ID, movie.Title, movie.Year, movie.State, profile.Name)
+	return nil
+}
+
+func addSeries(ctx context.Context, st *store.Store, cfg *config.Config, profile model.QualityProfile, o domainCLIOptions) error {
+	mode := model.MonitorMode(o.MonitorMode)
+	if !mode.Valid() {
+		return fmt.Errorf("invalid --monitor-mode %q", o.MonitorMode)
+	}
+	series, err := st.Series().Create(ctx, model.Series{
+		Title: o.AddSeries, SortTitle: parser.SortTitle(o.AddSeries),
+		MonitorMode: mode, Status: model.SeriesFollowing,
+		ProfileID: profile.ID, RootFolder: cfg.Library.TVRoot,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "added series:%d %q monitor=%s profile=%q\n",
+		series.ID, series.Title, series.MonitorMode, profile.Name)
+	return nil
+}
+
+func addEpisode(ctx context.Context, st *store.Store, o domainCLIOptions) error {
+	seriesID, season, number, err := parseEpisodeSpec(o.AddEpisode)
+	if err != nil {
+		return err
+	}
+	var air *time.Time
+	if o.AirDate != "" {
+		v, err := time.Parse("2006-01-02", o.AirDate)
+		if err != nil {
+			return fmt.Errorf("parse --air-date: %w", err)
+		}
+		air = &v
+	}
+	ep, err := st.Episodes().Create(ctx, model.Episode{
+		SeriesID: seriesID, Season: season, Number: number,
+		Title: o.EpisodeTitle, AirDate: air, State: model.StateWanted,
+	}, "episode added from CLI")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "added episode:%d series:%d S%02dE%02d state=%s\n",
+		ep.ID, ep.SeriesID, ep.Season, ep.Number, ep.State)
+	return nil
+}
+
+func transitionItem(ctx context.Context, st *store.Store, o domainCLIOptions) error {
+	subject, id, state, err := parseTransitionSpec(o.Transition)
+	if err != nil {
+		return err
+	}
+	v, err := st.Transitions().Transition(ctx, subject, id, state, o.Reason, "manual CLI transition")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "%s:%d %s -> %s (%s)\n", subject, id, v.From, v.To, v.Reason)
 	return nil
 }
 
@@ -179,7 +189,7 @@ func parseSubjectSpec(raw string) (model.SubjectType, int64, error) {
 }
 
 func printItems(ctx context.Context, st *store.Store) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := newTable()
 	fmt.Fprintln(w, "TYPE\tID\tSTATE/MONITOR\tTITLE")
 	movies, err := st.Movies().List(ctx)
 	if err != nil {
@@ -211,7 +221,7 @@ func printHistory(ctx context.Context, st *store.Store, subject model.SubjectTyp
 	if err != nil {
 		return err
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := newTable()
 	fmt.Fprintln(w, "AT\tFROM\tTO\tREASON")
 	for _, v := range values {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", v.At.Format(time.RFC3339), v.From, v.To, v.Reason)

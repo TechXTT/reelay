@@ -7,47 +7,15 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/clock"
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/indexer"
-	"github.com/TechXTT/reelay/internal/indexer/torznab"
-	"github.com/TechXTT/reelay/internal/indexer/tpb"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/parser"
 	"github.com/TechXTT/reelay/internal/scoring"
 )
-
-// buildIndexers constructs one client per enabled indexer.
-//
-// This is the only place concrete indexer types are named; everything
-// downstream sees indexer.Indexer.
-func buildIndexers(cfg *config.Config, log *slog.Logger, clk clock.Clock) ([]indexer.Indexer, error) {
-	var out []indexer.Indexer
-	for _, ix := range cfg.EnabledIndexers() {
-		switch ix.Type {
-		case "piratebay":
-			c, err := tpb.New(ix, tpb.Options{Clock: clk, Logger: log})
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, c)
-		case "torznab":
-			c, err := torznab.New(ix, torznab.Options{Clock: clk})
-			if err != nil {
-				return nil, fmt.Errorf("indexer %q: %w", ix.Name, err)
-			}
-			out = append(out, c)
-		default:
-			// Config validation already rejects unknown types; reaching here
-			// means the two lists drifted apart.
-			return nil, fmt.Errorf("indexer %q has unsupported type %q", ix.Name, ix.Type)
-		}
-	}
-	return out, nil
-}
 
 // runSearch implements --search: a one-shot live query across every healthy
 // indexer, parsed and printed. Nothing is persisted and nothing is grabbed.
@@ -70,39 +38,7 @@ func runSearch(ctx context.Context, cfg *config.Config, log *slog.Logger, term s
 		// returns music, games and porn alongside video.
 		q.Categories = indexer.VideoCategories()
 	}
-
-	var collected []indexer.Release
-	var problems []string
-
-	for _, ix := range indexers {
-		start := time.Now()
-		releases, err := ix.Search(ctx, q)
-		elapsed := time.Since(start).Round(time.Millisecond)
-
-		switch {
-		case errors.Is(err, indexer.ErrNoResults):
-			// Worth spelling out, because this is the response that also means
-			// "you are being rate limited" and it is the single most likely
-			// reason a search comes back empty when it should not.
-			problems = append(problems, fmt.Sprintf(
-				"%s: returned its no-results marker after %s.\n"+
-					"    This means EITHER nothing matched OR the indexer is throttling you —\n"+
-					"    the API uses the same response for both. If you have run several\n"+
-					"    searches in the last minute, wait and try again before believing it.",
-				ix.Name(), elapsed))
-			continue
-		case errors.Is(err, indexer.ErrUnhealthy):
-			problems = append(problems, fmt.Sprintf("%s: skipped, circuit breaker is open (%v)", ix.Name(), err))
-			continue
-		case err != nil:
-			problems = append(problems, fmt.Sprintf("%s: %v", ix.Name(), err))
-			continue
-		}
-
-		fmt.Fprintf(os.Stdout, "%s: %d releases in %s\n", ix.Name(), len(releases), elapsed)
-		collected = append(collected, releases...)
-	}
-
+	collected, problems := searchAll(ctx, indexers, q)
 	for _, p := range problems {
 		fmt.Fprintf(os.Stdout, "%s\n", p)
 	}
@@ -138,6 +74,40 @@ func runSearch(ctx context.Context, cfg *config.Config, log *slog.Logger, term s
 	printRejected(res)
 	printParseSummary(collected)
 	return nil
+}
+
+// searchAll queries every indexer, printing a line per success. Failures are
+// returned rather than printed so they land after the successes.
+func searchAll(ctx context.Context, indexers []indexer.Indexer, q indexer.Query) ([]indexer.Release, []string) {
+	var collected []indexer.Release
+	var problems []string
+
+	for _, ix := range indexers {
+		start := time.Now()
+		releases, err := ix.Search(ctx, q)
+		elapsed := time.Since(start).Round(time.Millisecond)
+
+		switch {
+		case errors.Is(err, indexer.ErrNoResults):
+			// Worth spelling out, because this is the response that also means
+			// "you are being rate limited" and it is the single most likely
+			// reason a search comes back empty when it should not.
+			problems = append(problems, fmt.Sprintf(
+				"%s: returned its no-results marker after %s.\n"+
+					"    This means EITHER nothing matched OR the indexer is throttling you —\n"+
+					"    the API uses the same response for both. If you have run several\n"+
+					"    searches in the last minute, wait and try again before believing it.",
+				ix.Name(), elapsed))
+		case errors.Is(err, indexer.ErrUnhealthy):
+			problems = append(problems, fmt.Sprintf("%s: skipped, circuit breaker is open (%v)", ix.Name(), err))
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: %v", ix.Name(), err))
+		default:
+			fmt.Fprintf(os.Stdout, "%s: %d releases in %s\n", ix.Name(), len(releases), elapsed)
+			collected = append(collected, releases...)
+		}
+	}
+	return collected, problems
 }
 
 // wantFromTerm derives the matching target from the search term by parsing the
@@ -193,7 +163,7 @@ func printAccepted(res scoring.Result) {
 	}
 
 	fmt.Fprintf(os.Stdout, "\n=== %d acceptable, best first ===\n", len(res.Accepted))
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := newTable()
 	fmt.Fprintln(w, "SCORE\tSEED\tSIZE\tTITLE\tSEASON/EP\tRES\tSOURCE\tCODEC\tGROUP\tAGE")
 	fmt.Fprintln(w, "-----\t----\t----\t-----\t---------\t---\t------\t-----\t-----\t---")
 	for i, c := range res.Accepted {
@@ -243,7 +213,7 @@ func printRejected(res scoring.Result) {
 	// One worked example per category is enough to diagnose a filter; the
 	// counts carry the rest.
 	shown := map[string]int{}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := newTable()
 	fmt.Fprintln(w, "REASON\tCOUNT\tEXAMPLE\tWHY")
 	fmt.Fprintln(w, "------\t-----\t-------\t---")
 	for _, c := range res.Rejected {
@@ -318,37 +288,5 @@ func numbering(p parser.Parsed) string {
 		return fmt.Sprintf("(%d)", p.Year)
 	default:
 		return "-"
-	}
-}
-
-func truncate(s string, n int) string {
-	if s == "" {
-		return "-"
-	}
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
-func age(t time.Time) string {
-	if t.IsZero() {
-		return "-"
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }

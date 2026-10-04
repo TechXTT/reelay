@@ -15,11 +15,10 @@ import (
 )
 
 func (e *Engine) NotificationsOnce(ctx context.Context) error {
-	var client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-
 	if e.cfg.Availability.WebhookURL == "" {
 		return nil
 	}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for i := 0; i < 10; i++ {
 		notification, err := e.store.Requests().ClaimNotification(ctx)
 		if errors.Is(err, store.ErrNotFound) {
@@ -45,25 +44,27 @@ func (e *Engine) NotificationsOnce(ctx context.Context) error {
 			req.Header.Set("Tags", "popcorn")
 		}
 		req.Header.Set("X-Reelay-Event-ID", strconv.FormatInt(notification.ID, 10))
-		response, err := client.Do(req)
-		if err != nil {
-			err = errors.New("availability webhook could not be reached")
-		}
-		if err == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-			_ = response.Body.Close()
-			if response.StatusCode < 200 || response.StatusCode >= 300 {
-				err = fmt.Errorf("webhook returned HTTP %d", response.StatusCode)
-			}
-		}
 		failure := ""
-		if err != nil {
+		if err := deliverWebhook(client, req); err != nil {
 			failure = err.Error()
 		}
 		delay := min(time.Minute*time.Duration(1<<min(notification.Attempts, 10)), 24*time.Hour)
 		if err := e.store.Requests().FinishNotification(ctx, notification.ID, failure, delay); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func deliverWebhook(client *http.Client, req *http.Request) error {
+	response, err := client.Do(req)
+	if err != nil {
+		return errors.New("availability webhook could not be reached")
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	_ = response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("webhook returned HTTP %d", response.StatusCode)
 	}
 	return nil
 }

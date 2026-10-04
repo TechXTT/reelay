@@ -47,6 +47,24 @@ func writeConfig(t *testing.T, mutate func(s string) string) string {
 
 func quote(s string) string { return `"` + filepath.ToSlash(s) + `"` }
 
+func TestTorznabConfigAcceptsEndpointAndRejectsEmbeddedCredential(t *testing.T) {
+	path := writeConfig(t, func(s string) string {
+		s = strings.Replace(s, "type: piratebay", "type: torznab", 1)
+		return strings.Replace(s, `base_url: "https://apibay.org"`, "base_url: \"http://127.0.0.1:9696/1/api\"\n    api_key_env: REELAY_PROWLARR_API_KEY", 1)
+	})
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Indexers[0].Type != "torznab" || cfg.Indexers[0].APIKeyEnv != "REELAY_PROWLARR_API_KEY" {
+		t.Fatal("Torznab configuration was not loaded")
+	}
+	cfg.Indexers[0].BaseURL += "?apikey=fixture-key"
+	if _, err := cfg.Validate(); err == nil {
+		t.Fatal("credential in endpoint URL accepted")
+	}
+}
+
 // The shipped example must load cleanly. If it does not, every quickstart in
 // the README is broken.
 func TestExampleConfigIsValid(t *testing.T) {

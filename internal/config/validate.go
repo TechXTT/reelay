@@ -78,6 +78,14 @@ func (c *Config) Validate() ([]string, error) {
 	return ck.warnings, nil
 }
 
+func validateHTTPURL(ck *checker, key, rawURL string) {
+	var parsed, err = url.Parse(rawURL)
+
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+		ck.bad(key, "must be an absolute HTTP(S) URL without user credentials or a fragment")
+	}
+}
+
 func (c *Config) validateRecommendations(ck *checker) {
 	r := c.Recommendations
 	if !r.Enabled {
@@ -204,8 +212,17 @@ func (c *Config) validateIndexers(ck *checker) {
 		}
 		seen[ix.Name] = true
 
-		if ix.Type != "piratebay" {
-			ck.bad(k("type"), "%q is not a supported indexer type (have: piratebay)", ix.Type)
+		if ix.Type != "piratebay" && ix.Type != "torznab" {
+			ck.bad(k("type"), "%q is not a supported indexer type (have: piratebay, torznab)", ix.Type)
+		}
+		if ix.Type == "torznab" {
+			validateHTTPURL(ck, k("base_url"), ix.BaseURL)
+			if parsed, err := url.Parse(ix.BaseURL); err == nil && parsed.RawQuery != "" {
+				ck.bad(k("base_url"), "Torznab endpoint must not contain a query; use api_key or api_key_env")
+			}
+			if ix.APIKey != "" && ix.APIKeyEnv != "" {
+				ck.bad(k("api_key"), "choose api_key or api_key_env, not both")
+			}
 		}
 		if u, err := url.Parse(ix.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
 			ck.bad(k("base_url"), "%q is not an absolute http(s) URL", ix.BaseURL)

@@ -13,6 +13,7 @@ import (
 	"github.com/TechXTT/reelay/internal/clock"
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/indexer"
+	"github.com/TechXTT/reelay/internal/indexer/torznab"
 	"github.com/TechXTT/reelay/internal/indexer/tpb"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/parser"
@@ -31,6 +32,12 @@ func buildIndexers(cfg *config.Config, log *slog.Logger, clk clock.Clock) ([]ind
 			c, err := tpb.New(ix, tpb.Options{Clock: clk, Logger: log})
 			if err != nil {
 				return nil, err
+			}
+			out = append(out, c)
+		case "torznab":
+			c, err := torznab.New(ix, torznab.Options{Clock: clk})
+			if err != nil {
+				return nil, fmt.Errorf("indexer %q: %w", ix.Name, err)
 			}
 			out = append(out, c)
 		default:

@@ -64,9 +64,14 @@ runtime:
 # ----------------------------------------------------------------------------
 # Indexers. Each entry is polled independently and circuit-broken independently.
 # ----------------------------------------------------------------------------
+# For Prowlarr, replace this entry's type with torznab and base_url with the
+# indexer's endpoint, for example http://127.0.0.1:9696/1/api. Add
+# api_key_env: REELAY_PROWLARR_API_KEY and set that variable in Reelay's process.
+# api_key also accepts a literal key; keep credentials out of version control.
+# localhost refers to the Reelay host; use the PC's LAN address from a NAS.
 indexers:
   - name: tpb
-    type: piratebay # the only implemented type today
+    type: piratebay # piratebay or torznab
     enabled: true
 
     # Mirrors change. This is config, never a compiled-in constant.

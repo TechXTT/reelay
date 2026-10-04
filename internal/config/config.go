@@ -88,6 +88,8 @@ type Indexer struct {
 	Type               string   `yaml:"type"`
 	Enabled            bool     `yaml:"enabled"`
 	BaseURL            string   `yaml:"base_url"`
+	APIKey             string   `yaml:"api_key" json:"-"`
+	APIKeyEnv          string   `yaml:"api_key_env"`
 	UserAgent          string   `yaml:"user_agent"`
 	RateLimitPerSecond float64  `yaml:"rate_limit_per_second"`
 	RateLimitBurst     int      `yaml:"rate_limit_burst"`

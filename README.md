@@ -49,8 +49,7 @@ submits both a Continue/Stop decision and a rating. Continue automatically monit
 the full series, including future episodes. Stop ends that user's request and
 leaves other users' monitoring and shared downloads intact. The vote is required
 to expand that trial; it does not block browsing or playback of other titles.
-Trial tracking requires the plugin changes in this working tree; the published
-v0.1.5 artifacts predate this feature.
+Trial tracking requires Jellyfin plugin v0.1.6 or later.
 
 ## Why Go
 

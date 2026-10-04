@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Reelay.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -15,6 +16,9 @@ internal static class JellyfinIdentity
         var enabled = config.EnabledUserIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         return users.GetUsers().Where(user => enabled.Count == 0 || enabled.Contains(user.Id.ToString("N"))).ToList();
     }
+
+    public static IReadOnlyList<BaseItem> Scan(ILibraryManager library, params BaseItemKind[] kinds)
+        => library.GetItemList(new InternalItemsQuery { IncludeItemTypes = kinds, Recursive = true });
 
     public static int ProviderId(BaseItem item, MetadataProvider provider)
         => int.TryParse(item.GetProviderId(provider), NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;

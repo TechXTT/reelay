@@ -1,9 +1,12 @@
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.Reelay.Configuration;
+using Jellyfin.Plugin.Reelay.Models;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using JellyfinUser = Jellyfin.Database.Implementations.Entities.User;
 
 namespace Jellyfin.Plugin.Reelay.Services;
 
@@ -15,9 +18,10 @@ public sealed class ActionMonitor : BackgroundService
     private readonly ReelayClient _client;
     private readonly VirtualLibraryManager _virtual;
     private readonly ActionOutbox _outbox;
+    private readonly SyncService _sync;
     private readonly ILogger<ActionMonitor> _logger;
 
-    public ActionMonitor(ILibraryManager libraryManager, IUserManager userManager, IUserDataManager userDataManager, ReelayClient client, VirtualLibraryManager virtualLibrary, ActionOutbox outbox, ILogger<ActionMonitor> logger)
+    public ActionMonitor(ILibraryManager libraryManager, IUserManager userManager, IUserDataManager userDataManager, ReelayClient client, VirtualLibraryManager virtualLibrary, ActionOutbox outbox, SyncService sync, ILogger<ActionMonitor> logger)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -25,6 +29,7 @@ public sealed class ActionMonitor : BackgroundService
         _client = client;
         _virtual = virtualLibrary;
         _outbox = outbox;
+        _sync = sync;
         _logger = logger;
     }
 
@@ -45,45 +50,52 @@ public sealed class ActionMonitor : BackgroundService
     {
         var config = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin is not initialized");
         if (!config.Enabled) return;
-        await FlushOutboxAsync(cancellationToken).ConfigureAwait(false);
-        var virtualItems = _libraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series }, Recursive = true })
+        foreach (var action in _outbox.Snapshot()) await SendAsync(action, cancellationToken).ConfigureAwait(false);
+        var virtualItems = JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Movie, BaseItemKind.Series)
             .Where(item => _virtual.IsManagedPath(item.Path)).ToList();
         foreach (var user in JellyfinIdentity.EnabledUsers(_userManager, config))
         {
+            await _sync.SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
             var userId = user.Id.ToString("N");
-            foreach (var mediaType in new[] { "movie", "series" })
-            {
-                var recommendations = await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false);
-                var byTmdb = recommendations.ToDictionary(item => item.TmdbId);
-                var changed = false;
-                foreach (var item in virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)
-                    && (mediaType == "movie" ? item is MediaBrowser.Controller.Entities.Movies.Movie : item is MediaBrowser.Controller.Entities.TV.Series)))
-                {
-                    var tmdb = JellyfinIdentity.ProviderId(item, MetadataProvider.Tmdb);
-                    if (tmdb == 0 || !byTmdb.TryGetValue(tmdb, out var recommendation)) continue;
-                    var data = _userDataManager.GetUserData(user, item);
-                    if (data is null) continue;
-                    var rating = data.Rating is > 0 ? Math.Clamp((int)Math.Ceiling(data.Rating.Value / 2d), 1, 5) : (int?)null;
-                    var action = data.IsFavorite ? "request" : rating.HasValue ? "rate" : data.Likes == false ? "dismiss" : string.Empty;
-                    if (action == string.Empty) continue;
-                    var actionId = JellyfinIdentity.StableId($"{config.ServerId}:{userId}:{recommendation.Id}:{action}:{rating}");
-                    var pending = new PendingAction(recommendation.Id, actionId, action, rating);
-                    _outbox.Enqueue(pending);
-                    await SendAsync(pending, cancellationToken).ConfigureAwait(false);
-                    changed = true;
-                    _logger.LogInformation("Sent {Action} for {Title} on behalf of Jellyfin user {User}", action, recommendation.Title, user.Username);
-                }
-                var remaining = changed
-                    ? await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false)
-                    : recommendations;
-                _virtual.Refresh(userId, mediaType, remaining);
-            }
+            var userItems = virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)).ToList();
+            await ProcessUserAsync(config, user, userId, "movie", userItems.OfType<MediaBrowser.Controller.Entities.Movies.Movie>(), cancellationToken).ConfigureAwait(false);
+            await ProcessUserAsync(config, user, userId, "series", userItems.OfType<MediaBrowser.Controller.Entities.TV.Series>(), cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task FlushOutboxAsync(CancellationToken cancellationToken)
+    private async Task ProcessUserAsync(PluginConfiguration config, JellyfinUser user, string userId, string mediaType, IEnumerable<BaseItem> items, CancellationToken cancellationToken)
     {
-        foreach (var action in _outbox.Snapshot()) await SendAsync(action, cancellationToken).ConfigureAwait(false);
+        var recommendations = await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false);
+        var byTmdb = recommendations.ToDictionary(item => item.TmdbId);
+        var changed = false;
+        foreach (var item in items)
+        {
+            var tmdb = JellyfinIdentity.ProviderId(item, MetadataProvider.Tmdb);
+            if (tmdb == 0 || !byTmdb.TryGetValue(tmdb, out var recommendation)) continue;
+            var data = _userDataManager.GetUserData(user, item);
+            if (data is null) continue;
+            if (ChooseAction(data.IsFavorite, data.Rating, data.Likes) is not { } choice) continue;
+            var (action, rating) = choice;
+            var actionId = JellyfinIdentity.StableId($"{config.ServerId}:{userId}:{recommendation.Id}:{action}:{rating}");
+            var pending = new PendingAction(recommendation.Id, actionId, action, rating);
+            _outbox.Enqueue(pending);
+            await SendAsync(pending, cancellationToken).ConfigureAwait(false);
+            changed = true;
+            _logger.LogInformation("Sent {Action} for {Title} on behalf of Jellyfin user {User}", action, recommendation.Title, user.Username);
+        }
+        var remaining = changed
+            ? await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false)
+            : recommendations;
+        _virtual.Refresh(userId, mediaType, remaining);
+    }
+
+    private static (string Action, int? Rating)? ChooseAction(bool isFavorite, double? userRating, bool? likes)
+    {
+        var rating = userRating is > 0 ? Math.Clamp((int)Math.Ceiling(userRating.Value / 2d), 1, 5) : (int?)null;
+        if (isFavorite) return ("request", rating);
+        if (rating.HasValue) return ("rate", rating);
+        if (likes == false) return ("dismiss", null);
+        return null;
     }
 
     private async Task SendAsync(PendingAction action, CancellationToken cancellationToken)

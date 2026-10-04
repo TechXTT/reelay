@@ -72,3 +72,24 @@ public sealed record RecommendationAction(
     [property: JsonPropertyName("action_id")] string ActionId,
     [property: JsonPropertyName("action")] string Action,
     [property: JsonPropertyName("rating")] int? Rating = null);
+
+public sealed class TrialPage
+{
+    [JsonPropertyName("items")]
+    public List<SeriesTrial> Items { get; init; } = new();
+}
+
+public sealed record SeriesTrial(
+    [property: JsonPropertyName("request_id")] long RequestId,
+    [property: JsonPropertyName("tmdb_id")] int TmdbId,
+    [property: JsonPropertyName("episodes")] IReadOnlyList<TrialEpisode> Episodes);
+
+public sealed record TrialEpisode(
+    [property: JsonPropertyName("season")] int Season,
+    [property: JsonPropertyName("number")] int Number,
+    [property: JsonPropertyName("watched")] bool Watched);
+
+public sealed record TrialPlayback(
+    [property: JsonPropertyName("request_id")] long RequestId,
+    [property: JsonPropertyName("season")] int Season,
+    [property: JsonPropertyName("number")] int Number);

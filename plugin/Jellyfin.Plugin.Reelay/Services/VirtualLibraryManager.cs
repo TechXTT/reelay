@@ -15,16 +15,18 @@ public sealed class VirtualLibraryManager
         _logger = logger;
     }
 
+    private static string? VirtualRoot => Plugin.Instance?.Configuration.VirtualRoot;
+
     public string GetPath(string userId, string mediaType)
     {
-        var root = Plugin.Instance?.Configuration.VirtualRoot ?? throw new InvalidOperationException("Plugin is not initialized");
+        var root = VirtualRoot ?? throw new InvalidOperationException("Plugin is not initialized");
         return Path.Combine(root, userId, mediaType == "movie" ? "movies" : "series");
     }
 
-    public bool IsManagedPath(string? path) => IsInside(Plugin.Instance?.Configuration.VirtualRoot, path);
+    public bool IsManagedPath(string? path) => IsInside(VirtualRoot, path);
 
     public bool IsUserPath(string? path, string userId)
-        => IsInside(Path.Combine(Plugin.Instance?.Configuration.VirtualRoot ?? string.Empty, userId), path);
+        => IsInside(Path.Combine(VirtualRoot ?? string.Empty, userId), path);
 
     public void Refresh(string userId, string mediaType, IReadOnlyList<Recommendation> recommendations)
     {
@@ -39,9 +41,9 @@ public sealed class VirtualLibraryManager
             if (!File.Exists(location)) File.WriteAllText(location, "https://example.invalid/reelay-placeholder.mp4\n", Encoding.UTF8);
         }
 
-        foreach (var file in Directory.EnumerateFiles(path, "*.strm", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(path, "*.strm", SearchOption.AllDirectories).Where(file => !desired.Contains(file)))
         {
-            if (!desired.Contains(file)) File.Delete(file);
+            File.Delete(file);
         }
         foreach (var directory in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories).OrderByDescending(static value => value.Length))
         {
@@ -76,5 +78,4 @@ public sealed class VirtualLibraryManager
             && relative != ".."
             && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             && !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
-
 }

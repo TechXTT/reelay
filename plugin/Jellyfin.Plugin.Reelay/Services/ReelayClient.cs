@@ -14,10 +14,8 @@ public sealed class ReelayClient
         _http.Timeout = TimeSpan.FromSeconds(30);
     }
 
-    public async Task SyncAsync(SyncRequest request, CancellationToken cancellationToken)
-    {
-        await PostAsync("/api/v1/integrations/jellyfin/sync", request, cancellationToken).ConfigureAwait(false);
-    }
+    public Task SyncAsync(SyncRequest request, CancellationToken cancellationToken)
+        => PostAsync("/api/v1/integrations/jellyfin/sync", request, cancellationToken);
 
     public async Task SendActivitiesAsync(IReadOnlyList<Activity> events, CancellationToken cancellationToken)
     {
@@ -28,33 +26,48 @@ public sealed class ReelayClient
     public async Task<IReadOnlyList<Recommendation>> GetRecommendationsAsync(string userId, string mediaType, CancellationToken cancellationToken)
     {
         var config = RequiredConfiguration();
-        using var request = CreateRequest(HttpMethod.Get, $"/api/v1/recommendations?server_id={Uri.EscapeDataString(config.ServerId)}&user_id={Uri.EscapeDataString(userId)}&media_type={mediaType}&limit={config.RecommendationLimit}");
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        var page = await response.Content.ReadFromJsonAsync<RecommendationPage>(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var page = await GetAsync<RecommendationPage>($"/api/v1/recommendations?{UserQuery(config, userId)}&media_type={mediaType}&limit={config.RecommendationLimit}", false, cancellationToken).ConfigureAwait(false);
         return page?.Items ?? new List<Recommendation>();
     }
 
-    public async Task GenerateAsync(string userId, string mediaType, CancellationToken cancellationToken)
+    public Task GenerateAsync(string userId, string mediaType, CancellationToken cancellationToken)
+        => PostAsync("/api/v1/recommendations/generate", new { server_id = RequiredConfiguration().ServerId, user_id = userId, media_type = mediaType }, cancellationToken);
+
+    public async Task<IReadOnlyList<SeriesTrial>> GetTrialsAsync(string userId, CancellationToken cancellationToken)
     {
-        var config = RequiredConfiguration();
-        await PostAsync("/api/v1/recommendations/generate", new { server_id = config.ServerId, user_id = userId, media_type = mediaType }, cancellationToken).ConfigureAwait(false);
+        var page = await GetAsync<TrialPage>($"/api/v1/trials?{UserQuery(RequiredConfiguration(), userId)}", true, cancellationToken).ConfigureAwait(false);
+        return page?.Items ?? new List<SeriesTrial>();
     }
 
-    public async Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)
+    public async Task SendTrialPlaybackAsync(string userId, IReadOnlyList<TrialPlayback> episodes, CancellationToken cancellationToken)
     {
-        await PostAsync($"/api/v1/recommendations/{recommendationId}/actions", new RecommendationAction(actionId, action, rating), cancellationToken).ConfigureAwait(false);
+        if (episodes.Count == 0) return;
+        await PostAsync("/api/v1/integrations/jellyfin/trial-playback", new { server_id = RequiredConfiguration().ServerId, user_id = userId, episodes }, cancellationToken).ConfigureAwait(false);
     }
+
+    public Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)
+        => PostAsync($"/api/v1/recommendations/{recommendationId}/actions", new RecommendationAction(actionId, action, rating), cancellationToken);
 
     public async Task TestAsync(string url, string token, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var baseUri) || (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
             throw new ArgumentException("Reelay URL must be an absolute HTTP or HTTPS URL", nameof(url));
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(url.TrimEnd('/') + "/api/v1/health"));
-        if (!string.IsNullOrWhiteSpace(token)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
-        request.Headers.UserAgent.ParseAdd("Jellyfin.Plugin.Reelay/0.1");
+        using var request = Prepare(new HttpRequestMessage(HttpMethod.Get, new Uri(url.TrimEnd('/') + "/api/v1/health")), token);
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string UserQuery(Jellyfin.Plugin.Reelay.Configuration.PluginConfiguration config, string userId)
+        => $"server_id={Uri.EscapeDataString(config.ServerId)}&user_id={Uri.EscapeDataString(userId)}";
+
+    private async Task<T?> GetAsync<T>(string path, bool missingIsEmpty, CancellationToken cancellationToken)
+        where T : class
+    {
+        using var request = CreateRequest(HttpMethod.Get, path);
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (missingIsEmpty && response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private async Task PostAsync<T>(string path, T body, CancellationToken cancellationToken)
@@ -82,8 +95,12 @@ public sealed class ReelayClient
     private static HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
         var config = RequiredConfiguration();
-        var request = new HttpRequestMessage(method, config.ReelayUrl.TrimEnd('/') + path);
-        if (!string.IsNullOrWhiteSpace(config.AuthToken)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.AuthToken.Trim());
+        return Prepare(new HttpRequestMessage(method, config.ReelayUrl.TrimEnd('/') + path), config.AuthToken);
+    }
+
+    private static HttpRequestMessage Prepare(HttpRequestMessage request, string token)
+    {
+        if (!string.IsNullOrWhiteSpace(token)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
         request.Headers.UserAgent.ParseAdd("Jellyfin.Plugin.Reelay/0.1");
         return request;
     }

@@ -130,20 +130,24 @@ func (e *Engine) Run(ctx context.Context) error {
 		interval time.Duration
 		trigger  <-chan struct{}
 		run      func(context.Context) error
+		atStart  bool
 	}
 	loops := []loopSpec{
-		{"search", e.cfg.Schedules.SearchInterval.Duration, e.searchTrigger, e.SearchOnce},
-		{"status", e.cfg.Schedules.StatusInterval.Duration, e.statusTrigger, e.StatusOnce},
-		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce},
-		{"recent", e.cfg.Schedules.RecentInterval.Duration, e.recentTrigger, e.RecentOnce},
-		{"notifications", time.Minute, nil, e.NotificationsOnce},
+		{"search", e.cfg.Schedules.SearchInterval.Duration, e.searchTrigger, e.SearchOnce, false},
+		{"status", e.cfg.Schedules.StatusInterval.Duration, e.statusTrigger, e.StatusOnce, false},
+		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce, false},
+		{"recent", e.cfg.Schedules.RecentInterval.Duration, e.recentTrigger, e.RecentOnce, false},
+		{"notifications", time.Minute, nil, e.NotificationsOnce, false},
 	}
 	if e.cfg.Recommendations.Enabled && e.recommendations != nil {
-		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll})
+		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll, false})
 	}
 	if interval := e.cfg.Database.BackupInterval.Duration; interval > 0 {
 		// Tick at most hourly so a restart never waits a full interval for the first check.
-		loops = append(loops, loopSpec{"backup", min(time.Hour, interval), nil, e.BackupOnce})
+		loops = append(loops, loopSpec{"backup", min(time.Hour, interval), nil, e.BackupOnce, false})
+	}
+	if e.cfg.Runtime.AuditRetention.Duration > 0 {
+		loops = append(loops, loopSpec{"audit", 24 * time.Hour, nil, e.PruneAuditOnce, true})
 	}
 	var wg sync.WaitGroup
 	for _, spec := range loops {
@@ -152,12 +156,14 @@ func (e *Engine) Run(ctx context.Context) error {
 			defer wg.Done()
 			ticks, stop := e.clock.NewTicker(spec.interval)
 			defer stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticks:
-				case <-spec.trigger:
+			for first := spec.atStart; ; first = false {
+				if !first {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticks:
+					case <-spec.trigger:
+					}
 				}
 				if err := spec.run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 					e.log.Error("engine loop failed", "loop", spec.name, "error", err)

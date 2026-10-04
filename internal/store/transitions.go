@@ -255,6 +255,42 @@ func (r *TransitionRepository) History(ctx context.Context, subject model.Subjec
 	return out, rows.Err()
 }
 
+// pruneBatchSize bounds each PruneBefore delete so the single SQLite writer is
+// never held for long.
+const pruneBatchSize = 2000
+
+// PruneBefore deletes transitions older than cutoff, always keeping the most
+// recent transition of each item so it retains the reason for its current
+// state. It deletes in bounded batches and returns the total removed.
+func (r *TransitionRepository) PruneBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	var total int64
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		res, err := r.s.rw.ExecContext(ctx, `DELETE FROM state_transitions WHERE id IN (
+ SELECT t.id FROM state_transitions t
+ WHERE t.transitioned_at < ?
+ AND EXISTS (SELECT 1 FROM state_transitions n
+  WHERE n.subject_type = t.subject_type AND n.subject_id = t.subject_id
+  AND (n.transitioned_at > t.transitioned_at
+   OR (n.transitioned_at = t.transitioned_at AND n.id > t.id)))
+ ORDER BY t.transitioned_at, t.id LIMIT ?)`, FormatTime(cutoff), pruneBatchSize)
+		if err != nil {
+			return total, fmt.Errorf("prune transitions: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < pruneBatchSize {
+			return total, nil
+		}
+	}
+}
+
 func itemTable(subject model.SubjectType) string {
 	if subject == model.SubjectMovie {
 		return "movies"

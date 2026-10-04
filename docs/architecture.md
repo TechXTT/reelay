@@ -48,6 +48,8 @@ failed/import_failed/imported -> wanted only by retry or upgrade
 Every edge is validated in `model.ItemState.CanTransitionTo` and recorded in
 `state_transitions` with a reason. Loops use compare-and-update writes plus item
 leases, so duplicate manual and ticker invocations remain idempotent.
+Transitions older than `runtime.audit_retention` are pruned daily, keeping each
+item's latest transition.
 
 ## Storage and memory
 

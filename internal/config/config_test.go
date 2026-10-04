@@ -381,3 +381,18 @@ func asProblems(err error, target **Problems) bool {
 	}
 	return ok
 }
+
+func TestPreferredGroupsDifferingOnlyByCaseAreRejected(t *testing.T) {
+	path := writeConfig(t, func(s string) string {
+		return strings.Replace(s, "      NTb: 300", "      NTb: 300\n      ntb: 10", 1)
+	})
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected case-duplicate preferred_groups keys to fail validation")
+	}
+	for _, want := range []string{"preferred_groups", `"NTb"`, `"ntb"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %s, got: %v", want, err)
+		}
+	}
+}

@@ -147,6 +147,9 @@ func validateProfile(p model.QualityProfile) error {
 	if p.MinSizeMB < 0 || p.MaxSizeMB < p.MinSizeMB || p.MinSeeders < 0 {
 		return errors.New("profile size and seeder limits are invalid")
 	}
+	if dups := model.CaseDuplicateGroups(p.PreferredGroups); len(dups) > 0 {
+		return fmt.Errorf("profile preferred groups %q differ only by case", dups[0])
+	}
 	return nil
 }
 

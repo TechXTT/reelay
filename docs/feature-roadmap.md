@@ -3,7 +3,8 @@
 Proposed features to improve how the service works day to day, written on
 2026-10-04 after the codebase refactor. Each item is either confirmed missing in
 the code at that date or listed as an open gap in
-[product-plan.md](product-plan.md). None are implemented yet.
+[product-plan.md](product-plan.md). Implemented items are marked with their
+date.
 
 Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or more.
 
@@ -37,6 +38,10 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
    names that differ only by case (e.g. "NTB" and "ntb") when the config is
    validated. Today the score for that group is picked at random (found by
    differential testing during the refactor).
+   **Implemented 2026-10-04:** config validation and the profile API reject
+   case-only duplicates; stored duplicates score the higher value. Verified with
+   go build, vet, staticcheck, and `go test ./internal/... ./cmd/...` including
+   new config, store, model, and scoring tests.
 
 ## Release quality
 

@@ -52,7 +52,12 @@ func normalizeTerms(terms []string) []string {
 func lowerGroupScores(groups map[string]int) map[string]int {
 	out := make(map[string]int, len(groups))
 	for name, score := range groups {
-		out[strings.ToLower(name)] = score
+		// Stored profiles may predate case-collision validation; the higher score
+		// wins so the result does not depend on map iteration order.
+		lower := strings.ToLower(name)
+		if existing, ok := out[lower]; !ok || score > existing {
+			out[lower] = score
+		}
 	}
 	return out
 }

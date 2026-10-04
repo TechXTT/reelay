@@ -816,3 +816,12 @@ func TestProfileToModelRoundTrip(t *testing.T) {
 		t.Error("ToModel aliased the config slice instead of copying it")
 	}
 }
+
+func TestLowerGroupScoresIsOrderIndependent(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		got := lowerGroupScores(map[string]int{"NTb": 300, "ntb": -200})
+		if got["ntb"] != 300 {
+			t.Fatalf("lowerGroupScores[ntb] = %d, want 300 (higher score wins)", got["ntb"])
+		}
+	}
+}

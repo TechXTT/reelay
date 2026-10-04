@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/TechXTT/reelay/internal/model"
 )
 
 // Problems is the aggregate validation failure. We report every bad key at
@@ -447,6 +449,13 @@ func (c *Config) validateProfiles(ck *checker) {
 			if len(lang) != 2 {
 				ck.bad(index(k("language_prefs"), j), "%q is not a two-letter ISO-639-1 code", lang)
 			}
+		}
+		for _, names := range model.CaseDuplicateGroups(p.PreferredGroups) {
+			quoted := make([]string, len(names))
+			for j, name := range names {
+				quoted[j] = fmt.Sprintf("%q", name)
+			}
+			ck.bad(k("preferred_groups"), "%s differ only by case; keep one", strings.Join(quoted, ", "))
 		}
 	}
 	if defaults == 0 {

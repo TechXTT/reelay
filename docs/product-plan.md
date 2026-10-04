@@ -64,6 +64,21 @@ not an authorization boundary between household members.
    checks with corrective actions, simpler per-user Discover library setup,
    free-space visibility, and a supported SQLite backup and restore workflow.
 
+## Discover delivery: choosing what to watch
+
+1. Show TMDB audience ratings out of 10 and their vote counts, with the
+   recommendation match score and the user's personal rating labeled separately.
+   Store audience ratings in the existing recommendation features without a new
+   database migration. Older cards gain stored ratings on recommendation refresh;
+   opening a preview shows the current cached TMDB rating immediately.
+2. Add an on-demand preview for movies and series with the full description,
+   genres, runtime, cast and filmmakers, and available trailers or teasers.
+   Use the existing metadata cache and request timeout. Keep video lookups out of
+   the recommendation-generation loop and prefer official trailers.
+3. Embed YouTube previews only after the user chooses playback, provide a direct
+   YouTube link, and show explicit missing-video and retry states. Closing the
+   dialog cancels the pending lookup and stops video playback.
+
 ## Measures of success
 
 1. Request-to-availability success rate and elapsed time, with waiting for an
@@ -99,6 +114,78 @@ not an authorization boundary between household members.
    LSP tool's empty diagnostics result is not proof of successful analysis.
    Staticcheck is unavailable on this machine. Compiler, vet, and race checks
    supplied the local code verification; no tools were installed.
-4. Following deliveries: planned; implementation has not started. Notifications,
-   arbitrary season selection, request cancellation/retry, diagnostic candidate
-   selection, and older-request pagination remain outside this first delivery.
+4. Discover delivery: implemented and verified on 2026-10-04. Existing Go tests,
+   vet, and frontend typechecking and production build pass. Browser smoke checks
+   with intercepted API fixtures verify movie and series previews, ratings,
+   complete descriptions, trailer selection, click-to-load playback, missing
+   trailers, lookup retry, keyboard close and focus return, cancelled lookups,
+   invalid preview responses, and a mobile layout without horizontal overflow.
+   Live TMDB responses and live YouTube playback were not exercised. The custom
+   browser CLI could not locate Chrome on Windows; Playwright supplied the browser
+   checks. No tests, dependencies, or machine configuration were changed.
+5. Request journey and diagnostics: implemented on 2026-10-04. Migration 0007
+   adds selected seasons and a durable availability outbox. Selected seasons
+   include specials and wait for air date plus grace; shared monitoring only
+   widens. Request summaries and diagnostics respect the selected seasons.
+   Requests supports pagination, withdrawal, retry, persisted failure history,
+   accepted-candidate selection, and a playable Jellyfin link when configured.
+   Withdrawal cancels the requester's subscription and pending notifications;
+   shared downloads continue. Replaying an old request action preserves a later
+   withdrawal. A new request action can reactivate it.
+6. Recommendation controls and maintenance: implemented on 2026-10-04. Per-user
+   language and genre filters, familiarity and diversity controls, dismissal
+   undo, editable personal ratings, and sync/generation freshness are available.
+   Unconfigured preferences preserve the scorer defaults. Setup checks show
+   connection/path failures with corrective actions and free space; indexer
+   health checks describe circuit-breaker status without making search traffic.
+   The Jellyfin plugin offers per-user setup steps and copyable library paths.
+   SQLite backups use a consistent snapshot; restore validates integrity and
+   migration checksums and refuses to overwrite an existing destination.
+7. Source coverage: Torznab is implemented and registered after a successful
+   live check against the operator's Windows Prowlarr endpoint on 2026-10-04.
+   Capabilities, a recent listing with 100 usable magnet video results, and a
+   named search passed. The adapter bounds results and XML size, rate-limits
+   calls, enforces timeouts, and uses the existing circuit breaker and scoring.
+   Torrent-file-only results without a usable infohash remain unsupported.
+   Credentials can be read from a named process environment variable; no live
+   credentials are stored in tracked files. No downloads were added by the check.
+8. Current verification: Go tests and vet, frontend typecheck/production build,
+   and Linux ARMv7 cross-compilation pass. Focused tests cover season air/grace
+   behavior, scope validation, replay after withdrawal, outbox deduplication and
+   webhook retries, preference filtering after metadata enrichment, backup and
+   restore, and malformed Torznab responses. Browser fixtures verify preferences,
+   rating edits and undo, season input validation, attention filtering,
+   pagination, candidate selection, withdrawal, setup free-space display,
+   backup downloads, and mobile Requests without horizontal overflow.
+   Race verification could not compile: installed GCC reports
+   `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`.
+   The initial direct plugin-test command selected a default .NET SDK that did
+   not satisfy global.json. A later check found the matching SDK through the
+   make.ps1 local fallback; both no-restore target checks failed with
+   `NETSDK1005` because the cached assets lacked the required target frameworks.
+   Normal restore through the repository launcher subsequently passed both
+   plugin test targets (six tests each). No toolchains were installed or changed.
+9. Local activation: completed with the user's authorization on 2026-10-04.
+   The previous database/configuration/executable were backed up with Reelay
+   stopped, then the current UI and executable were built and schema 7 activated.
+   Prowlarr uses its existing local credential through a process environment
+   variable; the ignored local launcher supplies it on subsequent starts.
+   The rebuilt Jellyfin plugin loaded and synchronized 19 real library items for
+   two users. qBittorrent health, NAS paths/free space, and a live TMDB preview
+   passed. An isolated restore passed integrity/schema checks with matching row
+   counts. ntfy support now sends readable messages through the same durable
+   outbox, with focused HTTP-format and retry tests. A random ntfy topic is
+   configured locally; its cache confirmed a real outbox event and a connection
+   confirmation. New media downloads/imports, phone receipt, and actual
+   YouTube playback remain to be verified.
+
+## Operating the following deliveries
+
+Follow the [activation checklist](setup-checklist.md). It is the operator guide
+for Windows builds, Prowlarr credentials, TMDB and Jellyfin Discover setup,
+availability links/webhooks, end-to-end verification, and backup/restore.
+
+The local service and plugin are now running the updated working-tree builds.
+For another installation, preserve the old database with Reelay stopped before opening it with the new
+binary: startup, `--check`, and `--backup` apply pending migrations. Separate
+household authentication, permissions, and quotas remain conditional future work.

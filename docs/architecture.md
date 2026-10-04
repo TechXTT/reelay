@@ -47,9 +47,9 @@ leases, so duplicate manual and ticker invocations remain idempotent.
 ## Storage and memory
 
 SQLite runs in WAL mode with one writer connection, a small configurable page
-cache, and two bounded read connections by default. Indexer JSON is decoded as
-a stream, search concurrency is bounded, due queries are limited, and SSE has a
-hard client cap. These choices are required for the 256 MB Synology target.
+cache, and two bounded read connections by default. Indexer JSON and Torznab XML
+are decoded as streams, search concurrency is bounded, due queries are limited,
+and SSE has a hard client cap. These choices are required for the 256 MB Synology target.
 
 ## Filesystem boundary
 
@@ -86,11 +86,65 @@ falls back to a verified copy.
    The operator's Requests view combines persisted subject state and episode
    counts with availability confirmed by that Jellyfin server's library sync.
    Imported media and confirmed Jellyfin presence remain separate signals.
-9. Dashboard requests can choose latest-season, all, or future-only monitoring.
+9. Dashboard requests can choose latest-season, all, future-only monitoring, or
+   explicit seasons including specials. Selected seasons are stored separately
+   and unioned into shared series monitoring after air date plus grace.
    Latest-season monitoring selects the most recently aired numbered season;
    older plugin clients keep their future-only default. Shared monitoring may
    widen when a new requester asks for more episodes, and does not narrow.
+10. Preview details and videos are fetched from TMDB on demand and cached
+    separately from recommendation-generation metadata. Stored audience ratings,
+    personal ratings, and match scores remain distinct. Only validated YouTube
+    video IDs are exposed, and the browser loads playback after user interaction.
+11. Per-user language and genre filters apply before and after enrichment.
+    Familiarity and diversity choices adjust that user's ranking weights;
+    unconfigured preferences retain the defaults. Dismissal undo removes the
+    dismissal exclusion; rated titles remain excluded and their ratings are editable.
+
+## Request recovery and availability
+
+1. Request attribution remains independent of the shared media subject and
+   recommendation card. Requests uses bounded pagination, and selected-season
+   summaries avoid counting another user's unrelated episodes or failures.
+2. Withdrawal cancels the requester's subscription and removes undelivered
+   availability events. It does not stop shared downloads. Replaying an old
+   request action preserves withdrawal; a new request action can reactivate it.
+3. Diagnostics reads persisted transitions and candidate evaluations. It exposes
+   recent search timing, retry timing, attempts, and import errors. Release
+   selection validates subject identity and permits accepted candidates from
+   the most recent search; active-transfer safeguards remain in the engine.
+4. A completed Jellyfin sync inserts an availability event once per active
+   request into the SQLite outbox. The notification loop leases due events,
+   POSTs JSON to the configured receiver, and retries failures with backoff.
+   A stable event ID supports receiver deduplication under at-least-once delivery.
+5. Playable links use the synchronized item ID and a configured Jellyfin base
+   URL keyed by the plugin's server ID. Series title presence and episode import
+   counts are shown separately. Availability is not inferred from import success.
+
+## Source and maintenance boundaries
+
+1. Torznab supports generic search and recent listings for magnet-capable movie
+   and TV results. XML size and result count are bounded, requests are rate-limited
+   and timed out, and failures update the existing circuit breaker. Results flow
+   through the existing parser and scorer; no download client was added.
+2. Setup checks examine the database, downloader connectivity, library/path
+   presence, and free space. Indexer health remains a local circuit-breaker check,
+   so dashboard polling cannot create indexer traffic.
+3. Backups use SQLite `VACUUM INTO` for a consistent snapshot. Restore opens the
+   source read-only, validates integrity and known migration checksums, and
+   creates a new destination without overwriting existing data. Configuration
+   and media files are outside the database snapshot.
+4. The dashboard retains operator access through the existing bearer token.
+   Selecting a Jellyfin user filters data; it does not create separate household
+   authentication or quota enforcement.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
 10.11.11 (`net9.0`) and Jellyfin 12 preview (`net10.0`). ABI-specific package
 versions are selected at build time; behavioral code is shared.
+
+Availability delivery supports the default JSON event contract and direct ntfy
+text messages through `availability.webhook_format`. Both use the same outbox,
+stable event ID, bounded HTTP call, and retry schedule.
+
+Use the [activation checklist](setup-checklist.md) for configuration, shutdown
+backups before migration, plugin setup, and live verification.

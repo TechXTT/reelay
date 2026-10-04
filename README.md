@@ -9,31 +9,41 @@ Jellyfin or Plex can read.
 Same functional category as Sonarr, Radarr and Prowlarr — one binary, no
 runtime, no database server.
 
-**Status: complete initial release.** The parser, TPB indexer, scoring pipeline,
-qBittorrent client, metadata refresh, audited engine, importer, REST/SSE API,
-and embedded web UI are wired end to end.
+**Status: implemented locally; activation and live verification remain.**
+Discover previews, request tracking and recovery, Torznab support, recommendation
+controls, and backup/restore are implemented. Follow the
+[activation checklist](docs/setup-checklist.md) to configure and run this build.
 
 ## Features
 
-- Movie queue and series monitoring backed by TMDB and TVmaze metadata.
-- Explainable scoring with persisted rejection reasons, manual overrides,
+1. Movie queue and series monitoring backed by TMDB and TVmaze metadata.
+2. Explainable scoring with persisted rejection reasons, manual overrides,
   retry backoff, and failed-release blacklisting.
-- qBittorrent category isolation, live progress, and stall recovery.
-- Hardlink-first imports, verified copy fallback, configurable naming,
+3. qBittorrent category isolation, live progress, and stall recovery.
+4. Hardlink-first imports, verified copy fallback, configurable naming,
   season-pack discovery, subtitle carry-over, and recycle-on-upgrade.
-- Versioned REST API, bearer auth, health checks, SSE, and a responsive UI.
-- Explainable per-user recommendations and an optional Jellyfin plugin that
+5. Versioned REST API, bearer auth, health checks, SSE, and a responsive UI.
+6. Explainable per-user recommendations and an optional Jellyfin plugin that
   exposes missing titles as Discover libraries and routes requests to Reelay.
+7. Discover previews with descriptions, TMDB audience ratings, cast, runtime,
+   and click-to-play YouTube trailers or teasers.
+8. Specific-season requests, withdrawal and retry, paginated Requests,
+   persisted diagnostics, and accepted-release selection.
+9. Per-user language and genre preferences, familiarity/diversity controls,
+   dismissal undo, editable personal ratings, and sync freshness.
+10. Pirate Bay and magnet-capable Torznab sources, including Prowlarr.
+11. Availability webhooks, playable Jellyfin links, setup/path checks, free-space
+    visibility, and consistent SQLite backups with validated restore.
 
 ## Why Go
 
-- One static binary. `GOOS=linux GOARCH=arm GOARM=7 go build` produces
+1. One static binary. `GOOS=linux GOARCH=arm GOARM=7 go build` produces
   something you `scp` onto a NAS with no venv, no `node_modules`, no runtime.
-- The SQLite driver is pure Go (`modernc.org/sqlite`), so cross-compiling to
+2. The SQLite driver is pure Go (`modernc.org/sqlite`), so cross-compiling to
   32-bit ARM stays a one-liner. Do not swap it for `mattn/go-sqlite3`; cgo
   breaks exactly that.
-- ~20–40 MB resident for a daemon that has to share 256 MB with DSM.
-- A branchy state machine gets compile-time exhaustiveness instead of a runtime
+3. ~20–40 MB resident for a daemon that has to share 256 MB with DSM.
+4. A branchy state machine gets compile-time exhaustiveness instead of a runtime
   surprise where an item silently stalls in a state nobody handles.
 
 ## Quickstart
@@ -50,6 +60,7 @@ recipes through the WSL `sh` on PATH, which does not share the Windows
 filesystem view):
 
 ```powershell
+.\make.ps1 web
 .\make.ps1 build
 .\make.ps1 check
 .\make.ps1 run
@@ -63,6 +74,11 @@ curl -s -H "Authorization: Bearer $REELAY_SERVER_AUTH_TOKEN" localhost:7878/api/
 ```
 
 Open `http://127.0.0.1:7878/` for the embedded UI.
+
+For an existing installation, preserve the database before running this build:
+`--check` applies migrations, and `--backup` also migrates before taking its
+snapshot. Follow the [upgrade and setup checklist](docs/setup-checklist.md)
+for the shutdown backup, Prowlarr credentials, and Jellyfin setup.
 
 ### Docker quickstart
 
@@ -89,27 +105,30 @@ the desktop topology and newer NAS hosts.
 | `--search`  | Run a one-shot parsed and scored indexer search    |
 | `--grab`    | Hand one magnet to qBittorrent and follow status   |
 | `--list-items` | List persisted movies, series, and episodes  |
+| `--backup` | Write a consistent database snapshot to a new file, then exit |
+| `--restore` | Validate a backup and restore to an absent configured database path |
 
 ## Configuration
 
 `config.example.yaml` is fully commented and is the reference. Two rules worth
 knowing before you edit it:
 
-- **Every scalar key is overridable by environment variable**, uppercased with
+1. **Scalar keys outside object lists are overridable by environment variable**,
+   uppercased with
   dots replaced by underscores: `server.auth_token` →
   `REELAY_SERVER_AUTH_TOKEN`. String lists take a comma-separated value. Lists
   of objects (indexers, profiles, path mappings) are file-only.
-- **Validation is exhaustive and fatal.** Unknown keys are rejected, so a typo
+2. **Validation is exhaustive and fatal.** Unknown keys are rejected, so a typo
   cannot silently do nothing, and every problem in the file is reported at once
   with the offending key named.
 
 Two settings are security-relevant:
 
-- `server.auth_token` is required whenever `server.bind` is not a loopback
+1. `server.auth_token` is required whenever `server.bind` is not a loopback
   address. Reelay refuses to start otherwise, because this process holds your
   download client's credentials. On loopback an empty token is allowed and
   warns loudly.
-- `downloader.category_tv` / `category_movies` are the safety boundary. Reelay
+2. `downloader.category_tv` / `category_movies` are the safety boundary. Reelay
   only ever acts on torrents carrying one of its own categories, so the other
   torrents in your client are invisible to it. Neither may be empty.
 
@@ -118,6 +137,14 @@ for a series at a time. A selected season or multi-episode pack appears once in
 the queue, reserves all wanted episodes it contains, and imports only those
 reserved episodes. Multi-season packs receive an over-fetch penalty so a
 bounded season pack wins when both can satisfy the current season.
+
+For Prowlarr, set the indexer's `type: torznab`, use its endpoint as `base_url`
+(for example `http://127.0.0.1:9696/1/api`), and set
+`api_key_env: REELAY_PROWLARR_API_KEY`. Supply that variable to the Reelay
+process. The Prowlarr key and TMDB key are separate credentials. Torznab accepts
+video results with a usable magnet or infohash; torrent-file-only results are
+skipped. See the [configuration checklist](docs/setup-checklist.md#configure-prowlarr)
+for the full entry and remote-host addressing.
 
 ## Storage
 
@@ -135,6 +162,13 @@ refused rather than operated on.
 **Keep `database.path` on local disk.** SQLite WAL relies on shared-memory
 locking that SMB and NFS do not provide. Reelay warns if the path looks
 networked.
+
+Settings provides **Download database backup**. The CLI also supports
+`reelay --config config.yaml --backup backups/reelay.db`; the destination must
+not exist. Restore requires stopping Reelay and using a new database destination.
+It validates SQLite integrity and migration checksums and refuses to overwrite
+an existing file. See [backup and restore](docs/setup-checklist.md#backup-and-restore).
+Keep configuration and media backups separately; the snapshot contains SQLite state.
 
 ## Hardlinking, and why it is probed at startup
 
@@ -211,10 +245,10 @@ Point one library at each root, with the matching content type:
 
 Two things to check:
 
-- If Jellyfin runs as a Windows service under `LocalSystem`, it cannot reach UNC
+1. If Jellyfin runs as a Windows service under `LocalSystem`, it cannot reach UNC
   paths at all. Run it as your own user account, or give the share guest read
   access.
-- Leave "Real time monitoring" on so new imports appear without waiting for the
+2. Leave "Real time monitoring" on so new imports appear without waiting for the
   scheduled scan. If you would rather trigger it explicitly, set
   `library.post_import_webhook` to Jellyfin's
   `/Library/Refresh?api_key=...` and Reelay will POST to it after each import.
@@ -230,9 +264,9 @@ Recommendations require `metadata.tmdb_api_key` and
 your server, configure its Reelay URL and bearer token, test the connection,
 then enable recommendation sync on the plugin page:
 
-- Jellyfin 10.11 stable catalog:
+1. Jellyfin 10.11 catalog:
   `https://github.bozhilov.me/reelay/manifest.json`
-- Jellyfin 12 preview catalog:
+2. Jellyfin 12 preview catalog:
   `https://github.bozhilov.me/reelay/manifest-preview.json`
 
 The plugin configuration page shows two paths for every enabled Jellyfin user.
@@ -247,18 +281,34 @@ dislikes are checked every minute and written to a durable retry outbox before
 being sent. Movie requests enter the wanted queue immediately. Series requests
 from the plugin use `future_only` monitoring by default; change the series to
 `all` in Reelay if you want its aired back catalogue. In Reelay's Discover view,
-choose Latest season, All episodes, or Future episodes before requesting a
-series. Existing broader monitoring is preserved when a narrower scope is
-requested for the same shared series.
+choose Latest season, All episodes, Future episodes, or Specific seasons before
+requesting a series. Season 0 selects specials. Episodes wait for their air date
+plus the configured grace period. Existing broader monitoring is preserved when
+a narrower scope is requested for the same shared series.
 
-The Requests view shows the 100 most recent recommendation requests for the
-selected synchronized Jellyfin user, even after the recommendation leaves
-Discover. It shows download
-and import status, errors, retry timing, and series episode counts. Imported
+The Requests view pages through requests in batches of 100 for the selected
+synchronized Jellyfin user, even after the recommendation leaves Discover. It
+shows download and import status, errors, retry timing, and series episode counts. Imported
 media and availability confirmed by Jellyfin library sync are separate signals;
 a series present in Jellyfin does not mean all its episodes are available.
 The user selector is an operator filter under Reelay's shared bearer token,
 not a separate login or permission boundary.
+
+Use **Attention needed** to filter persisted failures and **Diagnostics** to
+inspect recent search history, retry timing, import errors, and candidate rejection
+reasons. **Select release** is available for accepted candidates from the last
+search. **Withdraw request** ends that user's subscription and pending notifications;
+shared downloads continue. **Retry** schedules eligible failed or waiting subjects.
+
+Set `availability.jellyfin_servers` to map the synchronized plugin server ID to
+your Jellyfin base URL for **Open in Jellyfin** links. An optional
+`availability.webhook_url` receives availability events after a completed library
+sync. Delivery retries with a stable `X-Reelay-Event-ID`; receivers must deduplicate
+that ID. See [availability setup](docs/setup-checklist.md#configure-availability).
+For phone/browser notifications through ntfy, set `availability.webhook_format:
+ntfy` and use your topic URL as `webhook_url`. Reelay sends a readable title
+availability message directly, retaining the outbox retries. The default format
+is JSON for other receivers.
 
 Use the 1-5 selector on Reelay's Discover view to rate a suggestion without
 requesting it. The suggestion is removed, high ratings become recommendation
@@ -266,7 +316,18 @@ seeds, and low ratings subtract from matching genres, keywords, and people.
 The plugin also synchronizes Jellyfin's native per-user rating field when the
 active Jellyfin client exposes a personal-rating control.
 
-Jellyfin `10.11.11` is the stable target. The Jellyfin 12 artifact tracks the
+**Preferences** controls original languages, excluded genres, familiarity, and
+the diversity bonus. Save, then **Refresh** Discover to apply them. Empty filters,
+Balanced familiarity, and a 100% diversity bonus preserve the scorer defaults.
+**Rating & dismissal history** lets you change personal ratings or undo an unrated
+dismissal. Rated titles remain excluded from suggestions.
+
+**Preview** shows the full description and available trailer choices. The TMDB
+audience rating is out of 10; your personal rating is out of 5; the match score
+measures recommendation fit. YouTube loads only when you choose playback.
+
+The Jellyfin targets are pinned in `plugin/Directory.Build.props`. The Jellyfin
+12 artifact tracks the
 exact prerelease ABI and should be used only with the matching preview server
 until Jellyfin 12 is stable.
 
@@ -302,12 +363,15 @@ Jellyfin must load the plugin assembly inside its own process.
 
 See [`docs/architecture.md`](docs/architecture.md) for the state machine and
 search-to-import flow, and [`docs/product-plan.md`](docs/product-plan.md) for the
-product improvement plan and delivery status.
+product improvement plan and delivery status. The
+[setup checklist](docs/setup-checklist.md) covers activation, live verification,
+and backup/restore.
 
 ## Legal
 
 Reelay is a generic automation tool for indexers and download clients. It ships
-with no content, no indexer credentials and no preconfigured sources, and it
+with no content or indexer credentials. The example configuration includes a
+public indexer endpoint; you choose and configure the sources. Reelay
 neither hosts nor distributes anything. It speaks to whatever services you point
 it at. Ensuring you have the right to download and store what you queue is the
 operator's responsibility, and copyright law varies by jurisdiction.

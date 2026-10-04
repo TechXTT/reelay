@@ -20,3 +20,6 @@ config.yaml
 coverage
 coverage.out
 *.cover
+
+# Local agent handoff; may describe the operator's deployment.
+/.context.local.md

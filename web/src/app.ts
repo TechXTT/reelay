@@ -4,6 +4,36 @@ import { api, APIError, authToken, connectEvents, esc, setAuthToken } from "./ap
 type View = "dashboard" | "discover" | "requests" | "series" | "movies" | "add" | "settings";
 type Item = Record<string, any>;
 type RequestMonitorMode = "latest_season" | "all" | "future_only";
+type RecommendationRecord = {
+  id: number;
+  title: string;
+  year?: number;
+  overview?: string;
+  poster_url?: string;
+  score: number;
+  vote_average: number;
+  vote_count: number;
+  genres?: string[];
+  runtime_minutes?: number;
+  reasons: string[];
+  tmdb_id: number;
+  generated_at: string;
+  expires_at: string;
+};
+type PreviewRecord = {
+  title: string;
+  year: number;
+  media_type: "movie" | "series";
+  overview: string;
+  poster_url: string;
+  genres: string[];
+  people: string[];
+  runtime_minutes: number;
+  vote_average: number;
+  vote_count: number;
+  videos: { name: string; key: string; type: string; official: boolean }[];
+  seasons: number[];
+};
 type RequestRecord = {
   id: number;
   title: string;
@@ -18,6 +48,9 @@ type RequestRecord = {
   available: boolean;
   imported_episodes: number;
   total_episodes: number;
+  cancelled_at: string | null;
+  seasons: number[];
+  jellyfin_url: string;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -32,6 +65,8 @@ const discoverUserKey = "reelay.discover-user";
 const discoverTypeKey = "reelay.discover-type";
 let discoverUser = localStorage.getItem(discoverUserKey) ?? "";
 let discoverType = localStorage.getItem(discoverTypeKey) === "series" ? "series" : "movie";
+let requestsOffset = 0;
+let attentionOnly = false;
 
 type DialogCheck = { id: string; label: string; detail: string; checked?: boolean; required?: boolean };
 
@@ -196,21 +231,26 @@ async function discoverView(selectedUser = discoverUser, mediaType = discoverTyp
   localStorage.setItem(discoverUserKey, key);
   localStorage.setItem(discoverTypeKey, mediaType);
   const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&media_type=${mediaType}`;
-  const values = (await api<Item>(`/api/v1/recommendations?${query}`)).items ?? [];
+  const values = (await api<{ items: RecommendationRecord[] }>(`/api/v1/recommendations?${query}`)).items;
   if (current !== "discover" || discoverUser !== key || discoverType !== mediaType) return;
   const node = content(`<div class="page-head"><div><h1>Discover</h1><p>Recommendations for ${esc(user.display_name)}</p></div>
-    <button class="command" id="generate-recommendations">Refresh</button></div>
+    <div class="row-actions"><button class="command" id="discover-preferences">Preferences</button><button class="command" id="discover-history">Rating &amp; dismissal history</button><button class="command" id="generate-recommendations">Refresh</button></div></div>
     <div class="discover-toolbar"><label>User<select id="discover-user">${users.map((value: Item) => option(`${value.server_id}:${value.user_id}`, value.display_name, key)).join("")}</select></label>
     <div class="segmented"><label><input type="radio" name="discover-type" value="movie" ${mediaType === "movie" ? "checked" : ""}><span>Movies</span></label>
     <label><input type="radio" name="discover-type" value="series" ${mediaType === "series" ? "checked" : ""}><span>Series</span></label></div></div>
-    <div class="recommendation-grid">${values.length ? values.map((item: Item) => `<article class="recommendation-card">
-      ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
-      <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}</small></div><strong>${Number(item.score).toFixed(0)}</strong></div>
-      <p>${esc(item.overview || "")}</p><ul>${(item.reasons ?? []).map((reason: string) => `<li>${esc(reason)}</li>`).join("")}</ul>
+    <p class="discover-freshness">Jellyfin sync: ${user.last_synced_at ? esc(date(user.last_synced_at)) : "Not yet synchronized"}${values[0]?.generated_at ? ` · Recommendations generated ${esc(date(values[0].generated_at))}` : ""}${values[0]?.expires_at ? ` · Expires ${esc(date(values[0].expires_at))}` : ""}</p>
+    <div class="recommendation-grid">${values.length ? values.map(item => `<article class="recommendation-card">
+      ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="" loading="lazy">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
+      <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}${item.runtime_minutes ? ` · ${item.runtime_minutes} min${mediaType === "series" ? " / episode" : ""}` : ""}</small></div><div class="match-score"><strong>${Number(item.score).toFixed(0)}</strong><small>Match score</small></div></div>
+      <div class="audience-rating" data-audience-rating>${audienceRating(item.vote_average, item.vote_count)}</div>
+      ${item.genres?.length ? `<small class="recommendation-genres">${esc(item.genres.join(" · "))}</small>` : ""}
+      <p>${esc(item.overview || "No description available.")}</p><ol>${(item.reasons ?? []).map(reason => `<li>${esc(reason)}</li>`).join("")}</ol>
+      <button class="command compact rec-preview" data-id="${item.id}" aria-label="Preview ${esc(item.title)}">Preview &amp; trailers</button>
       <div class="row-actions recommendation-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button>
-      <label class="rating-field"><span>Rating</span><select class="rec-rating" aria-label="Rating for ${esc(item.title)}"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option></select></label>
+      <label class="rating-field"><span>Your rating</span><select class="rec-rating" aria-label="Your rating for ${esc(item.title)}"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option></select></label>
       <button class="command compact rec-rate" data-id="${item.id}">Rate</button>${mediaType === "series" ? `<label class="request-scope"><span>Episodes to request</span><select class="rec-monitor" aria-label="Episodes to request for ${esc(item.title)}">
-        <option value="latest_season" selected>Latest season</option><option value="all">All episodes</option><option value="future_only">Future episodes</option></select>
+        <option value="latest_season" selected>Latest season</option><option value="all">All episodes</option><option value="future_only">Future episodes</option><option value="specific">Specific seasons</option></select>
+        <label class="specific-seasons" hidden>Season numbers (comma separated; 0 = specials)<input class="rec-seasons" inputmode="numeric" placeholder="1, 2" aria-label="Specific seasons for ${esc(item.title)}"></label>
         <small class="scope-explanation">Latest season requests the most recently aired season. All episodes includes past episodes; Future episodes follows upcoming air dates.</small></label>` : ""}<button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
     </article>`).join("") : `<div class="empty">No active recommendations</div>`}</div>`);
   node.querySelector<HTMLSelectElement>("#discover-user")!.onchange = event =>
@@ -232,6 +272,136 @@ async function discoverView(selectedUser = discoverUser, mediaType = discoverTyp
   node.querySelectorAll<HTMLButtonElement>(".rec-rate").forEach(button => {
     button.onclick = () => void recommendationAction(button, "rate");
   });
+  node.querySelectorAll<HTMLButtonElement>(".rec-preview").forEach(button => {
+    button.onclick = () => {
+      const recommendation = values.find(value => value.id === Number(button.dataset.id))!;
+      void recommendationPreview(button, recommendation);
+    };
+  });
+  node.querySelectorAll<HTMLSelectElement>(".rec-monitor").forEach(select => select.onchange = () => {
+    select.closest(".request-scope")!.querySelector<HTMLElement>(".specific-seasons")!.hidden = select.value !== "specific";
+  });
+  node.querySelector<HTMLButtonElement>("#discover-preferences")!.onclick = () => void discoverPreferences(user.server_id,user.user_id).catch(showError);
+  node.querySelector<HTMLButtonElement>("#discover-history")!.onclick = () => void discoverHistory(user.server_id,user.user_id,mediaType).catch(showError);
+}
+
+async function discoverPreferences(serverID: string,userID: string) {
+  const query = new URLSearchParams({server_id:serverID,user_id:userID});
+  const preferences = await api<{languages:string[];excluded_genres:string[];familiarity:string;diversity:number}>(`/api/v1/recommendations/preferences?${query}`);
+  const dialog = document.createElement("dialog");
+  dialog.className = "preview-dialog";
+  dialog.innerHTML = `<header class="preview-header"><h2>Recommendation preferences</h2><button class="command preferences-close" autofocus>Close</button></header>
+    <form class="preferences-form"><label>Original languages (two-letter codes, comma separated)<input name="languages" value="${esc(preferences.languages.join(", "))}" placeholder="en, ja"></label>
+    <label>Excluded genres (TMDB names, comma separated)<input name="genres" value="${esc(preferences.excluded_genres.join(", "))}" placeholder="Horror, Romance"></label>
+    <label>Familiarity<select name="familiarity">${["balanced","familiar","explore"].map(value=>option(value,value,preferences.familiarity)).join("")}</select></label>
+    <label>Diversity bonus (0–100%)<input name="diversity" type="number" min="0" max="100" value="${preferences.diversity}" required></label><p>Empty language and genre fields leave those choices unrestricted. Save, then Refresh Discover to apply.</p><button class="command" type="submit">Save preferences</button></form>`;
+  document.body.append(dialog);
+  dialog.querySelector<HTMLButtonElement>(".preferences-close")!.onclick = () => dialog.close();
+  dialog.addEventListener("close",()=>dialog.remove(),{once:true});
+  dialog.querySelector<HTMLFormElement>("form")!.onsubmit = event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget as HTMLFormElement);
+    const split = (name:string) => String(form.get(name)).split(",").map(value=>value.trim()).filter(Boolean);
+    void runControl(dialog.querySelector<HTMLButtonElement>("[type=submit]")!,async()=>{
+      await api(`/api/v1/recommendations/preferences?${query}`,{method:"PUT",body:JSON.stringify({languages:split("languages"),excluded_genres:split("genres"),familiarity:form.get("familiarity"),diversity:Number(form.get("diversity"))})});
+      dialog.close(); showToast("Preferences saved; refresh Discover to apply");
+    });
+  };
+  dialog.showModal();
+}
+
+async function discoverHistory(serverID:string,userID:string,mediaType:string) {
+  const query = new URLSearchParams({server_id:serverID,user_id:userID,media_type:mediaType});
+  const history = await api<{items:RecommendationRecord[];ratings:{tmdb_id:number;rating:number}[]}>(`/api/v1/recommendations/history?${query}`);
+  const dialog = document.createElement("dialog");
+  dialog.className = "preview-dialog";
+  dialog.innerHTML = `<header class="preview-header"><h2>Rating &amp; dismissal history</h2><button class="command history-close" autofocus>Close</button></header><p>Up to 100 dismissed titles; ratings remain part of your taste profile.</p>
+    <div class="feedback-history">${history.items.map(recommendation=>{
+      const rating = history.ratings.find(value=>value.tmdb_id===recommendation.tmdb_id)?.rating;
+      return `<article><strong>${esc(recommendation.title)}</strong><div class="row-actions"><label>Your rating<select class="history-rating">${[1,2,3,4,5].map(value=>option(String(value),String(value),String(rating ?? 5))).join("")}</select></label><button class="command compact history-action" data-action="rate" data-id="${recommendation.id}">Save rating</button>${!rating ? `<button class="command compact history-action" data-action="undo" data-id="${recommendation.id}">Undo dismissal</button>`:""}</div></article>`;
+    }).join("") || "No rating or dismissal history yet."}</div>`;
+  document.body.append(dialog);
+  dialog.querySelector<HTMLButtonElement>(".history-close")!.onclick = () => dialog.close();
+  dialog.addEventListener("close",()=>dialog.remove(),{once:true});
+  dialog.querySelectorAll<HTMLButtonElement>(".history-action").forEach(button=>button.onclick=()=>void runControl(button,async()=>{
+    const rating = Number(button.closest("article")!.querySelector<HTMLSelectElement>("select")!.value);
+    await api(`/api/v1/recommendations/${button.dataset.id}/actions`,{method:"POST",body:JSON.stringify({action_id:crypto.randomUUID(),action:button.dataset.action,...(button.dataset.action==="rate" ? {rating}:{})})});
+    dialog.close(); showToast(button.dataset.action==="rate" ? "Rating updated":"Dismissal undone"); await discoverView();
+  }));
+  dialog.showModal();
+}
+
+function audienceRating(average: number, votes: number) {
+  if (!votes) return "TMDB: rating unavailable";
+  return `<strong>TMDB ${average.toFixed(1)}/10</strong><small>${votes.toLocaleString()} votes</small>`;
+}
+
+async function recommendationPreview(button: HTMLButtonElement, recommendation: RecommendationRecord) {
+  const dialog = document.createElement("dialog");
+  const controller = new AbortController();
+  dialog.className = "preview-dialog";
+  dialog.setAttribute("aria-labelledby", "preview-title");
+  dialog.innerHTML = `<header class="preview-header"><h2 id="preview-title">${esc(recommendation.title)}</h2><button class="command compact preview-close" autofocus>Close</button></header>
+    <div class="preview-content" aria-live="polite"><p>Loading preview…</p></div>`;
+  document.body.append(dialog);
+  dialog.querySelector<HTMLButtonElement>(".preview-close")!.onclick = () => dialog.close();
+  dialog.addEventListener("close", () => {
+    controller.abort();
+    dialog.remove();
+    if (button.isConnected) button.focus();
+  }, { once: true });
+  dialog.showModal();
+  const previewContent = dialog.querySelector<HTMLElement>(".preview-content")!;
+  const loadPreview = async () => {
+    previewContent.innerHTML = `<p>Loading preview…</p>`;
+    try {
+      const payload = await api<unknown>(`/api/v1/recommendations/${recommendation.id}/preview`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      // Validate the new API boundary without adding a runtime dependency.
+      if (!payload || typeof payload !== "object") throw new Error("Invalid preview response");
+      const preview = payload as PreviewRecord;
+      if (typeof preview.title !== "string" || typeof preview.overview !== "string" || typeof preview.poster_url !== "string" ||
+          !Number.isInteger(preview.year) || !Number.isInteger(preview.runtime_minutes) ||
+          !Number.isFinite(preview.vote_average) || !Number.isInteger(preview.vote_count) ||
+          (preview.media_type !== "movie" && preview.media_type !== "series") ||
+          !Array.isArray(preview.genres) || !preview.genres.every(genre => typeof genre === "string") ||
+          !Array.isArray(preview.people) || !preview.people.every(person => typeof person === "string") ||
+          !Array.isArray(preview.videos) || !preview.videos.every(video => video && typeof video.name === "string" &&
+            typeof video.key === "string" && /^[A-Za-z0-9_-]{11}$/.test(video.key) &&
+            (video.type === "Trailer" || video.type === "Teaser") && typeof video.official === "boolean")) {
+        throw new Error("Invalid preview response");
+      }
+      button.closest(".recommendation-card")!.querySelector("[data-audience-rating]")!.innerHTML = audienceRating(preview.vote_average, preview.vote_count);
+      previewContent.innerHTML = `<div class="preview-summary">${preview.poster_url ? `<img src="${esc(preview.poster_url)}" alt="${esc(preview.title)} poster">` : ""}
+        <div><p class="preview-facts">${preview.media_type === "series" ? "Series" : "Movie"} · ${preview.year || "Year unknown"}${preview.runtime_minutes ? ` · ${preview.runtime_minutes} min${preview.media_type === "series" ? " / episode" : ""}` : ""}</p>
+        <div class="audience-rating">${audienceRating(preview.vote_average, preview.vote_count)}</div>
+        ${preview.genres.length ? `<p>${esc(preview.genres.join(" · "))}</p>` : ""}${preview.media_type === "series" && preview.seasons?.length ? `<p>Known seasons: ${esc(preview.seasons.join(", "))} (0 = specials)</p>` : ""}<p class="preview-overview">${esc(preview.overview || "No description available.")}</p>
+        ${preview.people.length ? `<p class="preview-people"><strong>Cast &amp; filmmakers</strong><br>${esc(preview.people.join(", "))}</p>` : ""}</div></div>
+        <section class="preview-trailers"><h3>Trailers &amp; teasers</h3>${preview.videos.length ? `<label>Video<select class="preview-video">${preview.videos.map((video, index) => `<option value="${index}">${esc(video.name)} (${video.official ? "Official " : ""}${esc(video.type)})</option>`).join("")}</select></label>
+          <div class="preview-player"></div><div class="preview-video-actions"><button class="command preview-play">Play preview</button><a class="preview-external" target="_blank" rel="noopener noreferrer">Watch on YouTube</a></div><p>Video playback is provided by YouTube.</p>` : `<p>No trailer or teaser is available for this title.</p>`}</section>`;
+      if (!preview.videos.length) return;
+      const videoSelect = previewContent.querySelector<HTMLSelectElement>(".preview-video")!;
+      const external = previewContent.querySelector<HTMLAnchorElement>(".preview-external")!;
+      const player = previewContent.querySelector<HTMLElement>(".preview-player")!;
+      const play = previewContent.querySelector<HTMLButtonElement>(".preview-play")!;
+      external.href = `https://www.youtube.com/watch?v=${preview.videos[0].key}`;
+      videoSelect.onchange = () => {
+        player.replaceChildren();
+        play.hidden = false;
+        external.href = `https://www.youtube.com/watch?v=${preview.videos[Number(videoSelect.value)].key}`;
+      };
+      play.onclick = () => {
+        const video = preview.videos[Number(videoSelect.value)];
+        player.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${video.key}" title="${esc(video.name)}" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
+        play.hidden = true;
+      };
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      previewContent.innerHTML = `<p class="preview-overview">${esc(recommendation.overview || "No description available.")}</p><p class="preview-error" role="alert">${esc(error instanceof Error ? error.message : String(error))}</p><button class="command preview-retry">Retry preview</button>`;
+      previewContent.querySelector<HTMLButtonElement>(".preview-retry")!.onclick = () => void loadPreview();
+    }
+  };
+  await loadPreview();
 }
 
 async function recommendationAction(button: HTMLButtonElement, action: "dismiss" | "request" | "rate"): Promise<void> {
@@ -240,11 +410,16 @@ async function recommendationAction(button: HTMLButtonElement, action: "dismiss"
   const controls = Array.from(card.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select"));
   const rating = action === "rate" ? Number(card.querySelector<HTMLSelectElement>(".rec-rating")?.value) : undefined;
   const monitorMode = action === "request" ? card.querySelector<HTMLSelectElement>(".rec-monitor")?.value as RequestMonitorMode | undefined : undefined;
+  const seasonScope = card.querySelector<HTMLSelectElement>(".rec-monitor")?.value === "specific";
+  const seasons = seasonScope ? card.querySelector<HTMLInputElement>(".rec-seasons")!.value.split(",").map(value => /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN) : [];
+  if (action === "request" && seasonScope && (!card.querySelector<HTMLInputElement>(".rec-seasons")!.value.trim() || seasons.length > 100 || seasons.some(value => !Number.isInteger(value) || value < 0 || value > 999))) {
+    showError(new Error("Enter season numbers between 0 and 999, separated by commas.")); return;
+  }
   controls.forEach(control => control.disabled = true);
   try {
     await api(`/api/v1/recommendations/${button.dataset.id}/actions`, {
       method: "POST",
-      body: JSON.stringify({ action_id: crypto.randomUUID(), action, ...(rating ? { rating } : {}), ...(monitorMode ? { monitor_mode: monitorMode } : {}) })
+      body: JSON.stringify({ action_id: crypto.randomUUID(), action, ...(rating ? { rating } : {}), ...(action === "request" && seasonScope ? { seasons } : monitorMode ? { monitor_mode: monitorMode } : {}) })
     });
     const message = action === "request" ? "Added to Reelay" : action === "rate" ? `Rated ${rating} of 5` : "Recommendation dismissed";
     showToast(message);
@@ -258,6 +433,8 @@ async function recommendationAction(button: HTMLButtonElement, action: "dismiss"
 }
 
 async function requestsView(selectedUser = discoverUser): Promise<void> {
+  const offset = requestsOffset;
+  const attention = attentionOnly;
   const users = (await api<Item>("/api/v1/integrations/jellyfin/users")).items ?? [];
   if (current !== "requests") return;
   if (!users.length) {
@@ -269,12 +446,14 @@ async function requestsView(selectedUser = discoverUser): Promise<void> {
   const key = `${user.server_id}:${user.user_id}`;
   discoverUser = key;
   localStorage.setItem(discoverUserKey, key);
-  const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}`;
-  const records = ((await api<{ items: RequestRecord[] }>(`/api/v1/requests?${query}`)).items ?? []);
-  if (current !== "requests" || discoverUser !== key) return;
+  const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&offset=${offset}&attention=${attention}`;
+  const requestPayload = await api<{items:RequestRecord[];has_more:boolean}>(`/api/v1/requests?${query}`);
+  const records = requestPayload.items;
+  if (current !== "requests" || discoverUser !== key || requestsOffset !== offset || attentionOnly !== attention) return;
   const node = content(`<div class="page-head requests-head"><div><h1>Recent requests</h1><p>Most recent requests for ${esc(user.display_name)} · follow each title until it is available in Jellyfin</p></div>
     <div class="row-actions"><label class="request-user">Jellyfin user<select id="requests-user">${users.map((value: Item) => option(`${value.server_id}:${value.user_id}`, value.display_name, key)).join("")}</select></label>
     <button class="command" id="refresh-requests" aria-label="Refresh requests">↻ <span>Refresh</span></button></div></div>
+    <div class="row-actions request-filters"><button class="command requests-attention" aria-pressed="${attentionOnly}">${attentionOnly ? "Show all requests" : "Attention needed"}</button><button class="command requests-previous" ${requestsOffset===0 ? "disabled" : ""}>Newer</button><button class="command requests-next" ${!requestPayload.has_more ? "disabled" : ""}>Older</button></div>
     <div class="request-list">${records.length ? records.map(record => `<article class="request-row">
       <div class="request-title"><strong>${esc(record.title)}</strong><small>${esc(record.media_type)}${record.year ? ` · ${esc(record.year)}` : ""}</small></div>
       <div class="request-status"><span>Status</span>${state(record.state)}${record.available ? `<span class="state state-available">Available in Jellyfin</span>` : ""}</div>
@@ -284,17 +463,50 @@ async function requestsView(selectedUser = discoverUser): Promise<void> {
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}
       ${record.last_error ? `<p class="request-error">${esc(record.last_error)}</p>` : ""}
       ${record.next_search_at ? `<small class="request-next">Next search ${esc(date(record.next_search_at))}</small>` : ""}
+      ${record.seasons?.length ? `<small class="request-next">Requested seasons: ${esc(record.seasons.join(", "))}</small>` : ""}
+      <div class="row-actions request-controls">${record.jellyfin_url ? `<a class="preview-external" href="${esc(record.jellyfin_url)}" target="_blank" rel="noopener noreferrer">Open in Jellyfin</a>` : ""}
+      ${(record.media_type === "series" || !record.available) && ["wanted","failed","import_failed","attention_needed","searching","cancelled"].includes(record.state) ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry">Retry</button>` : ""}
+      ${!record.cancelled_at ? `<button class="command compact request-action" data-id="${record.id}" data-action="cancel">Withdraw request</button>` : ""}<button class="command compact request-details" data-id="${record.id}">Diagnostics</button></div>
     </article>`).join("") : `<div class="empty">No requests for ${esc(user.display_name)} yet. Request a recommendation from Discover to track it here.</div>`}</div>`);
-  node.querySelector<HTMLSelectElement>("#requests-user")!.onchange = event =>
-    void requestsView((event.currentTarget as HTMLSelectElement).value).catch(showError);
+  node.querySelector<HTMLSelectElement>("#requests-user")!.onchange = event => {
+    requestsOffset=0; void requestsView((event.currentTarget as HTMLSelectElement).value).catch(showError);
+  };
   node.querySelector<HTMLButtonElement>("#refresh-requests")!.onclick = () =>
     void runControl(node.querySelector<HTMLButtonElement>("#refresh-requests")!, () => requestsView(key));
+  node.querySelectorAll<HTMLButtonElement>(".request-action").forEach(button => button.onclick = () => void runControl(button,async () => {
+    await api(`/api/v1/requests/${button.dataset.id}/actions`, {method:"POST",body:JSON.stringify({action:button.dataset.action})});
+    showToast(button.dataset.action === "cancel" ? "Request withdrawn; shared downloads continue" : "Retry scheduled");
+    await requestsView(key);
+  }));
+  node.querySelectorAll<HTMLButtonElement>(".request-details").forEach(button => button.onclick = () => void requestDiagnostics(Number(button.dataset.id)).catch(showError));
+  node.querySelector<HTMLButtonElement>(".requests-attention")!.onclick = () => { attentionOnly=!attentionOnly; requestsOffset=0; void requestsView(key).catch(showError); };
+  node.querySelector<HTMLButtonElement>(".requests-previous")!.onclick = () => { requestsOffset=Math.max(0,requestsOffset-100); void requestsView(key).catch(showError); };
+  node.querySelector<HTMLButtonElement>(".requests-next")!.onclick = () => { requestsOffset+=100; void requestsView(key).catch(showError); };
 }
 
 function monitorLabel(mode: RequestMonitorMode): string {
   if (mode === "latest_season") return "Latest season";
   if (mode === "all") return "All episodes";
   return "Future episodes";
+}
+
+async function requestDiagnostics(id: number) {
+  const payload = await api<{ subjects: { type: string; id: number; title: string; state: string; error: string; search_attempts: number; next_search_at?: string; last_search_at?: string; history: { reason: string; detail?: string; at: string }[]; candidates: { evaluation: { accepted: boolean; reason: string; score: number }; release: { id: number; raw_title: string } }[] }[] }>(`/api/v1/requests/${id}/diagnostics`);
+  const dialog = document.createElement("dialog");
+  dialog.className = "preview-dialog";
+  dialog.innerHTML = `<header class="preview-header"><h2>Request diagnostics</h2><button class="command diagnostics-close" autofocus>Close</button></header><p>Latest persisted history and evaluations. Up to 50 subjects and 100 candidates per subject.</p>
+    ${payload.subjects.map(subject => `<section><h3>${esc(subject.title || `${subject.type} #${subject.id}`)}</h3>${state(subject.state)}${subject.error ? `<p class="preview-error">${esc(subject.error)}</p>` : ""}
+    <p>Search attempts: ${esc(subject.search_attempts ?? 0)} · Last search: ${subject.last_search_at ? esc(date(subject.last_search_at)) : "Not in recent history"}${subject.next_search_at ? ` · Next retry: ${esc(date(subject.next_search_at))}` : ""}</p>
+    <ol>${(subject.history ?? []).map(transition => `<li>${date(transition.at)}: ${esc(transition.reason)} ${esc(transition.detail || "")}</li>`).join("")}</ol>
+    <div class="diagnostic-candidates">${subject.candidates.map(candidate => `<article><strong>${esc(candidate.release.raw_title)}</strong><p>${candidate.evaluation.accepted ? `Accepted · score ${candidate.evaluation.score}` : "Rejected"}: ${esc(candidate.evaluation.reason)}</p>${candidate.evaluation.accepted ? `<button class="command compact candidate-grab" data-subject="${subject.id}" data-type="${subject.type}" data-release="${candidate.release.id}">Select release</button>` : ""}</article>`).join("") || "No candidates persisted yet."}</div></section>`).join("") || `<p>No active episode diagnostics are available.</p>`}`;
+  document.body.append(dialog);
+  dialog.querySelector<HTMLButtonElement>(".diagnostics-close")!.onclick = () => dialog.close();
+  dialog.addEventListener("close",() => dialog.remove(),{once:true});
+  dialog.querySelectorAll<HTMLButtonElement>(".candidate-grab").forEach(button => button.onclick = () => void runControl(button,async () => {
+    await api(`/api/v1/requests/${id}/grab`,{method:"POST",body:JSON.stringify({subject_type:button.dataset.type,subject_id:Number(button.dataset.subject),release_id:Number(button.dataset.release)})});
+    dialog.close(); showToast("Release selected"); await requestsView();
+  }));
+  dialog.showModal();
 }
 
 async function runControl(control: HTMLButtonElement | HTMLSelectElement, action: () => Promise<void>,
@@ -471,7 +683,7 @@ async function addView(): Promise<void> {
 async function settingsView(): Promise<void> {
   const [settings, profiles] = await Promise.all([api<Item>("/api/v1/settings"), api<Item>("/api/v1/profiles")]);
   if (current !== "settings") return;
-  const node = content(`<div class="page-head"><div><h1>Settings</h1><p>Runtime configuration</p></div></div>
+  const node = content(`<div class="page-head"><div><h1>Settings</h1><p>Runtime configuration</p></div><div class="row-actions"><button class="command" id="setup-checks">Setup checks</button><button class="command" id="database-backup">Download database backup</button></div></div>
     <section><h2>Access</h2><form id="token-form" class="inline-form"><input type="password" value="${esc(authToken())}" placeholder="Bearer token">
       <button class="command" type="submit">✓ <span>Save token</span></button></form></section>
     <section><h2>Connections</h2>${table(["Component", "Address", "Status"], [
@@ -494,6 +706,26 @@ async function settingsView(): Promise<void> {
     await runControl(button, async () => {
       await api(`/api/v1/system/trigger/${button.dataset.loop}`, { method: "POST" }); showToast(`${button.dataset.loop} triggered`);
     });
+  });
+  node.querySelector<HTMLButtonElement>("#setup-checks")!.onclick = () => void runControl(node.querySelector<HTMLButtonElement>("#setup-checks")!,async()=>{
+    const setup = await api<{checks:{name:string;status:string;detail?:string;action:string;available_bytes?:number}[];webhook_enabled:boolean}>("/api/v1/setup");
+    const dialog = document.createElement("dialog");
+    dialog.className = "preview-dialog";
+    dialog.innerHTML = `<header class="preview-header"><h2>Setup checks</h2><button class="command setup-close" autofocus>Close</button></header><p>Availability webhook: ${setup.webhook_enabled ? "Enabled":"Not configured"}</p><ol class="setup-checks">${setup.checks.map(check=>`<li><strong>${esc(check.name)}</strong> ${state(check.status)}<p>${esc(check.detail || "")}${check.available_bytes!==undefined ? ` ${(check.available_bytes/1024**3).toFixed(1)} GiB available`:""}</p><p>${esc(check.action)}</p></li>`).join("")}</ol>`;
+    document.body.append(dialog);
+    dialog.querySelector<HTMLButtonElement>(".setup-close")!.onclick = () => dialog.close();
+    dialog.addEventListener("close",()=>dialog.remove(),{once:true}); dialog.showModal();
+  });
+  node.querySelector<HTMLButtonElement>("#database-backup")!.onclick = () => void runControl(node.querySelector<HTMLButtonElement>("#database-backup")!,async()=>{
+    const headers = new Headers();
+    if (authToken()) headers.set("Authorization",`Bearer ${authToken()}`);
+    const response = await fetch("/api/v1/database/backup",{method:"POST",headers});
+    if (!response.ok) throw new APIError(`Database backup failed (${response.status})`,response.status,"backup_failed");
+    const download = document.createElement("a");
+    const objectURL = URL.createObjectURL(await response.blob());
+    download.href=objectURL; download.download="reelay-backup.db"; download.click();
+    window.setTimeout(()=>URL.revokeObjectURL(objectURL),1000);
+    showToast("Database backup downloaded");
   });
 }
 

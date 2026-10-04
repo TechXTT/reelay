@@ -12,7 +12,9 @@
       <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="VirtualRoot">Virtual library root</label><input id="VirtualRoot" name="VirtualRoot" is="emby-input" type="text" autocomplete="off" required><div class="fieldDescription">Add the movies and series folders below each user ID as separate Jellyfin libraries, then grant only that user access.</div></div>
       <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="RecommendationLimit">Recommendations per type</label><input id="RecommendationLimit" name="RecommendationLimit" is="emby-input" type="number" min="1" max="100" autocomplete="off" required></div>
       <div class="verticalSection"><h3>Enabled users</h3><div id="EnabledUsers"></div></div>
-      <div class="verticalSection"><h3>Discover library paths</h3><div id="LibraryPaths" class="fieldDescription"></div></div>
+      <div class="verticalSection"><h3>Set up Discover for each user</h3>
+        <ol class="fieldDescription"><li>Save these settings and run the Reelay sync task in Jellyfin Scheduled Tasks to create the folders.</li><li>In Jellyfin Libraries, add a Movies library and a Shows library using the paths below. Give them names such as Discover movies and Discover series.</li><li>In each user's Access settings, disable access to all libraries and grant access to their two Discover libraries and their usual playable libraries.</li><li>Scan the new libraries. Discover entries are recommendations; request a title in Reelay and watch it from the regular library once available.</li></ol>
+        <div id="LibraryPaths" class="fieldDescription"></div></div>
       <button is="emby-button" type="button" id="TestConnection" class="raised block"><span>Test connection</span></button>
       <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
     </form>
@@ -48,11 +50,19 @@
       const root = page.querySelector('#VirtualRoot').value.trim().replace(/[\\/]+$/, '');
       const inputs = page.querySelectorAll('#EnabledUsers input');
       page.querySelector('#LibraryPaths').innerHTML = users.filter((_, i) => inputs[i] && inputs[i].checked).map(u => {
-        const id = normaliseId(u.Id); return '<p><strong>' + escapeHTML(u.Name) + '</strong><br><code>' + escapeHTML(libraryPath(root, id, 'movies')) + '</code><br><code>' + escapeHTML(libraryPath(root, id, 'series')) + '</code></p>';
+        const id = normaliseId(u.Id);
+        if (!root) return '<p>Enter a virtual library root to show paths for ' + escapeHTML(u.Name) + '.</p>';
+        return '<p><strong>' + escapeHTML(u.Name) + '</strong><br>' + ['movies', 'series'].map(type => '<code>' + escapeHTML(libraryPath(root, id, type)) + '</code> <button is="emby-button" type="button" class="raised" data-copy-path="' + escapeHTML(libraryPath(root, id, type)) + '">Copy ' + type + ' path</button>').join('<br>') + '</p>';
       }).join('');
     };
     page.querySelector('#VirtualRoot').addEventListener('input', renderPaths);
     page.querySelector('#EnabledUsers').addEventListener('change', renderPaths);
+    page.querySelector('#LibraryPaths').addEventListener('click', async event => {
+      const button = event.target.closest('[data-copy-path]');
+      if (!button) return;
+      try { await navigator.clipboard.writeText(button.dataset.copyPath); Dashboard.alert('Library path copied.'); }
+      catch (_) { Dashboard.alert('Copy this library path: ' + button.dataset.copyPath); }
+    });
     page.querySelector('#TestConnection').addEventListener('click', async () => {
       Dashboard.showLoadingMsg();
       try {

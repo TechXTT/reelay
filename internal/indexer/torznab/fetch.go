@@ -25,6 +25,12 @@ type magnetRedirect struct{ magnet string }
 
 func (m *magnetRedirect) Error() string { return "download link redirected to a magnet" }
 
+// redirectPolicyError is returned by the redirect policy when a redirect is
+// refused. The indexer answered, so it says nothing about indexer health.
+type redirectPolicyError struct{ msg string }
+
+func (e *redirectPolicyError) Error() string { return e.msg }
+
 // defaultPort returns the explicit port of u or the scheme default.
 func defaultPort(u *url.URL) string {
 	if port := u.Port(); port != "" {
@@ -87,12 +93,19 @@ func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (payload 
 	var bounded, cancel = context.WithTimeout(ctx, c.cfg.RequestTimeout.Duration)
 	var client = *c.http
 	var redirects int
+	// Only transport-level failures (network error, timeout, read error,
+	// HTTP 5xx or 429) count against the breaker. A completed exchange with any
+	// other outcome (bad file, 4xx, redirect policy) proves the indexer is
+	// reachable and counts as a success. Errors before a request is sent
+	// (link validation, Allow rejection, limiter wait) record nothing.
+	var countFailure, reached bool
 
 	defer cancel()
 	defer func() {
-		if fetchErr != nil {
+		switch {
+		case countFailure:
 			c.breaker.Failure(fetchErr)
-		} else {
+		case reached:
 			c.breaker.Success()
 		}
 	}()
@@ -121,10 +134,10 @@ func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (payload 
 		}
 		redirects++
 		if redirects > maxRedirects {
-			return errors.New("too many redirects")
+			return &redirectPolicyError{msg: "too many redirects"}
 		}
 		if !c.sameOrigin(req.URL) {
-			return errors.New("redirect leaves the indexer host")
+			return &redirectPolicyError{msg: "redirect leaves the indexer host"}
 		}
 		return nil
 	}
@@ -136,24 +149,37 @@ func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (payload 
 	response, err := client.Do(req)
 	if err != nil {
 		var redirect *magnetRedirect
+		var policy *redirectPolicyError
 
 		if errors.As(err, &redirect) {
+			reached = true
 			if _, err := tpb.InfoHashFromMagnet(redirect.magnet); err != nil {
 				return payload, errors.New("torznab download link redirected to an invalid magnet")
 			}
 			return indexer.TorrentPayload{Magnet: redirect.magnet}, nil
 		}
+		if errors.As(err, &policy) {
+			reached = true
+			return payload, errors.New("torznab download redirect refused: " + policy.msg)
+		}
+		countFailure = true
 		if bounded.Err() != nil {
 			return payload, errors.New("torznab download timed out")
 		}
 		return payload, errors.New("torznab download could not be completed")
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
+		countFailure = true
+	} else {
+		reached = true
+	}
 	if response.StatusCode != http.StatusOK {
 		return payload, fmt.Errorf("torznab download returned HTTP %d", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, torrentfile.MaxSize+1))
 	if err != nil {
+		countFailure = true
 		return payload, errors.New("torznab download could not be read")
 	}
 	if len(data) > torrentfile.MaxSize {

@@ -244,3 +244,53 @@ func TestFetchTorrentRejectsForeignHostAndBadStatus(t *testing.T) {
 		t.Fatalf("status err = %v", err)
 	}
 }
+
+// fetchRepeatedly calls FetchTorrent more than FailureThreshold times.
+func fetchRepeatedly(client *Client, link string) {
+	for i := 0; i < 8; i++ {
+		_, _ = client.FetchTorrent(context.Background(), link)
+	}
+}
+
+func TestFetchTorrentNonHealthErrorsDoNotOpenBreaker(t *testing.T) {
+	var body = []byte("<html>login</html>")
+	var server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dl/missing":
+			http.NotFound(w, r)
+		case "/dl/cross":
+			http.Redirect(w, r, "http://other.example/x", http.StatusFound)
+		default:
+			_, _ = w.Write(body)
+		}
+	}))
+
+	defer server.Close()
+	for name, link := range map[string]string{
+		"404":            server.URL + "/dl/missing",
+		"unusable file":  server.URL + "/dl/html",
+		"cross redirect": server.URL + "/dl/cross",
+		"foreign link":   "http://other.example/dl/1",
+	} {
+		var client = newFetchClient(t, server.URL)
+
+		fetchRepeatedly(client, link)
+		if err := client.Healthy(context.Background()); err != nil {
+			t.Fatalf("%s opened the breaker: %v", name, err)
+		}
+	}
+}
+
+func TestFetchTorrentServerErrorOpensBreaker(t *testing.T) {
+	var server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	defer server.Close()
+	var client = newFetchClient(t, server.URL)
+
+	fetchRepeatedly(client, server.URL+"/dl/1")
+	if err := client.Healthy(context.Background()); err == nil {
+		t.Fatal("repeated 500 did not open the breaker")
+	}
+}

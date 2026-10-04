@@ -20,6 +20,20 @@ func (e *Engine) ForceSearch(ctx context.Context, subject model.SubjectType, id 
 }
 
 func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, releaseID int64) (model.Grab, error) {
+	return e.grabStoredRelease(ctx, subject, id, releaseID, grabIntent{owner: "manual",
+		reason: "manual release selected", detail: fmt.Sprintf("release_id=%d", releaseID)})
+}
+
+// grabIntent names why a stored release is grabbed. owner prefixes the lock
+// owners and failure reasons, reason is the search transition and grab reason,
+// and detail is the search transition detail.
+type grabIntent struct{ owner, reason, detail string }
+
+// grabStoredRelease grabs an already stored release for an item. Manual picks
+// and failure fallbacks share it, so both keep the single active download per
+// series rule, pack locks, the free-space check and the global pause behaviour.
+func (e *Engine) grabStoredRelease(ctx context.Context, subject model.SubjectType, id, releaseID int64,
+	intent grabIntent) (model.Grab, error) {
 	release, err := e.store.Releases().Get(ctx, releaseID)
 	if err != nil {
 		return model.Grab{}, err
@@ -37,16 +51,16 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 			return model.Grab{}, fmt.Errorf("series already has an active download: %w", store.ErrItemBusy)
 		}
 	}
-	if err := e.store.Transitions().RequestSearchNow(ctx, subject, id, "manual release selected"); err != nil {
+	if err := e.store.Transitions().RequestSearchNow(ctx, subject, id, intent.reason); err != nil {
 		return model.Grab{}, err
 	}
-	lock, err := e.store.Locks().Acquire(ctx, subject, id, "manual-grab", 5*time.Minute)
+	lock, err := e.store.Locks().Acquire(ctx, subject, id, intent.owner+"-grab", 5*time.Minute)
 	if err != nil {
 		return model.Grab{}, err
 	}
 	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
 	if _, err := e.store.Transitions().TransitionLocked(ctx, lock, model.StateSearching,
-		"manual release selected", fmt.Sprintf("release_id=%d", releaseID)); err != nil {
+		intent.reason, intent.detail); err != nil {
 		return model.Grab{}, err
 	}
 	locks := []*store.ItemLock{lock}
@@ -63,10 +77,10 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 		if err != nil {
 			return model.Grab{}, err
 		}
-		packLocks, _, packErr := e.lockPackEpisodes(ctx, episodes, id, parsed, "manual-season-pack", false)
+		packLocks, _, packErr := e.lockPackEpisodes(ctx, episodes, id, parsed, intent.owner+"-season-pack", false)
 		if packErr != nil {
 			_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock,
-				e.clock.Now().Add(15*time.Minute), "manual grab coordination failed", packErr.Error(), false)
+				e.clock.Now().Add(15*time.Minute), intent.owner+" grab coordination failed", packErr.Error(), false)
 			return model.Grab{}, packErr
 		}
 		defer releaseItemLocks(packLocks)
@@ -86,11 +100,11 @@ func (e *Engine) ManualGrab(ctx context.Context, subject model.SubjectType, id, 
 		Category: category, SavePath: savePath, Paused: e.cfg.Downloader.AddPaused})
 	if err != nil {
 		_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock, e.clock.Now().Add(15*time.Minute),
-			"manual grab failed", err.Error(), false)
+			intent.owner+" grab failed", err.Error(), false)
 		return model.Grab{}, err
 	}
 	grab, err := e.store.Grabs().CreateGrabbedFor(ctx, locks, model.Grab{SubjectType: subject,
-		SubjectID: id, ReleaseID: releaseID, TorrentHash: hash, Category: category}, "manual release selected")
+		SubjectID: id, ReleaseID: releaseID, TorrentHash: hash, Category: category}, intent.reason)
 	if err != nil {
 		_ = e.downloader.Remove(context.WithoutCancel(ctx), hash, false)
 	}

@@ -37,6 +37,11 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
 4. **Automatic retry of the next-best release (S).** When a grab fails or stalls,
    immediately grab the next accepted candidate from the saved results instead of
    waiting for the next search cycle.
+   **Implemented 2026-10-04:** a failed, stalled or vanished grab immediately
+   grabs the best non-blacklisted accepted candidate from the last search
+   (evaluated within 24h, at most 3 fallbacks per search) through the shared
+   manual-grab path. Verified with go build, vet, staticcheck, and
+   `go test ./internal/... ./cmd/...` including six new engine tests.
 5. **Import the existing library (M).** Scan the current movie and TV folders and
    register what is already there, so Reelay doesn't search for media you already
    own and new installs start in the right state.

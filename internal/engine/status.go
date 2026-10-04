@@ -322,6 +322,7 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 			subjectIDs = episodeIDs(covered)
 		}
 		e.publishGrabState(grab, subjectIDs, string(model.GrabStalled))
+		e.fallbackGrab(ctx, grab.SubjectType, grab.SubjectID, reason)
 		return nil
 	}
 	if err := e.store.Decisions().Blacklist(ctx, grab.SubjectType, grab.SubjectID,
@@ -336,10 +337,12 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 		_, err = e.store.Transitions().Transition(ctx, grab.SubjectType, grab.SubjectID,
 			model.StateWanted, "grab stalled", reason)
 	}
-	if err == nil {
-		e.publishGrabState(grab, []int64{grab.SubjectID}, string(model.GrabStalled))
+	if err != nil {
+		return err
 	}
-	return err
+	e.publishGrabState(grab, []int64{grab.SubjectID}, string(model.GrabStalled))
+	e.fallbackGrab(ctx, grab.SubjectType, grab.SubjectID, reason)
+	return nil
 }
 
 func (e *Engine) itemState(ctx context.Context, subject model.SubjectType, id int64) (model.ItemState, error) {

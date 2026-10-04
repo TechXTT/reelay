@@ -23,7 +23,9 @@ a filesystem/API bridge and does not contain recommendation or download logic.
    one grab row and atomically reserves every wanted episode it covers; the
    remaining episode searches stop until that grab finishes.
 5. The status loop advances progress, detects no-progress stalls, blacklists a
-   failed info hash, and returns the item to `wanted` with backoff.
+   failed info hash, and returns the item to `wanted` with backoff. A failed or
+   stalled grab immediately tries the next accepted candidate from the last
+   search (within 24h, at most 3 times) before waiting for the next search.
 6. At completion the importer maps the client path, discovers media files,
    hardlinks or checksum-copies only the reserved episodes into the library,
    carries subtitles, and commits every covered `importing -> imported`

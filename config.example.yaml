@@ -304,6 +304,11 @@ scoring:
 
 # Per-user Jellyfin discovery. The Jellyfin plugin sends library activity to
 # Reelay; TMDB supplies candidates and Reelay performs the explainable ranking.
+availability:
+  webhook_url: "" # Optional JSON title_available webhook; retries use X-Reelay-Event-ID for deduplication.
+  webhook_format: json # json (default) or ntfy; ntfy posts a readable message directly to a topic URL.
+  jellyfin_servers: {} # Jellyfin server ID: browser-accessible base URL, for playable title links.
+
 recommendations:
   # Enable after setting metadata.tmdb_api_key and installing the Jellyfin plugin.
   enabled: false

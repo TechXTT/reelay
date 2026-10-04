@@ -187,6 +187,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/recommendations/history", s.wrap(s.handleRecommendationHistory))
 	mux.HandleFunc("GET /api/v1/recommendations/{id}/preview", s.wrap(s.handleRecommendationPreview))
 	mux.HandleFunc("GET /api/v1/requests", s.wrap(s.handleRequests))
+	mux.HandleFunc("POST /api/v1/requests/{id}/actions", s.wrap(s.handleRequestAction))
+	mux.HandleFunc("GET /api/v1/requests/{id}/diagnostics", s.wrap(s.handleRequestDiagnostics))
+	mux.HandleFunc("POST /api/v1/requests/{id}/grab", s.wrap(s.handleRequestGrab))
 	mux.HandleFunc("POST /api/v1/recommendations/generate", s.wrap(s.handleRecommendationGenerate))
 	mux.HandleFunc("POST /api/v1/recommendations/{id}/actions", s.wrap(s.handleRecommendationAction))
 

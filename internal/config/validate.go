@@ -70,6 +70,18 @@ func (c *Config) Validate() ([]string, error) {
 	c.validateProfiles(ck)
 	c.validateScoring(ck)
 	c.validateRecommendations(ck)
+	for name, rawURL := range c.Availability.JellyfinServers {
+		validateHTTPURL(ck, "availability.jellyfin_servers."+name, rawURL)
+		if parsed, err := url.Parse(rawURL); err == nil && parsed.RawQuery != "" {
+			ck.bad("availability.jellyfin_servers."+name, "must be a server base URL without a query")
+		}
+	}
+	if c.Availability.WebhookURL != "" {
+		validateHTTPURL(ck, "availability.webhook_url", c.Availability.WebhookURL)
+	}
+	if c.Availability.WebhookFormat != "" && c.Availability.WebhookFormat != "json" && c.Availability.WebhookFormat != "ntfy" {
+		ck.bad("availability.webhook_format", "must be json or ntfy")
+	}
 
 	sort.Strings(ck.problems)
 	if len(ck.problems) > 0 {

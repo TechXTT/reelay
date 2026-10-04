@@ -55,6 +55,13 @@ type Config struct {
 	Profiles        []Profile       `yaml:"profiles"`
 	Scoring         Scoring         `yaml:"scoring"`
 	Recommendations Recommendations `yaml:"recommendations"`
+	Availability    Availability    `yaml:"availability"`
+}
+
+type Availability struct {
+	WebhookURL      string            `yaml:"webhook_url"`
+	WebhookFormat   string            `yaml:"webhook_format"`
+	JellyfinServers map[string]string `yaml:"jellyfin_servers"`
 }
 
 type Server struct {

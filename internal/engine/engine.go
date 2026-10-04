@@ -123,6 +123,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		{"status", e.cfg.Schedules.StatusInterval.Duration, e.statusTrigger, e.StatusOnce},
 		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce},
 		{"recent", e.cfg.Schedules.RecentInterval.Duration, e.recentTrigger, e.RecentOnce},
+		{"notifications", time.Minute, nil, e.NotificationsOnce},
 	}
 	if e.cfg.Recommendations.Enabled && e.recommendations != nil {
 		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll})

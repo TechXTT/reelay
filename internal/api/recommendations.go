@@ -193,6 +193,7 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 		Action      string `json:"action"`
 		Rating      int    `json:"rating"`
 		MonitorMode string `json:"monitor_mode"`
+		Seasons     []int  `json:"seasons"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		return err
@@ -206,6 +207,14 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	if req.Action != "request" && req.MonitorMode != "" {
 		return BadRequest("monitor_mode is only valid for request actions")
 	}
+	if len(req.Seasons) > 100 || (len(req.Seasons) > 0 && (req.Action != "request" || req.MonitorMode != "")) {
+		return BadRequest("specific seasons require a request action with no monitor_mode, at most 100 seasons")
+	}
+	for _, season := range req.Seasons {
+		if season < 0 || season > 999 {
+			return BadRequest("season must be between 0 and 999")
+		}
+	}
 	if req.Action == "rate" && (req.Rating < 1 || req.Rating > 5) {
 		return BadRequest("rating must be from 1 to 5")
 	}
@@ -216,7 +225,7 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return NotFound("recommendation %d not found", id)
 	}
-	if rec.MediaType != "series" && req.MonitorMode != "" {
+	if rec.MediaType != "series" && (req.MonitorMode != "" || len(req.Seasons) > 0) {
 		return BadRequest("monitor_mode is only valid for series requests")
 	}
 	var subject any
@@ -230,10 +239,13 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 			return checkErr
 		}
 		requestedMonitorMode := req.MonitorMode
-		if rec.MediaType == "series" && requestedMonitorMode == "" {
+		if rec.MediaType == "series" && requestedMonitorMode == "" && len(req.Seasons) == 0 {
 			requestedMonitorMode = string(model.MonitorFutureOnly)
 		}
 		monitorMode := requestedMonitorMode
+		if len(req.Seasons) > 0 {
+			monitorMode = string(model.MonitorNone)
+		}
 		if recorded {
 			monitorMode = ""
 			requestedMonitorMode = ""
@@ -255,8 +267,14 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 		default:
 			return Conflict("recommendation returned an unsupported subject")
 		}
-		if _, err = s.store.Requests().Create(r.Context(), request); err != nil {
+		if _, err = s.store.Requests().CreateForAction(r.Context(), request, !recorded); err != nil {
 			return Conflict("recommendation could not be tracked").WithCause(err)
+		}
+		if !recorded && len(req.Seasons) > 0 {
+			if err := s.store.Requests().AddSeasons(r.Context(), rec.ServerID, rec.UserID, rec.TMDBID, request.SubjectID, req.Seasons); err != nil {
+				return err
+			}
+			metadataChanged = true
 		}
 	}
 	inserted := true
@@ -312,7 +330,8 @@ func (s *Server) requestRecommendation(r *http.Request, rec model.Recommendation
 		changed := false
 		widenLatestSeason := monitorMode == string(model.MonitorLatestSeason) && (existing.MonitorMode == model.MonitorFutureOnly || existing.MonitorMode == model.MonitorNone)
 		widenAll := monitorMode == string(model.MonitorAll) && existing.MonitorMode != model.MonitorAll
-		if existing.Status == model.SeriesFollowing && (widenLatestSeason || widenAll) {
+		widenFuture := monitorMode == string(model.MonitorFutureOnly) && existing.MonitorMode == model.MonitorNone
+		if existing.Status == model.SeriesFollowing && (widenLatestSeason || widenAll || widenFuture) {
 			existing.MonitorMode = model.MonitorMode(monitorMode)
 			existing, err = s.store.Series().Update(r.Context(), existing)
 			changed = err == nil

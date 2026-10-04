@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/model"
@@ -20,7 +21,12 @@ func (e *Engine) MetadataOnce(ctx context.Context) error {
 	}
 	var errs []error
 	for _, item := range series {
-		if item.TVmazeID <= 0 || item.MonitorMode == model.MonitorNone {
+		selectedSeasons, err := e.store.Requests().SelectedSeasons(ctx, item.ID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if item.TVmazeID <= 0 || (item.MonitorMode == model.MonitorNone && len(selectedSeasons) == 0) {
 			continue
 		}
 		episodes, err := e.tvmaze.SeriesEpisodes(ctx, item.TVmazeID)
@@ -47,6 +53,9 @@ func (e *Engine) MetadataOnce(ctx context.Context) error {
 		}
 		for _, episode := range episodes {
 			wanted := e.monitorEpisode(item, episode.Season, episode.AirDate, latestAiredSeason)
+			if slices.Contains(selectedSeasons, episode.Season) && episode.AirDate != nil && !now.Before(episode.AirDate.Add(e.cfg.Schedules.AirGrace.Duration)) {
+				wanted = true
+			}
 			initial := model.StateUnmonitored
 			if wanted {
 				initial = model.StateWanted

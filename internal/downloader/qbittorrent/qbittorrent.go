@@ -27,6 +27,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"github.com/TechXTT/reelay/internal/config"
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/indexer/tpb"
+	"github.com/TechXTT/reelay/internal/torrentfile"
 )
 
 // maxResponseBytes caps a torrents/info response. A client with thousands of
@@ -181,29 +183,36 @@ func (c *Client) EnsureCategory(ctx context.Context, name, savePath string) erro
 	return nil
 }
 
-// Add hands a magnet to the client.
+// Add hands a magnet or a .torrent file to the client; exactly one of
+// req.Magnet and req.TorrentFile must be set.
 //
-// The returned hash comes from the magnet, not from the client, because
-// torrents/add returns an empty body. Computing it here is the only way to have
-// a key to poll on, and it is why the magnet's hash is normalised to lowercase
-// hex — qBittorrent keys on that form, and a base32 magnet would otherwise
-// produce a hash the client has never heard of.
+// The returned hash comes from the magnet or the file, not from the client,
+// because torrents/add returns an empty body. Computing it here is the only way
+// to have a key to poll on, and it is why the magnet's hash is normalised to
+// lowercase hex — qBittorrent keys on that form, and a base32 magnet would
+// otherwise produce a hash the client has never heard of.
 func (c *Client) Add(ctx context.Context, req downloader.AddRequest) (string, error) {
-	if strings.TrimSpace(req.Magnet) == "" {
-		return "", errors.New("qbittorrent: add: empty magnet")
+	var hash string
+	var err error
+
+	if (strings.TrimSpace(req.Magnet) == "") == (len(req.TorrentFile) == 0) {
+		return "", errors.New("qbittorrent: add: exactly one of magnet and torrent file is required")
 	}
 	if !c.ownedCategories[req.Category] {
 		return "", fmt.Errorf("qbittorrent: add: refusing to add with category %q; "+
 			"it is not one of Reelay's (%s)", req.Category, strings.Join(c.OwnedCategories(), ", "))
 	}
 
-	hash, err := tpb.InfoHashFromMagnet(req.Magnet)
+	if len(req.TorrentFile) > 0 {
+		hash, err = torrentfile.InfoHash(req.TorrentFile)
+	} else {
+		hash, err = tpb.InfoHashFromMagnet(req.Magnet)
+	}
 	if err != nil {
 		return "", fmt.Errorf("qbittorrent: add: %w", err)
 	}
 
 	fields := map[string]string{
-		"urls":     req.Magnet,
 		"category": req.Category,
 		// qBittorrent 5.0 renamed `paused` to `stopped`. Sending both keeps one
 		// binary working across versions; an unknown field is ignored.
@@ -213,8 +222,11 @@ func (c *Client) Add(ctx context.Context, req downloader.AddRequest) (string, er
 	if req.SavePath != "" {
 		fields["savepath"] = req.SavePath
 	}
+	if len(req.TorrentFile) == 0 {
+		fields["urls"] = req.Magnet
+	}
 
-	body, contentType, err := multipartBody(fields)
+	body, contentType, err := multipartBody(fields, req.TorrentFile)
 	if err != nil {
 		return "", err
 	}
@@ -393,12 +405,24 @@ func uniqueHashes(hashes []string) []string {
 	return unique
 }
 
-func multipartBody(fields map[string]string) (string, string, error) {
+func multipartBody(fields map[string]string, torrent []byte) (string, string, error) {
 	var buf strings.Builder
 	w := multipart.NewWriter(&buf)
 	for k, v := range fields {
 		if err := w.WriteField(k, v); err != nil {
 			return "", "", fmt.Errorf("qbittorrent: build multipart field %q: %w", k, err)
+		}
+	}
+	if len(torrent) > 0 {
+		part, err := w.CreatePart(textproto.MIMEHeader{
+			"Content-Disposition": {`form-data; name="torrents"; filename="reelay.torrent"`},
+			"Content-Type":        {"application/x-bittorrent"},
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("qbittorrent: build multipart torrent file: %w", err)
+		}
+		if _, err := part.Write(torrent); err != nil {
+			return "", "", fmt.Errorf("qbittorrent: build multipart torrent file: %w", err)
 		}
 	}
 	if err := w.Close(); err != nil {

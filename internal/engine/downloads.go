@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/downloader"
+	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/store"
 )
 
@@ -73,6 +75,30 @@ func (e *Engine) SetDownloadsPaused(ctx context.Context, paused bool) (int, erro
 	e.events.Publish(Event{Type: "queue_control", At: e.clock.Now().UTC(),
 		Data: map[string]any{"paused": paused, "count": len(hashes)}})
 	return len(hashes), nil
+}
+
+// addRequestFor builds the Magnet or TorrentFile part of an AddRequest for a
+// release. A release without a download URL already carries its magnet;
+// otherwise the indexer that produced it resolves the link.
+func (e *Engine) addRequestFor(ctx context.Context, indexerName, magnet, downloadURL string) (downloader.AddRequest, error) {
+	if downloadURL == "" {
+		return downloader.AddRequest{Magnet: magnet}, nil
+	}
+	for _, source := range e.indexers {
+		if source.Name() != indexerName {
+			continue
+		}
+		fetcher, ok := source.(indexer.TorrentFetcher)
+		if !ok {
+			return downloader.AddRequest{}, fmt.Errorf("indexer %q cannot fetch torrent files", indexerName)
+		}
+		payload, err := fetcher.FetchTorrent(ctx, downloadURL)
+		if err != nil {
+			return downloader.AddRequest{}, fmt.Errorf("fetch torrent from %q: %w", indexerName, err)
+		}
+		return downloader.AddRequest{Magnet: payload.Magnet, TorrentFile: payload.File}, nil
+	}
+	return downloader.AddRequest{}, fmt.Errorf("indexer %q is not configured", indexerName)
 }
 
 func (e *Engine) addDownload(ctx context.Context, req downloader.AddRequest) (string, error) {

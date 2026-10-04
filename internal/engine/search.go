@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/parser"
@@ -196,8 +195,12 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	if lowDisk := e.checkSpace(best.Release.SizeBytes, target.savePath, e.libraryRoot(target.subject)); lowDisk != nil {
 		return e.holdForSpace(ctx, lock, target.subject, target.id, lowDisk)
 	}
-	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: best.Release.Magnet,
-		Category: target.category, SavePath: target.savePath, Paused: e.cfg.Downloader.AddPaused})
+	request, err := e.addRequestFor(ctx, best.Release.Indexer, best.Release.Magnet, best.Release.DownloadURL)
+	if err != nil {
+		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
+	}
+	request.Category, request.SavePath, request.Paused = target.category, target.savePath, e.cfg.Downloader.AddPaused
+	hash, err := e.addDownload(ctx, request)
 	if err != nil {
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
@@ -273,7 +276,7 @@ func (e *Engine) persistCandidates(ctx context.Context, target searchTarget, res
 			}
 			stored, err := e.store.Releases().Upsert(ctx, model.StoredRelease{Indexer: candidate.Release.Indexer,
 				RawTitle: candidate.Release.Title, InfoHash: candidate.Release.InfoHash,
-				Magnet: candidate.Release.Magnet, SizeBytes: candidate.Release.SizeBytes,
+				Magnet: candidate.Release.Magnet, DownloadURL: candidate.Release.DownloadURL, SizeBytes: candidate.Release.SizeBytes,
 				Seeders: candidate.Release.Seeders, Leechers: candidate.Release.Leechers,
 				PublishedAt: candidate.Release.PublishedAt, Category: candidate.Release.Category,
 				ParsedJSON: string(parsed), Score: candidate.Score})

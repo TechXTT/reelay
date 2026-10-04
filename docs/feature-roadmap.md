@@ -31,6 +31,13 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
 2. **Download from torrent files, not just magnets (M).** Torznab results that
    only offer a `.torrent` file are skipped today, so many Prowlarr results go
    unused. Fetch the file and pass it to qBittorrent.
+   **Implemented 2026-10-04:** migration 0009 adds `releases.download_url`;
+   link-only Torznab results use a stand-in key, and the winner's `.torrent` is
+   fetched at grab time (same host only, API key stripped from storage, 4 MiB
+   cap, magnet redirects followed) and uploaded to qBittorrent with its real
+   info hash. Verified with go build, vet, staticcheck, and
+   `go test ./internal/... ./cmd/...` including new torrentfile, Torznab,
+   qBittorrent, store, and engine tests; no live Prowlarr fetch was exercised.
 3. **Dead-torrent detection by seeders (S).** Mark a grab stalled early when it
    stays at 0 seeds or peers past a short timeout, instead of waiting for the
    full stall timeout.

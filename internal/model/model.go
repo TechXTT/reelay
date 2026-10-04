@@ -338,6 +338,7 @@ type StoredRelease struct {
 	RawTitle    string    `json:"raw_title"`
 	InfoHash    string    `json:"info_hash"`
 	Magnet      string    `json:"magnet"`
+	DownloadURL string    `json:"download_url,omitempty"`
 	SizeBytes   int64     `json:"size_bytes"`
 	Seeders     int       `json:"seeders"`
 	Leechers    int       `json:"leechers"`

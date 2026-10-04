@@ -1,4 +1,6 @@
-// Package torznab implements a bounded, magnet-only Torznab adapter.
+// Package torznab implements a bounded Torznab adapter. Results with a magnet or
+// info hash become magnet releases; results offering only a .torrent link become
+// download-URL releases that FetchTorrent resolves at grab time.
 package torznab
 
 import (
@@ -277,6 +279,22 @@ func (c *Client) toRelease(item feedItem, query indexer.Query) (indexer.Release,
 		}
 		hash = magnetHash
 	}
+	if magnet == "" && hash == "" {
+		var link = item.Enclosure.URL
+
+		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+			link = item.Link
+		}
+		if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+			cleaned, ok := c.cleanDownloadURL(link)
+			if !ok {
+				return indexer.Release{}, false
+			}
+			// A stand-in identity until grab time; see standInKey.
+			release.DownloadURL = cleaned
+			hash = standInKey(c.cfg.Name, cleaned)
+		}
+	}
 	hash, err := tpb.NormalizeInfoHash(hash)
 	if err != nil || release.SizeBytes <= 0 || release.Title == "" || !indexer.IsVideoCategory(release.Category) || release.Seeders < query.MinSeeders {
 		return indexer.Release{}, false
@@ -284,7 +302,7 @@ func (c *Client) toRelease(item feedItem, query indexer.Query) (indexer.Release,
 	if len(query.Categories) > 0 && !slices.Contains(query.Categories, release.Category) {
 		return indexer.Release{}, false
 	}
-	if magnet == "" {
+	if magnet == "" && release.DownloadURL == "" {
 		magnet, err = tpb.BuildMagnet(hash, item.Title, c.cfg.Trackers)
 		if err != nil {
 			return indexer.Release{}, false

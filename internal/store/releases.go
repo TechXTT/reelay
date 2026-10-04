@@ -31,16 +31,17 @@ func (r *ReleaseRepository) Upsert(ctx context.Context, in model.StoredRelease) 
 		in.SeenAt = r.s.nowUTC()
 	}
 	stored, err := scanRelease(r.s.rw.QueryRowContext(ctx, `INSERT INTO releases (
- indexer, raw_title, info_hash, magnet, size_bytes, seeders, leechers,
+ indexer, raw_title, info_hash, magnet, download_url, size_bytes, seeders, leechers,
  published_at, category, parsed_json, score, seen_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (indexer, info_hash) DO UPDATE SET
- raw_title=excluded.raw_title, magnet=excluded.magnet, size_bytes=excluded.size_bytes,
+ raw_title=excluded.raw_title, magnet=excluded.magnet, download_url=excluded.download_url,
+ size_bytes=excluded.size_bytes,
  seeders=excluded.seeders, leechers=excluded.leechers,
  published_at=excluded.published_at, category=excluded.category,
  parsed_json=excluded.parsed_json, score=excluded.score, seen_at=excluded.seen_at
 RETURNING `+releaseColumns,
-		in.Indexer, in.RawTitle, in.InfoHash, in.Magnet, in.SizeBytes, in.Seeders,
+		in.Indexer, in.RawTitle, in.InfoHash, in.Magnet, in.DownloadURL, in.SizeBytes, in.Seeders,
 		in.Leechers, nullTime(&in.PublishedAt), in.Category, in.ParsedJSON,
 		in.Score, FormatTime(in.SeenAt)))
 	if err != nil {
@@ -59,7 +60,7 @@ func (r *ReleaseRepository) ByIndexerHash(ctx context.Context, indexer, hash str
 		fmt.Sprintf("release %s/%s", indexer, hash))
 }
 
-const releaseColumns = `id, indexer, raw_title, info_hash, magnet,
+const releaseColumns = `id, indexer, raw_title, info_hash, magnet, download_url,
  size_bytes, seeders, leechers, published_at, category, parsed_json, score, seen_at`
 
 const selectReleaseSQL = "SELECT " + releaseColumns + " FROM releases"
@@ -69,7 +70,7 @@ func scanRelease(row scanner) (model.StoredRelease, error) {
 	var published sql.NullString
 	var seen string
 	err := row.Scan(&v.ID, &v.Indexer, &v.RawTitle, &v.InfoHash, &v.Magnet,
-		&v.SizeBytes, &v.Seeders, &v.Leechers, &published, &v.Category,
+		&v.DownloadURL, &v.SizeBytes, &v.Seeders, &v.Leechers, &published, &v.Category,
 		&v.ParsedJSON, &v.Score, &seen)
 	if err != nil {
 		return v, err

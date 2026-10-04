@@ -137,10 +137,18 @@ falls back to a verified copy.
 
 ## Source and maintenance boundaries
 
-1. Torznab supports generic search and recent listings for magnet-capable movie
-   and TV results. XML size and result count are bounded, requests are rate-limited
-   and timed out, and failures update the existing circuit breaker. Results flow
-   through the existing parser and scorer; no download client was added.
+1. Torznab supports generic search and recent listings for movie and TV results.
+   XML size and result count are bounded, requests are rate-limited and timed
+   out, and failures update the existing circuit breaker. Results flow through
+   the existing parser and scorer; no download client was added. Results with a
+   magnet or info hash are grabbed as magnets. Results offering only a `.torrent`
+   link are stored with a `download_url` and a stand-in key (SHA-1 of indexer
+   name and cleaned URL) as their identity for de-duplication and blacklisting;
+   the real info hash is computed from the file at grab time and blacklisted too
+   on failure. Such links must share the indexer's scheme, host and port, the
+   `apikey` parameter is stripped before storage and re-added only when fetching
+   through the indexer's rate limiter and breaker, redirects stay on that host
+   (or end in a magnet), and files are limited to 4 MiB.
 2. Setup checks examine the database, downloader connectivity, library/path
    presence, and free space. Indexer health remains a local circuit-breaker check,
    so dashboard polling cannot create indexer traffic.

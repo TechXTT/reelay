@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/parser"
 	"github.com/TechXTT/reelay/internal/store"
@@ -96,8 +95,13 @@ func (e *Engine) grabStoredRelease(ctx context.Context, subject model.SubjectTyp
 		}
 		return model.Grab{}, lowDisk
 	}
-	hash, err := e.addDownload(ctx, downloader.AddRequest{Magnet: release.Magnet,
-		Category: category, SavePath: savePath, Paused: e.cfg.Downloader.AddPaused})
+	var hash string
+
+	request, err := e.addRequestFor(ctx, release.Indexer, release.Magnet, release.DownloadURL)
+	if err == nil {
+		request.Category, request.SavePath, request.Paused = category, savePath, e.cfg.Downloader.AddPaused
+		hash, err = e.addDownload(ctx, request)
+	}
 	if err != nil {
 		_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock, e.clock.Now().Add(15*time.Minute),
 			intent.owner+" grab failed", err.Error(), false)

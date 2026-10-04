@@ -46,9 +46,12 @@ const (
 	StateUnknown     = "unknown"
 )
 
-// AddRequest is a handoff to the client.
+// AddRequest is a handoff to the client. Exactly one of Magnet and TorrentFile
+// must be set.
 type AddRequest struct {
 	Magnet string
+	// TorrentFile is the raw content of a .torrent file.
+	TorrentFile []byte
 	// Category is mandatory. An empty category would make every torrent in the
 	// client indistinguishable from ours, so implementations must reject it.
 	Category string

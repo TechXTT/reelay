@@ -286,6 +286,20 @@ func (e *Engine) advanceGrabItems(ctx context.Context, grab model.Grab, covered 
 	return nil
 }
 
+// blacklistGrabHashes blacklists the release hash and, when it differs, the
+// grab's torrent hash. They differ for download-link releases, whose release
+// hash is a stand-in key while the grab carries the real info hash.
+func (e *Engine) blacklistGrabHashes(ctx context.Context, subject model.SubjectType, id int64,
+	releaseHash, torrentHash, reason string) error {
+	if err := e.store.Decisions().Blacklist(ctx, subject, id, releaseHash, reason); err != nil {
+		return err
+	}
+	if torrentHash == "" || strings.EqualFold(torrentHash, releaseHash) {
+		return nil
+	}
+	return e.store.Decisions().Blacklist(ctx, subject, id, torrentHash, reason)
+}
+
 func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, deleteData bool) error {
 	if err := e.downloader.Remove(ctx, grab.TorrentHash, deleteData); err != nil {
 		if errors.Is(err, downloader.ErrNotOurs) {
@@ -308,8 +322,8 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 			return err
 		}
 		for _, episode := range covered {
-			if err := e.store.Decisions().Blacklist(ctx, model.SubjectEpisode, episode.ID,
-				release.InfoHash, reason); err != nil {
+			if err := e.blacklistGrabHashes(ctx, model.SubjectEpisode, episode.ID,
+				release.InfoHash, grab.TorrentHash, reason); err != nil {
 				return err
 			}
 			if err := e.store.Transitions().RetryNow(ctx, model.SubjectEpisode,
@@ -325,8 +339,8 @@ func (e *Engine) failGrab(ctx context.Context, grab model.Grab, reason string, d
 		e.fallbackGrab(ctx, grab.SubjectType, grab.SubjectID, reason)
 		return nil
 	}
-	if err := e.store.Decisions().Blacklist(ctx, grab.SubjectType, grab.SubjectID,
-		release.InfoHash, reason); err != nil {
+	if err := e.blacklistGrabHashes(ctx, grab.SubjectType, grab.SubjectID,
+		release.InfoHash, grab.TorrentHash, reason); err != nil {
 		return err
 	}
 	state, err := e.itemState(ctx, grab.SubjectType, grab.SubjectID)

@@ -90,6 +90,11 @@ type Release struct {
 	Files    int    `json:"files,omitempty"`
 	IMDBID   string `json:"imdb_id,omitempty"`
 	Uploader string `json:"uploader,omitempty"`
+
+	// DownloadURL is set when the indexer offers only a .torrent link. Magnet is
+	// then empty and InfoHash is a stand-in key, not the real info hash; the
+	// engine resolves the real one at grab time through TorrentFetcher.
+	DownloadURL string `json:"download_url,omitempty"`
 }
 
 func (r Release) String() string {
@@ -109,6 +114,19 @@ type Indexer interface {
 	// container probes, and turning that into indexer traffic is how you get
 	// rate-limited by your own dashboard.
 	Healthy(ctx context.Context) error
+}
+
+// TorrentPayload is what a download link resolved to: either a magnet (the
+// link redirected to one) or the raw .torrent file content.
+type TorrentPayload struct {
+	Magnet string
+	File   []byte
+}
+
+// TorrentFetcher is implemented by indexers whose releases can carry a
+// DownloadURL. The URL must be one the same indexer produced.
+type TorrentFetcher interface {
+	FetchTorrent(ctx context.Context, downloadURL string) (TorrentPayload, error)
 }
 
 // Category ranges. Verified against live responses rather than taken from

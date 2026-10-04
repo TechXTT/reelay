@@ -82,11 +82,24 @@ func (r *RecommendationRepository) CompleteSync(ctx context.Context, serverID, s
 	if strings.TrimSpace(serverID) == "" || strings.TrimSpace(syncToken) == "" {
 		return 0, errors.New("complete jellyfin sync requires server id and sync token")
 	}
-	result, err := r.s.rw.ExecContext(ctx, `UPDATE jellyfin_items SET present=0,updated_at=? WHERE server_id=? AND sync_token<>? AND present=1`, FormatTime(r.s.nowUTC()), serverID, syncToken)
-	if err != nil {
-		return 0, fmt.Errorf("complete jellyfin item sync: %w", err)
-	}
-	count, err := result.RowsAffected()
+	var count int64
+	var err = r.s.InTx(ctx, func(tx *sql.Tx) error {
+		var now = FormatTime(r.s.nowUTC())
+		var result, err = tx.ExecContext(ctx, `UPDATE jellyfin_items SET present=0,updated_at=? WHERE server_id=? AND sync_token<>? AND present=1`, now, serverID, syncToken)
+
+		if err != nil {
+			return err
+		}
+		count, err = result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
+ SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
+ FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1
+ WHERE mr.server_id=? AND mr.cancelled_at IS NULL GROUP BY mr.id`, now, now, serverID)
+		return err
+	})
 	return int(count), err
 }
 

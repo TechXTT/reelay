@@ -23,4 +23,8 @@ type MediaRequest struct {
 	Available        bool       `json:"available"`
 	ImportedEpisodes int        `json:"imported_episodes"`
 	TotalEpisodes    int        `json:"total_episodes"`
+	CancelledAt      *time.Time `json:"cancelled_at"`
+	Seasons          []int      `json:"seasons"`
+	JellyfinItemID   string     `json:"jellyfin_item_id"`
+	JellyfinURL      string     `json:"jellyfin_url"`
 }

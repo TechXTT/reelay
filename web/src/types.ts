@@ -33,6 +33,7 @@ export interface Grab {
   state: string;
   progress: number;
   content_path?: string;
+  last_error?: string;
   updated_at: string;
 }
 
@@ -216,6 +217,8 @@ export interface MediaRequest {
   state: string;
   progress: number;
   last_error: string | null;
+  can_retry_import: boolean;
+  download_wait?: string;
   next_search_at: string | null;
   available: boolean;
   imported_episodes: number;

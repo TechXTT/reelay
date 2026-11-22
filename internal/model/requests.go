@@ -22,6 +22,8 @@ type MediaRequest struct {
 	State            string       `json:"state"`
 	Progress         float64      `json:"progress"`
 	LastError        string       `json:"last_error"`
+	DownloadWait     string       `json:"download_wait,omitempty"`
+	CanRetryImport   bool         `json:"can_retry_import"`
 	NextSearchAt     *time.Time   `json:"next_search_at"`
 	Available        bool         `json:"available"`
 	ImportedEpisodes int          `json:"imported_episodes"`

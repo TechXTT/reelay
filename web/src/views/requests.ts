@@ -32,7 +32,8 @@ function requestTrialLine(record: MediaRequest) {
 function requestControls(record: MediaRequest) {
   const retryable = (record.media_type === "series" || !record.available) && retryableStates.includes(record.state);
   return `<div class="row-actions request-controls">${record.jellyfin_url ? `<a class="preview-external" href="${esc(record.jellyfin_url)}" target="_blank" rel="noopener noreferrer">Open in Jellyfin</a>` : ""}
-      ${retryable ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry">Retry</button>` : ""}
+      ${record.can_retry_import ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry_import">Retry import</button>` : ""}
+      ${retryable ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry">${record.can_retry_import ? "Search again" : "Retry"}</button>` : ""}
       ${!record.cancelled_at ? `<button class="command compact request-action" data-id="${record.id}" data-action="cancel">Withdraw request</button>` : ""}<button class="command compact request-details" data-id="${record.id}">Diagnostics</button></div>`;
 }
 
@@ -44,6 +45,7 @@ function requestRow(record: MediaRequest) {
       <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}
       ${record.last_error ? `<p class="request-error">${esc(record.last_error)}</p>` : ""}
+      ${record.download_wait ? `<p class="request-next">${esc(record.download_wait)}</p>` : ""}
       ${record.next_search_at ? `<small class="request-next">Next search ${esc(date(record.next_search_at))}</small>` : ""}
       ${record.seasons?.length ? `<small class="request-next">Requested seasons: ${esc(record.seasons.join(", "))}</small>` : ""}
       ${requestTrialLine(record)}
@@ -87,7 +89,7 @@ function bindRequestsView(node: HTMLElement, key: string) {
   bindAll<HTMLButtonElement>(node, ".request-action", button => {
     const action = button.dataset.action;
     bindRequest(button, `/api/v1/requests/${button.dataset.id}/actions`, jsonRequest("POST", { action }),
-      action === "cancel" ? "Request withdrawn; shared downloads continue" : "Retry scheduled", () => requestsView(key));
+      action === "cancel" ? "Request withdrawn; shared downloads continue" : action === "retry_import" ? "Import retry scheduled" : "Retry scheduled", () => requestsView(key));
   });
   bindAll<HTMLButtonElement>(node, ".request-details", button => button.onclick = () =>
     void requestDiagnostics(Number(button.dataset.id)).catch(showError));

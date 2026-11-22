@@ -24,7 +24,8 @@ function downloadCard(grab: Grab, movieNames: Map<number, string>, movieByID: Ma
       <div class="progress"><i style="width:${percent(grab.progress)}%"></i></div>
       <small class="progress-label">${(grab.progress * 100).toFixed(1)}%</small>
       <div class="row-actions"><button class="command compact danger cancel-grab" data-grab="${grab.id}">Cancel download</button>
-      ${grab.subject_type === "movie" && movieByID.has(grab.subject_id) ? `<button class="command compact danger delete-active-movie" data-movie="${grab.subject_id}">Delete movie</button>` : ""}</div></article>`;
+      ${grab.subject_type === "movie" && movieByID.has(grab.subject_id) ? `<button class="command compact danger delete-active-movie" data-movie="${grab.subject_id}">Delete movie</button>` : ""}</div>
+      ${grab.last_error ? `<small class="download-wait">${esc(grab.last_error)}</small>` : ""}</article>`;
 }
 
 function healthRow(component: HealthComponent) {

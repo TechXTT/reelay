@@ -77,8 +77,25 @@ func (s *Server) handleRequestAction(w http.ResponseWriter, r *http.Request, id 
 		if err := s.store.Requests().Reactivate(r.Context(), id); err != nil {
 			return requestActionFailed(err)
 		}
+	case "retry_import":
+		if s.engine == nil {
+			return Unavailable("engine is unavailable")
+		}
+		if request.CancelledAt != nil {
+			return Conflict("request was withdrawn")
+		}
+		retried, err = s.store.Requests().RetryImports(r.Context(), request)
+		if err != nil {
+			return requestActionFailed(err)
+		}
+		if retried == 0 {
+			return Conflict("no failed imports with a recorded completed download can be retried")
+		}
+		if err := s.engine.Trigger("status"); err != nil {
+			return err
+		}
 	default:
-		return BadRequest("action must be cancel or retry")
+		return BadRequest("action must be cancel, retry, or retry_import")
 	}
 	s.publishRequestsUpdated(request.ServerID, request.UserID)
 	return reply(w, r, http.StatusOK, map[string]any{"action": body.Action, "retried": retried})

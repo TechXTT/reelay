@@ -196,6 +196,18 @@ func (r *GrabRepository) Update(ctx context.Context, in model.Grab) error {
 	return nil
 }
 
+// RecordDownloadWait preserves the last verified path and progress while the
+// client cannot report a usable transfer status.
+func (r *GrabRepository) RecordDownloadWait(ctx context.Context, id int64, reason string) error {
+	now := FormatTime(r.s.nowUTC())
+	_, err := r.s.rw.ExecContext(ctx, `UPDATE grabs SET last_error=?, updated_at=?, progressed_at=?
+ WHERE id=? AND state IN ('pending','downloading','completed','importing')`, reason, now, now, id)
+	if err != nil {
+		return fmt.Errorf("record download wait for grab %d: %w", id, err)
+	}
+	return nil
+}
+
 func (r *GrabRepository) Get(ctx context.Context, id int64) (model.Grab, error) {
 	return findOne(r.s.ro.QueryRowContext(ctx, selectGrabSQL+" WHERE id=?", id), scanGrab, fmt.Sprintf("grab %d", id))
 }

@@ -191,6 +191,12 @@ func (r *RequestRepository) List(ctx context.Context, serverID, userID string) (
 	return r.ListPage(ctx, serverID, userID, 0, false)
 }
 
+// Request rows expose a stable wait reason without carrying client error text
+// that may identify the client host, the source path, or a tracker.
+const requestDownloadWait = `CASE WHEN g.last_error='' THEN 0
+ WHEN g.state IN ('completed','importing') THEN 2
+ ELSE 1 END`
+
 func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID string, offset int, attention bool) ([]model.MediaRequest, error) {
 	if offset < 0 || offset > 1000000 {
 		return nil, errors.New("request offset is out of bounds")
@@ -209,26 +215,34 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
 ), selected_movies AS MATERIALIZED (
  SELECT DISTINCT m.id AS subject_id FROM selected_requests request JOIN movies m ON m.id=request.subject_id AND m.tmdb_id=request.tmdb_id
  WHERE request.subject_type='movie'
+), selected_episodes AS MATERIALIZED (
+ SELECT selected.request_id,ep.* FROM selected_series selected JOIN episodes ep ON ep.series_id=selected.subject_id
+ WHERE (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json)))
+   AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=selected.request_id AND t.decision<>'continue')
+        OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=selected.request_id AND te.episode_id=ep.id))
 ), episode_summary AS (
- SELECT selected.request_id,COUNT(*) AS total,
+ SELECT ep.request_id,COUNT(*) AS total,
         SUM(CASE WHEN ep.state='imported' THEN 1 ELSE 0 END) AS imported,
         SUM(CASE WHEN ep.state IN ('failed','import_failed') THEN 1 ELSE 0 END) AS failed,
+        MAX(CASE WHEN ep.state='import_failed' THEN EXISTS(
+          SELECT 1 FROM grabs g WHERE `+recoverableEpisodeImport+`) ELSE 0 END) AS can_retry_import,
         SUM(CASE WHEN ep.state IN ('grabbed','downloading','importing') THEN 1 ELSE 0 END) AS active,
         SUM(CASE WHEN ep.state IN ('wanted','searching') THEN 1 ELSE 0 END) AS wanted,
         SUM(CASE WHEN ep.state<>'unmonitored' THEN 1 ELSE 0 END) AS monitored,
         SUM(CASE WHEN ep.air_date>? THEN 1 ELSE 0 END) AS upcoming,
         MAX(NULLIF(ep.last_error,'')) AS last_error,
         MIN(ep.next_search_at) AS next_search_at
- FROM episodes ep JOIN selected_series selected ON selected.subject_id=ep.series_id
- WHERE (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json))) AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=selected.request_id AND t.decision<>'continue') OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=selected.request_id AND te.episode_id=ep.id)) GROUP BY selected.request_id
+ FROM selected_episodes ep GROUP BY ep.request_id
 ), movie_progress AS (
- SELECT subject_id,MAX(progress) AS progress FROM grabs
+ SELECT subject_id,MAX(progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait FROM grabs g
  WHERE subject_type='movie' AND subject_id IN (SELECT subject_id FROM selected_movies)
    AND state IN ('pending','downloading','completed','importing') GROUP BY subject_id
 ), series_progress AS (
- SELECT selected.request_id,MAX(g.progress) AS progress FROM grabs g JOIN episodes ep ON g.subject_type='episode' AND g.subject_id=ep.id
- JOIN selected_series selected ON selected.subject_id=ep.series_id
- WHERE g.state IN ('pending','downloading','completed','importing') AND (selected.monitor_mode<>'' OR selected.seasons_json='[]' OR ep.season IN (SELECT value FROM json_each(selected.seasons_json))) AND (NOT EXISTS(SELECT 1 FROM series_trials t WHERE t.request_id=selected.request_id AND t.decision<>'continue') OR EXISTS(SELECT 1 FROM series_trial_episodes te WHERE te.request_id=selected.request_id AND te.episode_id=ep.id)) GROUP BY selected.request_id
+ SELECT ep.request_id,MAX(g.progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait
+ FROM grabs g JOIN episodes anchor ON g.subject_type='episode' AND anchor.id=g.subject_id
+ JOIN selected_episodes ep ON ep.series_id=anchor.series_id AND ep.chosen_release_id=g.release_id
+ WHERE g.state IN ('pending','downloading','completed','importing')
+   AND ep.state IN ('grabbed','downloading','importing') GROUP BY ep.request_id
 )
 SELECT
  mr.id,mr.server_id,mr.user_id,mr.media_type,mr.tmdb_id,mr.title,mr.year,mr.requested_at,mr.monitor_mode,mr.subject_type,mr.subject_id,
@@ -247,10 +261,18 @@ SELECT
 	CASE WHEN mr.media_type='movie' THEN CASE WHEN m.state='imported' THEN 1 ELSE COALESCE(mp.progress,0) END
      WHEN e.imported=e.total AND COALESCE(e.total,0)>0 THEN 1 ELSE COALESCE(sp.progress,0) END,
  CASE WHEN mr.media_type='movie' THEN COALESCE(m.last_error,'') ELSE COALESCE(e.last_error,'') END,
+ CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
+      WHEN mr.media_type='movie' AND m.state IN ('grabbed','downloading','importing') THEN COALESCE(mp.download_wait,0)
+      WHEN sr.status='following' THEN COALESCE(sp.download_wait,0)
+      ELSE 0 END,
  CASE WHEN mr.media_type='movie' THEN m.next_search_at ELSE e.next_search_at END,
  EXISTS(SELECT 1 FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1),
  COALESCE(e.imported,0),COALESCE(e.total,0),mr.cancelled_at,mr.seasons_json,
- COALESCE((SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 ORDER BY ji.item_id LIMIT 1),'')
+ COALESCE((SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 ORDER BY ji.item_id LIMIT 1),''),
+ CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
+      WHEN mr.media_type='movie' THEN EXISTS(SELECT 1 FROM grabs g WHERE `+recoverableMovieImport+`)
+      WHEN sr.status='following' THEN COALESCE(e.can_retry_import,0)
+      ELSE 0 END
 FROM selected_requests mr
 LEFT JOIN movies m ON mr.subject_type='movie' AND m.id=mr.subject_id AND m.tmdb_id=mr.tmdb_id
 LEFT JOIN series sr ON mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id
@@ -284,9 +306,10 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	var requested, seasons string
 	var next, cancelled sql.NullString
 	var available int
+	var downloadWait int
 
 	if err := row.Scan(append(requestIdentityTargets(&value, &requested), &value.State, &value.Progress, &value.LastError,
-		&next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID)...); err != nil {
+		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport)...); err != nil {
 		return value, err
 	}
 	if err := finishRequest(&value, requested, cancelled, seasons); err != nil {
@@ -295,6 +318,12 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	var err error
 	value.NextSearchAt, err = scanNullTime(next)
 	value.Available = available == 1
+	switch downloadWait {
+	case 1:
+		value.DownloadWait = "Waiting for the download client to confirm progress."
+	case 2:
+		value.DownloadWait = "Waiting for the completed download to become accessible."
+	}
 	return value, err
 }
 

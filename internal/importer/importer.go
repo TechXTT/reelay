@@ -35,6 +35,11 @@ type Service struct {
 	link  func(string, string) error
 }
 
+type importVideo struct {
+	source string
+	moved  model.ImportRecord
+}
+
 func New(opt Options) (*Service, error) {
 	if opt.Store == nil || opt.Config == nil {
 		return nil, errors.New("importer requires store and config")
@@ -68,11 +73,32 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 	if release.ParsedJSON != "" {
 		_ = json.Unmarshal([]byte(release.ParsedJSON), &parsed)
 	}
-	videos, err := collectVideos(grab.ContentPath, s.cfg.Library)
+	sources, err := collectVideos(grab.ContentPath, s.cfg.Library)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	missingContent := err
+	moves, err := s.store.Imports().MovedByGrab(ctx, grab.ID)
 	if err != nil {
 		return err
 	}
+	var videos = make([]importVideo, 0, len(sources)+len(moves))
+	var seen = make(map[string]bool, len(sources)+len(moves))
+
+	for _, source := range sources {
+		videos = append(videos, importVideo{source: source})
+		seen[source] = true
+	}
+	for _, move := range moves {
+		if !seen[move.SourcePath] {
+			videos = append(videos, importVideo{source: move.SourcePath, moved: move})
+			seen[move.SourcePath] = true
+		}
+	}
 	if len(videos) == 0 {
+		if missingContent != nil {
+			return missingContent
+		}
 		return fmt.Errorf("no qualifying video files under %s", grab.ContentPath)
 	}
 	if grab.SubjectType == model.SubjectEpisode {
@@ -82,7 +108,7 @@ func (s *Service) ImportCompleted(ctx context.Context, grabID int64) error {
 	return s.importMovieGrab(ctx, grab, parsed, videos)
 }
 
-func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback parser.Parsed, videos []string) error {
+func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback parser.Parsed, videos []importVideo) error {
 	lock, err := s.store.Locks().Acquire(ctx, grab.SubjectType, grab.SubjectID,
 		"importer", 10*time.Minute)
 	if err != nil {
@@ -95,7 +121,8 @@ func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback
 		return err
 	}
 	var primaryPath, quality string
-	for _, source := range videos {
+	for _, video := range videos {
+		var source = video.source
 		var fileParsed = parseSource(source, fallback)
 		var values = templateValues(fileParsed, strings.ToLower(filepath.Ext(source)))
 
@@ -106,7 +133,8 @@ func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback
 		if err != nil {
 			return err
 		}
-		if err := s.importFile(ctx, grab, grab.SubjectID, source, dest); err != nil {
+		dest, err = s.finishVideo(ctx, grab, grab.SubjectID, video, dest)
+		if err != nil {
 			return err
 		}
 		primaryPath = dest
@@ -123,13 +151,16 @@ func (s *Service) importMovieGrab(ctx context.Context, grab model.Grab, fallback
 	return nil
 }
 
-type episodeImportResult struct {
-	path    string
-	quality string
-}
-
 func (s *Service) importEpisodeGrab(ctx context.Context, grab model.Grab,
-	release model.StoredRelease, fallback parser.Parsed, videos []string) error {
+	release model.StoredRelease, fallback parser.Parsed, videos []importVideo) error {
+	type episodeImportResult struct {
+		path    string
+		quality string
+		err     error
+	}
+	var failures []error
+	var primary string
+
 	episodes, err := s.store.Episodes().ActiveByRelease(ctx, release.ID)
 	if err != nil {
 		return err
@@ -142,13 +173,17 @@ func (s *Service) importEpisodeGrab(ctx context.Context, grab model.Grab,
 		return err
 	}
 	results := make(map[int64]episodeImportResult, len(episodes))
-	for _, source := range videos {
+	for _, video := range videos {
+		var source = video.source
 		var fileParsed = parseSource(source, fallback)
-		var episode, ok = matchingEpisode(fileParsed, episodes)
+		var episode, ok = matchingEpisode(fileParsed, episodes, !fallback.IsSeasonPack && len(fallback.Episodes) <= 1)
 
 		if !ok {
 			// A pack may contain specials or unmonitored episodes. Downloading a
 			// pack never grants permission to add those files to the library.
+			continue
+		}
+		if video.moved.DestPath != "" && video.moved.SubjectID != episode.ID {
 			continue
 		}
 		values := templateValues(fileParsed, strings.ToLower(filepath.Ext(source)))
@@ -161,44 +196,57 @@ func (s *Service) importEpisodeGrab(ctx context.Context, grab model.Grab,
 		}
 		dest, err := destination(source, s.cfg.Library.TVRoot, s.cfg.Library.TVFolderTemplate,
 			fileTemplate, s.cfg.Library.MaxPathLength, values)
+		if err == nil {
+			dest, err = s.finishVideo(ctx, grab, episode.ID, video, dest)
+		}
 		if err != nil {
-			return err
+			results[episode.ID] = episodeImportResult{err: err}
+			continue
 		}
-		if err := s.importFile(ctx, grab, episode.ID, source, dest); err != nil {
-			return err
-		}
-		results[episode.ID] = episodeImportResult{path: dest, quality: qualityLabel(fileParsed)}
-	}
-	for _, episode := range episodes {
-		if results[episode.ID].path == "" {
-			return fmt.Errorf("download contains no matching file for S%02dE%02d",
-				episode.Season, episode.Number)
+		if results[episode.ID].err == nil {
+			results[episode.ID] = episodeImportResult{path: dest, quality: qualityLabel(fileParsed)}
 		}
 	}
 	for _, episode := range episodes {
 		result := results[episode.ID]
-		if err := s.store.Transitions().MarkImported(ctx, model.SubjectEpisode,
-			episode.ID, result.path, result.quality, "media imported from shared grab"); err != nil {
-			return err
+		switch {
+		case result.err != nil:
+			failures = append(failures, fmt.Errorf("S%02dE%02d: %w", episode.Season, episode.Number, result.err))
+		case result.path == "":
+			failures = append(failures, fmt.Errorf("download contains no matching file for S%02dE%02d", episode.Season, episode.Number))
+		default:
+			if err := s.store.Transitions().MarkImported(ctx, model.SubjectEpisode,
+				episode.ID, result.path, result.quality, "media imported from shared grab"); err != nil {
+				failures = append(failures, err)
+			} else if primary == "" || episode.ID == grab.SubjectID {
+				primary = result.path
+			}
 		}
 	}
-	primary := results[grab.SubjectID].path
-	if primary == "" {
-		primary = results[episodes[0].ID].path
+	if primary != "" {
+		s.postWebhook(grab, primary)
 	}
-	s.postWebhook(grab, primary)
-	return nil
+	return errors.Join(failures...)
 }
 
-func matchingEpisode(parsed parser.Parsed, episodes []model.Episode) (model.Episode, bool) {
-	if parsed.Season > 0 && parsed.FirstEpisode() > 0 {
+func matchingEpisode(parsed parser.Parsed, episodes []model.Episode, allowSingleFallback bool) (model.Episode, bool) {
+	if parsed.FirstEpisode() > 0 {
 		for _, episode := range episodes {
 			if parsed.CoversEpisode(episode.Season, episode.Number) {
 				return episode, true
 			}
 		}
+		return model.Episode{}, false
 	}
-	if len(episodes) == 1 {
+	if parsed.AbsoluteEp > 0 {
+		for _, episode := range episodes {
+			if episode.AbsoluteNumber == parsed.AbsoluteEp {
+				return episode, true
+			}
+		}
+		return model.Episode{}, false
+	}
+	if allowSingleFallback && len(episodes) == 1 {
 		return episodes[0], true
 	}
 	return model.Episode{}, false
@@ -222,12 +270,38 @@ func qualityLabel(p parser.Parsed) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
+func (s *Service) finishVideo(ctx context.Context, grab model.Grab, subjectID int64, video importVideo, dest string) (string, error) {
+	if video.moved.DestPath == "" {
+		return dest, s.importFile(ctx, grab, subjectID, video.source, dest)
+	}
+	var root = rootFor(s.cfg, grab.SubjectType)
+
+	dest = video.moved.DestPath
+	if video.moved.SubjectID != subjectID {
+		return "", fmt.Errorf("recorded move for %s belongs to a different subject", video.source)
+	}
+	if err := ensureInside(root, dest); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(dest)
+	if err != nil {
+		return "", fmt.Errorf("inspect recorded move %s: %w", dest, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != video.moved.SizeBytes {
+		return "", fmt.Errorf("recorded move has changed: %s", dest)
+	}
+	return dest, s.carrySubtitles(video.source, dest, root)
+}
+
 func (s *Service) importFile(ctx context.Context, grab model.Grab, subjectID int64, source, dest string) error {
 	var root = rootFor(s.cfg, grab.SubjectType)
 	var method, replaced, skipped, err = s.land(source, dest, root)
 
-	if err != nil || skipped {
+	if err != nil {
 		return err
+	}
+	if skipped {
+		return s.carrySubtitles(source, dest, root)
 	}
 	info, err := os.Stat(dest)
 	if err != nil {

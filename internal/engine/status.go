@@ -18,33 +18,51 @@ func (e *Engine) StatusOnce(ctx context.Context) error {
 	if err != nil || len(grabs) == 0 {
 		return err
 	}
-	hashes := make([]string, len(grabs))
-	for i, grab := range grabs {
-		hashes[i] = grab.TorrentHash
+	var pending []model.Grab
+	var hashes []string
+	var errs []error
+
+	for _, grab := range grabs {
+		if grab.ContentPath != "" && (grab.State == model.GrabCompleted || grab.State == model.GrabImporting) {
+			if err := e.completeGrab(ctx, grab); err != nil {
+				errs = append(errs, fmt.Errorf("grab %d: %w", grab.ID, err))
+			}
+			continue
+		}
+		pending = append(pending, grab)
+		hashes = append(hashes, grab.TorrentHash)
+	}
+	if len(hashes) == 0 {
+		return errors.Join(errs...)
 	}
 	statuses, err := e.downloader.Status(ctx, hashes)
 	if err != nil {
-		return fmt.Errorf("poll downloader: %w", err)
+		errs = append(errs, fmt.Errorf("poll downloader: %w", err))
+		if ctx.Err() == nil {
+			for _, grab := range pending {
+				errs = append(errs, e.recordDownloadWait(ctx, grab, downloadClientUnavailable+err.Error()))
+			}
+		}
+		return errors.Join(errs...)
 	}
 	downloadsPaused, err := e.DownloadsPaused(ctx)
 	if err != nil {
-		return fmt.Errorf("read download pause state: %w", err)
+		return errors.Join(append(errs, fmt.Errorf("read download pause state: %w", err))...)
 	}
-	covered, err := e.coveredEpisodesByRelease(ctx, grabs)
+	covered, err := e.coveredEpisodesByRelease(ctx, pending)
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
 	byHash := make(map[string]downloader.TorrentStatus, len(statuses))
 	for _, status := range statuses {
 		byHash[strings.ToLower(status.Hash)] = status
 	}
-	var errs []error
-	for _, grab := range grabs {
+	for _, grab := range pending {
 		var grabErr error
 
 		status, ok := byHash[strings.ToLower(grab.TorrentHash)]
 		if ok {
-			if e.pathMapper != nil {
+			if status.ContentPath != "" && e.pathMapper != nil {
 				status.ContentPath = e.pathMapper.Local(status.ContentPath)
 			}
 			grabErr = e.updateGrabStatus(ctx, grab, covered[grab.ReleaseID], status, downloadsPaused)
@@ -74,6 +92,13 @@ func (e *Engine) coveredEpisodesByRelease(ctx context.Context, grabs []model.Gra
 // timeout since the last observation before recovering the grab.
 func (e *Engine) handleMissingTorrent(ctx context.Context, grab model.Grab, downloadsPaused bool) error {
 	now := e.clock.Now().UTC()
+	if grab.State == model.GrabCompleted || grab.State == model.GrabImporting {
+		return e.recordDownloadWait(ctx, grab, "download completed, but its source path is unavailable")
+	}
+	if strings.HasPrefix(grab.LastError, downloadClientUnavailable) {
+		return e.recordDownloadWait(ctx, grab,
+			"torrent was not found after the download client recovered")
+	}
 	if downloadsPaused {
 		// Persist the pause observation so a torrent that vanished while
 		// paused gets a full disappearance grace after the operator resumes.
@@ -87,12 +112,19 @@ func (e *Engine) handleMissingTorrent(ctx context.Context, grab model.Grab, down
 	if now.Sub(lastSeen) < e.cfg.Downloader.StallTimeout.Duration {
 		return nil
 	}
-	if grab.State == model.GrabCompleted || grab.State == model.GrabImporting {
-		return e.completeGrab(ctx, grab)
-	}
 	e.metrics.grabFailures.Inc("vanished")
 	return e.failGrab(ctx, grab,
 		"torrent disappeared from download client before completion", true)
+}
+
+func (e *Engine) recordDownloadWait(ctx context.Context, grab model.Grab, reason string) error {
+	if err := e.store.Grabs().RecordDownloadWait(ctx, grab.ID, reason); err != nil {
+		return err
+	}
+	if grab.LastError != reason {
+		e.publishProgress(grab, string(grab.State))
+	}
+	return nil
 }
 
 func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered []model.Episode,
@@ -100,21 +132,31 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered 
 	now := e.clock.Now().UTC()
 	queuedOrMaintenance := status.State == downloader.StateMaintenance || status.State == downloader.StateQueued
 	idle := queuedOrMaintenance || status.State == downloader.StatePaused
-	if status.Progress > grab.Progress {
+	transferActive := status.State == downloader.StateDownloading || status.State == downloader.StateStalled
+	if status.Failed() || status.State == downloader.StateUnknown {
+		detail := status.ErrorMessage
+		if detail == "" {
+			detail = "client reported torrent state " + status.State
+		}
+		return e.recordDownloadWait(ctx, grab, "download needs attention: "+detail)
+	}
+	if !status.Complete() && (grab.State == model.GrabCompleted || grab.State == model.GrabImporting) {
+		return e.recordDownloadWait(ctx, grab, "waiting for the download client to report the completed source path")
+	}
+	if status.Progress > grab.Progress || grab.LastError != "" {
 		grab.ProgressedAt = now
 	}
+	grab.LastError = ""
 	grab.Progress = status.Progress
-	grab.ContentPath = status.ContentPath
-	if status.Failed() && !downloadsPaused {
-		e.metrics.grabFailures.Inc("client_error")
-		return e.failGrab(ctx, grab, "download client error: "+status.ErrorMessage, true)
+	if status.ContentPath != "" {
+		grab.ContentPath = status.ContentPath
 	}
 	if idle || downloadsPaused {
 		// These states can legitimately leave the byte count unchanged. Refresh
 		// the timer so recovery starts only after the torrent can transfer again.
 		grab.ProgressedAt = now
 	}
-	if !idle && !downloadsPaused && !status.Complete() && status.Progress < 1 &&
+	if transferActive && !downloadsPaused && status.Progress < 1 &&
 		now.Sub(grab.ProgressedAt) >= e.cfg.Downloader.StallTimeout.Duration {
 		e.metrics.grabFailures.Inc("stalled")
 		return e.failGrab(ctx, grab, "torrent made no progress before stall timeout", true)
@@ -122,8 +164,7 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered 
 	if status.Complete() {
 		return e.completeGrab(ctx, grab)
 	}
-	if status.State == downloader.StateDownloading || status.State == downloader.StateStalled ||
-		status.State == downloader.StatePaused {
+	if transferActive || status.State == downloader.StatePaused {
 		grab.State = model.GrabDownloading
 		if err := e.store.Grabs().Update(ctx, grab); err != nil {
 			return err
@@ -159,8 +200,11 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			return err
 		}
 		if len(covered) == 0 {
-			state, getErr := e.itemState(ctx, grab.SubjectType, grab.SubjectID)
-			if getErr != nil || state != model.StateImported {
+			hasImported, hasFailed, err := e.store.Episodes().ImportOutcomes(ctx, grab)
+			if err != nil {
+				return err
+			}
+			if !hasImported && !(grab.State == model.GrabImporting && hasFailed) {
 				return fmt.Errorf("completed episode grab has no active covered episodes")
 			}
 			imported = true
@@ -212,14 +256,8 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			e.metrics.imports.Inc("failed")
 			cleanup := context.WithoutCancel(ctx)
 
-			grab.State, grab.LastError = model.GrabFailed, err.Error()
-			_ = e.store.Grabs().Update(cleanup, grab)
-			for _, id := range subjectIDs {
-				state, stateErr := e.itemState(cleanup, grab.SubjectType, id)
-				if stateErr == nil && state == model.StateImporting {
-					_, _ = e.store.Transitions().Transition(cleanup, grab.SubjectType,
-						id, model.StateImportFailed, "import failed", err.Error())
-				}
+			if failErr := e.store.Grabs().FailImport(cleanup, grab, subjectIDs, err.Error()); failErr != nil {
+				return errors.Join(err, fmt.Errorf("record import failure: %w", failErr))
 			}
 			e.publishGrabState(grab, subjectIDs, string(model.GrabFailed))
 			return err
@@ -227,10 +265,19 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 		e.metrics.imports.Inc("ok")
 	}
 	grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""
+	if grab.SubjectType == model.SubjectEpisode {
+		_, hasFailed, err := e.store.Episodes().ImportOutcomes(ctx, grab)
+		if err != nil {
+			return err
+		}
+		if hasFailed {
+			grab.State, grab.LastError = model.GrabFailed, "some episodes still need import"
+		}
+	}
 	if err := e.store.Grabs().Update(ctx, grab); err != nil {
 		return err
 	}
-	e.publishGrabState(grab, subjectIDs, string(model.GrabImported))
+	e.publishGrabState(grab, subjectIDs, string(grab.State))
 	return nil
 }
 

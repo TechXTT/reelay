@@ -80,7 +80,7 @@ func (r infoRow) toStatus() downloader.TorrentStatus {
 	if r.CompletionOn > 0 {
 		st.CompletedAt = time.Unix(r.CompletionOn, 0).UTC()
 	}
-	if st.State == downloader.StateError {
+	if st.State == downloader.StateError || st.State == downloader.StateUnknown {
 		st.ErrorMessage = errorDetail(r.State)
 	}
 	return st
@@ -124,7 +124,7 @@ func clampProgress(p float64) float64 {
 // completion the torrent is on, which is precisely what the engine needs.
 func normaliseState(s string) string {
 	switch s {
-	// Failed outright.
+	// Client-side states in which transfer cannot continue without recovery.
 	case "error", "missingFiles", "unknown":
 		return downloader.StateError
 
@@ -157,9 +157,7 @@ func normaliseState(s string) string {
 		return downloader.StatePaused
 
 	default:
-		// An unrecognised state is reported as unknown rather than guessed at.
-		// Guessing "downloading" would make the engine wait forever on
-		// something that will never finish.
+		// An unrecognised state gives no evidence that the torrent has stalled.
 		return downloader.StateUnknown
 	}
 }
@@ -167,7 +165,7 @@ func normaliseState(s string) string {
 func errorDetail(rawState string) string {
 	switch rawState {
 	case "missingFiles":
-		return "the download client reports missing files; the data was moved or deleted outside the client"
+		return "the download client reports missing files at the configured path"
 	case "error":
 		return "the download client reports an error on this torrent"
 	case "unknown":

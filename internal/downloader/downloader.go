@@ -84,7 +84,7 @@ type TorrentStatus struct {
 	AddedAt     time.Time `json:"added_at,omitempty"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 
-	// ErrorMessage is set when State is StateError.
+	// ErrorMessage describes StateError or StateUnknown when the client has details.
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
@@ -102,7 +102,7 @@ func (s TorrentStatus) Complete() bool {
 	}
 }
 
-// Failed reports a state the engine should give up on rather than wait out.
+// Failed reports a client-side torrent error whose cause may be recoverable.
 func (s TorrentStatus) Failed() bool { return s.State == StateError }
 
 func (s TorrentStatus) String() string {

@@ -101,13 +101,15 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		values[i].GeneratedAt = now
 		values[i].ExpiresAt = now.Add(s.cfg.Expiry.Duration)
 	}
-	if err := repo.ReplaceOffered(ctx, serverID, userID, mediaType, values); err != nil {
-		return err
-	}
+	// The snapshot is stored in the same transaction as the list; an empty
+	// list has no top ten to measure.
 	if len(values) > 0 {
-		if err := repo.RecordConcentration(ctx, serverID, userID, Concentration(mediaType, now, values)); err != nil {
-			return err
-		}
+		err = repo.ReplaceGenerated(ctx, serverID, userID, mediaType, values, Concentration(mediaType, now, values))
+	} else {
+		err = repo.ReplaceOffered(ctx, serverID, userID, mediaType, values)
+	}
+	if err != nil {
+		return err
 	}
 	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
 	return nil

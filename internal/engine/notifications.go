@@ -219,10 +219,11 @@ type notificationMessage struct {
 
 func availabilityMessage(payload, format string) (notificationMessage, error) {
 	var event struct {
-		Title     string `json:"title"`
-		MediaType string `json:"media_type"`
-		Episode   int    `json:"episode"`
-		Season    int    `json:"season"`
+		Title        string `json:"title"`
+		MediaType    string `json:"media_type"`
+		Episode      int    `json:"episode"`
+		EpisodeCount int    `json:"episode_count"`
+		Season       int    `json:"season"`
 	}
 
 	if format != "ntfy" {
@@ -242,7 +243,10 @@ func availabilityMessage(payload, format string) (notificationMessage, error) {
 
 	// Only a plugin-confirmed episode carries an episode number; a series event
 	// without one means only the series parent has been seen.
-	if event.MediaType == "series" && event.Episode > 0 {
+	if event.MediaType == "series" && event.EpisodeCount > 1 {
+		message.title = "Reelay: new episodes ready"
+		message.body = fmt.Sprintf("%s: %d episodes are ready to watch in Jellyfin, starting with S%02dE%02d.", event.Title, event.EpisodeCount, event.Season, event.Episode)
+	} else if event.MediaType == "series" && event.Episode > 0 {
 		message.body = fmt.Sprintf("%s S%02dE%02d is ready to watch in Jellyfin.", event.Title, event.Season, event.Episode)
 	} else if event.MediaType == "series" {
 		message.title = "Reelay: series listed in Jellyfin"

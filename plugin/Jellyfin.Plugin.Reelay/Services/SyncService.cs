@@ -58,7 +58,7 @@ public sealed class SyncService
             var catalogIds = items.Select(static item => item.ItemId).ToHashSet(StringComparer.Ordinal);
             foreach (var user in users)
             {
-                if (!await SyncUserLibraryAsync(config.ServerId, user, catalogIds, cancellationToken).ConfigureAwait(false))
+                if (!await SyncUserLibraryAsync(config.ServerId, user, catalogIds, catalog.UserPlayedSupported, cancellationToken).ConfigureAwait(false))
                 {
                     _logger.LogDebug("Reelay does not support per-user libraries; skipping library visibility");
                     break;
@@ -170,20 +170,23 @@ public sealed class SyncService
 
     // Reports which catalog items the user can access in Jellyfin, excluding
     // Reelay's virtual libraries. Returns false when Reelay lacks the endpoint.
-    private async Task<bool> SyncUserLibraryAsync(string serverId, JellyfinUser user, IReadOnlySet<string> catalogIds, CancellationToken cancellationToken)
+    private async Task<bool> SyncUserLibraryAsync(string serverId, JellyfinUser user, IReadOnlySet<string> catalogIds, bool playedSupported, CancellationToken cancellationToken)
     {
         var userId = user.Id.ToString("N");
         var syncToken = Guid.NewGuid().ToString("N");
         var visible = _libraryManager.GetItemList(new InternalItemsQuery(user) { IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series }, Recursive = true, IsVirtualItem = false })
-            .Where(item => !_virtual.IsManagedPath(item.Path))
-            .Select(static item => item.Id.ToString("N"))
-            .Where(catalogIds.Contains)
+            .Where(item => !_virtual.IsManagedPath(item.Path) && catalogIds.Contains(item.Id.ToString("N")))
             .ToList();
         foreach (var chunk in visible.Chunk(BatchSize))
         {
-            if (!await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, false, chunk), cancellationToken).ConfigureAwait(false)) return false;
+            var ids = chunk.Select(static item => item.Id.ToString("N")).ToList();
+            // Played state is current, unlike the append-only activity events.
+            var played = playedSupported
+                ? chunk.Where(item => _userDataManager.GetUserData(user, item)?.Played == true).Select(static item => item.Id.ToString("N")).ToList()
+                : null;
+            if (!await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, false, ids, played), cancellationToken).ConfigureAwait(false)) return false;
         }
-        return await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, true, Array.Empty<string>()), cancellationToken).ConfigureAwait(false);
+        return await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, true, Array.Empty<string>(), playedSupported ? Array.Empty<string>() : null), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<SyncResponse?> SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)

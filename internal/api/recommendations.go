@@ -81,7 +81,7 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 			}})
 		}
 	}
-	return reply(w, r, http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed, "activity_completion_supported": true, "user_library_supported": true})
+	return reply(w, r, http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed, "activity_completion_supported": true, "user_library_supported": true, "user_played_supported": true})
 }
 
 func (s *Server) handleJellyfinEvents(w http.ResponseWriter, r *http.Request) error {

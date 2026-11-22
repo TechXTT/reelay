@@ -22,6 +22,9 @@ type jellyfinUserItemsRequest struct {
 	SyncToken string   `json:"sync_token"`
 	Complete  bool     `json:"complete"`
 	ItemIDs   []string `json:"item_ids"`
+	// PlayedItemIDs is the subset of ItemIDs the user has finished. A plugin
+	// that reports played state sends it on every batch, empty when none.
+	PlayedItemIDs []string `json:"played_item_ids"`
 }
 
 // handleJellyfinUserItems receives one batch of the catalog items a Jellyfin
@@ -41,7 +44,7 @@ func (s *Server) handleJellyfinUserItems(w http.ResponseWriter, r *http.Request)
 	if strings.TrimSpace(req.ServerID) == "" || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.SyncToken) == "" {
 		return BadRequest("server_id, user_id and sync_token are required")
 	}
-	staged, err := s.store.Tonight().StageUserItems(r.Context(), req.ServerID, req.UserID, req.SyncToken, req.ItemIDs)
+	staged, err := s.store.Tonight().StageUserItems(r.Context(), req.ServerID, req.UserID, req.SyncToken, req.ItemIDs, req.PlayedItemIDs, req.PlayedItemIDs != nil)
 	if errors.Is(err, store.ErrNotFound) {
 		return Conflict("Jellyfin user %s has not been synchronized", req.UserID)
 	}

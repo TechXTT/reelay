@@ -135,9 +135,10 @@ const requesterSeesItem = `(mr.media_type<>'movie'
 const parentAvailability = ` AND NOT (mr.media_type='series' AND EXISTS(SELECT 1 FROM kv WHERE kv.key='jellyfin.episode_confirmation:'||mr.server_id AND kv.value='1')) AND ` + requesterSeesItem
 
 // queueTitleAvailability queues the title-present events for the requests that
-// match filter (a condition on mr with filterArgs). The per-user event goes
-// first, and only while no global event exists, so a destination saved after
-// the title became available does not replay it.
+// match filter (a condition on mr with filterArgs), at most one per request in
+// each outbox. The per-user event goes first, and only while no global event
+// exists, so a destination saved after the title became available does not
+// replay it.
 func queueTitleAvailability(ctx context.Context, tx *sql.Tx, now, filter string, filterArgs ...any) error {
 	const payload = `SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
  FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1`
@@ -146,13 +147,14 @@ func queueTitleAvailability(ctx context.Context, tx *sql.Tx, now, filter string,
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
  `+payload+`
  JOIN notification_destinations nd ON nd.server_id=mr.server_id AND nd.user_id=mr.user_id AND nd.enabled=1
- WHERE `+filter+` AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)`+parentAvailability+` GROUP BY mr.id`, args...)
+ WHERE `+filter+` AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)
+   AND NOT EXISTS(SELECT 1 FROM user_availability_outbox uo WHERE uo.request_id=mr.id)`+parentAvailability+` GROUP BY mr.id`, args...)
 	if err != nil {
 		return fmt.Errorf("queue user title availability: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
  `+payload+`
- WHERE `+filter+` AND mr.cancelled_at IS NULL`+parentAvailability+` GROUP BY mr.id`, args...)
+ WHERE `+filter+` AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)`+parentAvailability+` GROUP BY mr.id`, args...)
 	if err != nil {
 		return fmt.Errorf("queue title availability: %w", err)
 	}

@@ -102,10 +102,10 @@ func (r *RecommendationRepository) PendingEpisodeConfirmations(ctx context.Conte
 // ConfirmEpisodes stores confirmations that match one of the user's current
 // candidates, refreshes ones it already holds, and withdraws the user's
 // confirmations for missing episodes. It returns how many confirmations were
-// new and how many were withdrawn. A request's first confirmation queues its
-// availability event for the lowest confirmed episode; each outbox holds at
-// most one event per request, so rechecks and repeated syncs never notify
-// again, even after a withdrawn episode is confirmed anew.
+// new and how many were withdrawn. Each batch of new confirmations queues one
+// availability event per request covering the episodes no earlier event
+// announced, so rechecks, repeated syncs and re-confirmed episodes never
+// notify again.
 func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID, userID string, confirmations []EpisodeConfirmation, missing []EpisodeKey) (int, int, error) {
 	var confirmed int
 	var withdrawn int
@@ -173,26 +173,37 @@ func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID
 	return confirmed, withdrawn, err
 }
 
-// queueEpisodeAvailability mirrors CompleteSync: the per-user event first, and
-// only while no global event exists, so a destination saved after the request
-// became available does not replay it.
+// queueEpisodeAvailability queues one event for the request's confirmed
+// episodes that no event has covered yet, naming the lowest of them and how many
+// there are, and then records them as covered so no episode is announced twice.
+// Unlike title events these need no replay guard: a confirmation is itself the
+// moment the episode is first seen, so the requester's current destination gets
+// every batch, including the first.
 func queueEpisodeAvailability(ctx context.Context, tx *sql.Tx, requestID int64, now string) error {
-	const first = `FROM media_requests mr JOIN jellyfin_episode_confirmations c ON c.request_id=mr.id
- AND c.rowid=(SELECT x.rowid FROM jellyfin_episode_confirmations x WHERE x.request_id=mr.id ORDER BY x.season,x.number LIMIT 1)`
-	const payload = `SELECT mr.id,c.item_id,json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',c.item_id,'season',c.season,'episode',c.number),?,? `
+	const uncovered = `x.request_id=mr.id AND NOT EXISTS(SELECT 1 FROM episode_notifications n WHERE n.request_id=x.request_id AND n.season=x.season AND n.number=x.number)`
+	const event = `SELECT mr.id,c.item_id,json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',c.item_id,'season',c.season,'episode',c.number,
+ 'episode_count',(SELECT COUNT(*) FROM jellyfin_episode_confirmations x WHERE ` + uncovered + `)),?,?
+ FROM media_requests mr JOIN jellyfin_episode_confirmations c ON c.request_id=mr.id
+ AND c.rowid=(SELECT x.rowid FROM jellyfin_episode_confirmations x WHERE ` + uncovered + ` ORDER BY x.season,x.number LIMIT 1)`
 
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
- `+payload+first+`
+ `+event+`
  JOIN notification_destinations nd ON nd.server_id=mr.server_id AND nd.user_id=mr.user_id AND nd.enabled=1
- WHERE mr.id=? AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)`, now, now, requestID)
+ WHERE mr.id=? AND mr.cancelled_at IS NULL`, now, now, requestID)
 	if err != nil {
 		return fmt.Errorf("queue user episode availability: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
- `+payload+first+`
+ `+event+`
  WHERE mr.id=? AND mr.cancelled_at IS NULL`, now, now, requestID)
 	if err != nil {
 		return fmt.Errorf("queue episode availability: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO episode_notifications(request_id,season,number,notified_at)
+ SELECT x.request_id,x.season,x.number,? FROM jellyfin_episode_confirmations x JOIN media_requests mr ON mr.id=x.request_id
+ WHERE mr.id=? AND mr.cancelled_at IS NULL AND `+uncovered, now, requestID)
+	if err != nil {
+		return fmt.Errorf("record notified episodes: %w", err)
 	}
 	return nil
 }

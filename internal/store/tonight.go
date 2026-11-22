@@ -54,8 +54,13 @@ const visibleItemSQL = `EXISTS(SELECT 1 FROM jellyfin_user_libraries l JOIN jell
  ON v.server_id=l.server_id AND v.user_id=l.user_id AND v.sync_token=l.sync_token
  WHERE l.server_id=%[1]s.server_id AND l.user_id=%[1]s.user_id AND v.item_id=%[1]s.item_id)`
 
-const completedSQL = `EXISTS(SELECT 1 FROM jellyfin_activity a WHERE a.server_id=%[1]s.server_id AND a.user_id=%[1]s.user_id
- AND a.item_id=%[1]s.item_id AND a.event_type='completed')`
+// completedSQL prefers the played state reported with the user's current
+// library pass and falls back to watch activity for passes without it.
+const completedSQL = `COALESCE((SELECT CASE WHEN pv.played_reported=1 THEN pv.played END FROM jellyfin_user_libraries pl JOIN jellyfin_user_items pv
+ ON pv.server_id=pl.server_id AND pv.user_id=pl.user_id AND pv.sync_token=pl.sync_token
+ WHERE pl.server_id=%[1]s.server_id AND pl.user_id=%[1]s.user_id AND pv.item_id=%[1]s.item_id),
+ EXISTS(SELECT 1 FROM jellyfin_activity a WHERE a.server_id=%[1]s.server_id AND a.user_id=%[1]s.user_id
+ AND a.item_id=%[1]s.item_id AND a.event_type='completed'))`
 
 func userExists(ctx context.Context, tx *sql.Tx, serverID, userID string) error {
 	var exists bool
@@ -72,10 +77,16 @@ func userExists(ctx context.Context, tx *sql.Tx, serverID, userID string) error 
 
 // StageUserItems records catalog items the user can access under syncToken.
 // Items the catalog does not know are skipped. Staged rows stay invisible
-// until CompleteUserItems makes syncToken current. It returns how many new
-// rows were staged.
-func (r *TonightRepository) StageUserItems(ctx context.Context, serverID, userID, syncToken string, itemIDs []string) (int, error) {
+// until CompleteUserItems makes syncToken current. When playedReported is set,
+// played names the staged items the user has finished and the rest are
+// unfinished. It returns how many new rows were staged.
+func (r *TonightRepository) StageUserItems(ctx context.Context, serverID, userID, syncToken string, itemIDs []string, played []string, playedReported bool) (int, error) {
 	var staged int64
+	var finished = make(map[string]bool, len(played))
+
+	for _, itemID := range played {
+		finished[itemID] = true
+	}
 
 	if len(itemIDs) == 0 {
 		return 0, nil
@@ -85,8 +96,8 @@ func (r *TonightRepository) StageUserItems(ctx context.Context, serverID, userID
 			return err
 		}
 		for _, itemID := range itemIDs {
-			result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO jellyfin_user_items(server_id,user_id,sync_token,item_id)
-SELECT server_id,?,?,item_id FROM jellyfin_items WHERE server_id=? AND item_id=?`, userID, syncToken, serverID, itemID)
+			result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO jellyfin_user_items(server_id,user_id,sync_token,item_id,played,played_reported)
+SELECT server_id,?,?,item_id,?,? FROM jellyfin_items WHERE server_id=? AND item_id=?`, userID, syncToken, finished[itemID], playedReported, serverID, itemID)
 			if err != nil {
 				return fmt.Errorf("stage jellyfin user item %s: %w", itemID, err)
 			}

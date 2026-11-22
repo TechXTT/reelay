@@ -11,14 +11,17 @@ public sealed record SyncRequest(
 
 public sealed record SyncResponse(
     [property: JsonPropertyName("activity_completion_supported")] bool ActivityCompletionSupported,
-    [property: JsonPropertyName("user_library_supported")] bool UserLibrarySupported);
+    [property: JsonPropertyName("user_library_supported")] bool UserLibrarySupported,
+    [property: JsonPropertyName("user_played_supported")] bool UserPlayedSupported);
 
 public sealed record UserItemsRequest(
     [property: JsonPropertyName("server_id")] string ServerId,
     [property: JsonPropertyName("user_id")] string UserId,
     [property: JsonPropertyName("sync_token")] string SyncToken,
     [property: JsonPropertyName("complete")] bool Complete,
-    [property: JsonPropertyName("item_ids")] IReadOnlyList<string> ItemIds);
+    [property: JsonPropertyName("item_ids")] IReadOnlyList<string> ItemIds,
+    // Omitted for Reelay versions that do not accept it (their decoding is strict).
+    [property: JsonPropertyName("played_item_ids"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? PlayedItemIds);
 
 public sealed record SyncUser(
     [property: JsonPropertyName("server_id")] string ServerId,

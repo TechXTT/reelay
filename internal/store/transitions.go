@@ -74,7 +74,16 @@ func (r *TransitionRepository) SearchRetryLocked(ctx context.Context, lock *Item
 	if lock == nil {
 		return model.StateTransition{}, errors.New("search retry requires an item lock")
 	}
-	return r.rescheduleSearch(ctx, lock, next, reason, detail, terminal, true)
+	return r.rescheduleSearch(ctx, lock, next, reason, detail, terminal, true, nil)
+}
+
+// SearchRetryWithBudgetLocked schedules a regular retry after subtracting holds from search age.
+func (r *TransitionRepository) SearchRetryWithBudgetLocked(ctx context.Context, lock *ItemLock, next time.Time,
+	reason, detail string, giveUpAfter time.Duration) (model.StateTransition, error) {
+	if lock == nil {
+		return model.StateTransition{}, errors.New("search retry requires an item lock")
+	}
+	return r.rescheduleSearch(ctx, lock, next, reason, detail, false, true, &giveUpAfter)
 }
 
 // HoldLocked returns a searching item to wanted (or imported, for an upgrade
@@ -85,20 +94,39 @@ func (r *TransitionRepository) HoldLocked(ctx context.Context, lock *ItemLock, n
 	if lock == nil {
 		return model.StateTransition{}, errors.New("search hold requires an item lock")
 	}
-	return r.rescheduleSearch(ctx, lock, next, reason, detail, false, false)
+	return r.rescheduleSearch(ctx, lock, next, reason, detail, false, false, nil)
 }
 
-func (r *TransitionRepository) rescheduleSearch(ctx context.Context, lock *ItemLock, next time.Time, reason, detail string, terminal, countAttempt bool) (model.StateTransition, error) {
+func (r *TransitionRepository) rescheduleSearch(ctx context.Context, lock *ItemLock, next time.Time,
+	reason, detail string, terminal, countAttempt bool, giveUpAfter *time.Duration) (model.StateTransition, error) {
 	now := r.s.nowUTC()
 	var out model.StateTransition
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
 		var table = itemTable(lock.Subject)
 		var from model.ItemState
 		var importedPath string
-		err := tx.QueryRowContext(ctx, `SELECT state, imported_path FROM `+table+` WHERE id=?`,
-			lock.ID).Scan(&from, &importedPath)
+		var firstWanted *time.Time
+		var firstWantedRaw sql.NullString
+
+		err := tx.QueryRowContext(ctx, `SELECT state, imported_path, first_wanted_at FROM `+table+` WHERE id=?`,
+			lock.ID).Scan(&from, &importedPath, &firstWantedRaw)
 		if err != nil {
 			return err
+		}
+		if importedPath == "" && (!countAttempt || giveUpAfter != nil) {
+			firstWanted, err = scanNullTime(firstWantedRaw)
+			if err != nil {
+				return err
+			}
+			if firstWanted != nil {
+				held, err := updateSearchHold(ctx, tx, lock, *firstWanted, now, !countAttempt)
+				if err != nil {
+					return err
+				}
+				if giveUpAfter != nil {
+					terminal = now.Sub(*firstWanted)-held >= *giveUpAfter
+				}
+			}
 		}
 		to := model.StateWanted
 		if importedPath != "" {

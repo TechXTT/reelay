@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
@@ -12,18 +11,17 @@ import (
 )
 
 type searchTarget struct {
-	subject     model.SubjectType
-	id          int64
-	seriesID    int64
-	want        model.Wanted
-	episodes    []model.Episode
-	profile     model.QualityProfile
-	runtime     int
-	attempts    int
-	firstWanted *time.Time
-	category    string
-	savePath    string
-	imported    *scoring.Imported
+	subject  model.SubjectType
+	id       int64
+	seriesID int64
+	want     model.Wanted
+	episodes []model.Episode
+	profile  model.QualityProfile
+	runtime  int
+	attempts int
+	category string
+	savePath string
+	imported *scoring.Imported
 }
 
 func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
@@ -56,7 +54,7 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 		out = append(out, searchTarget{subject: model.SubjectMovie, id: movie.ID,
 			want:    model.Wanted{Kind: model.SubjectMovie, Title: movie.Title, Year: movie.Year},
 			profile: p, runtime: movie.RuntimeMinutes, attempts: movie.SearchAttempts,
-			firstWanted: movie.FirstWantedAt, category: e.cfg.Downloader.CategoryMovies,
+			category: e.cfg.Downloader.CategoryMovies,
 			savePath: e.cfg.Downloader.SavePathMovies, imported: importedQuality(movie.ImportedQuality)})
 	}
 	type seriesSearchData struct {
@@ -98,7 +96,7 @@ func (e *Engine) dueTargets(ctx context.Context) ([]searchTarget, error) {
 				WantedEpisodes: cached.wantedNumbers[episode.Season]},
 			episodes: cached.episodes,
 			profile:  p, runtime: series.RuntimeMinutes, attempts: episode.SearchAttempts,
-			firstWanted: episode.FirstWantedAt, category: e.cfg.Downloader.CategoryTV,
+			category: e.cfg.Downloader.CategoryTV,
 			savePath: e.cfg.Downloader.SavePathTV, imported: importedQuality(episode.ImportedQuality)})
 	}
 	return out, nil

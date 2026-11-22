@@ -26,8 +26,8 @@ var (
 	// title that was available the whole time — a silent failure that would be
 	// very hard to diagnose from the outside.
 	//
-	// The engine therefore treats this as "inconclusive": advance the backoff,
-	// but do not count it toward the give-up deadline.
+	// The engine treats this result as an incomplete search and holds the
+	// give-up clock until it has another conclusive outcome.
 	ErrNoResults = errors.New("indexer returned its no-results marker")
 
 	// ErrUnhealthy means the circuit breaker is open and no request was made.

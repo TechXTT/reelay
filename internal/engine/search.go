@@ -38,16 +38,18 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	}
 
 	var recentReleases []indexer.Release
+	var recentErr error
+
 	if recent {
-		recentReleases, err = e.queryIndexers(ctx, indexer.Query{
+		recentReleases, recentErr = e.queryIndexers(ctx, indexer.Query{
 			Recent: true, Categories: indexer.VideoCategories(),
 		})
-		if errors.Is(err, indexer.ErrUnsupported) {
+		if errors.Is(recentErr, indexer.ErrUnsupported) {
 			e.log.Info("recent indexer query unsupported; loop disabled for this run")
 			return nil
 		}
-		if err != nil {
-			return err
+		if len(recentReleases) == 0 && recentErr != nil {
+			return recentErr
 		}
 	}
 
@@ -60,7 +62,7 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			*slot = e.searchGroup(ctx, group, recent, recentReleases)
+			*slot = e.searchGroup(ctx, group, recent, recentReleases, recentErr)
 		}()
 	}
 	wg.Wait()
@@ -71,7 +73,7 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 // reuses the feed already fetched; otherwise the group queries once with the
 // loosest seeder floor among its profiles.
 func (e *Engine) searchGroup(ctx context.Context, group []searchTarget, recent bool,
-	recentReleases []indexer.Release) error {
+	recentReleases []indexer.Release, recentErr error) error {
 	select {
 	case e.searchSem <- struct{}{}:
 		defer func() { <-e.searchSem }()
@@ -79,7 +81,7 @@ func (e *Engine) searchGroup(ctx context.Context, group []searchTarget, recent b
 		return ctx.Err()
 	}
 	releases := recentReleases
-	var queryErr error
+	queryErr := recentErr
 	if !recent {
 		minSeeders := group[0].profile.MinSeeders
 		for _, target := range group[1:] {
@@ -102,6 +104,10 @@ func (e *Engine) searchGroup(ctx context.Context, group []searchTarget, recent b
 func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]indexer.Release, error) {
 	var out []indexer.Release
 	var errs []error
+
+	if len(e.indexers) == 0 {
+		return nil, errors.New("no search indexers are configured")
+	}
 	unsupported := 0
 	for _, client := range e.indexers {
 		if err := client.Healthy(ctx); err != nil {
@@ -119,13 +125,10 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 		}
 		out = append(out, values...)
 	}
-	if unsupported == len(e.indexers) && len(e.indexers) > 0 {
+	if unsupported == len(e.indexers) {
 		return nil, indexer.ErrUnsupported
 	}
-	if len(out) == 0 && len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, releases []indexer.Release, queryErr error) error {
@@ -158,6 +161,9 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		return e.searchFailed(err)
 	}
 
+	if len(releases) == 0 && queryErr != nil {
+		return e.retrySearch(ctx, lock, target, "indexer_unavailable", "indexer search incomplete: "+queryErr.Error())
+	}
 	blacklist, err := e.store.Decisions().BlacklistFor(ctx, target.subject, target.id)
 	if err != nil {
 		return e.retrySearch(ctx, lock, target, "decision_error", err.Error())
@@ -170,11 +176,10 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	}
 	best := result.Best()
 	if best == nil {
-		detail := result.Summary()
 		if queryErr != nil {
-			detail = queryErr.Error()
+			return e.retrySearch(ctx, lock, target, "indexer_unavailable", "indexer search incomplete: "+queryErr.Error())
 		}
-		return e.retrySearch(ctx, lock, target, "no_acceptable_release", detail)
+		return e.retrySearch(ctx, lock, target, "no_acceptable_release", result.Summary())
 	}
 
 	stored, err := e.store.Releases().ByIndexerHash(ctx, best.Release.Indexer, best.Release.InfoHash)
@@ -211,6 +216,12 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	hash, err := e.addDownload(ctx, request)
 	if err != nil {
 		e.metrics.grabAddFailures.Inc()
+		if ctx.Err() == nil {
+			if healthErr := e.downloader.Healthy(ctx); healthErr != nil {
+				return e.retrySearch(ctx, lock, target, "download_client_unavailable",
+					downloadClientUnavailable+healthErr.Error())
+			}
+		}
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
 	grab, err := e.store.Grabs().CreateGrabbedFor(ctx, locks, model.Grab{SubjectType: target.subject,
@@ -303,31 +314,30 @@ func (e *Engine) persistCandidates(ctx context.Context, target searchTarget, res
 }
 
 func (e *Engine) retrySearch(ctx context.Context, lock *store.ItemLock, target searchTarget, reason, detail string) error {
+	var transition model.StateTransition
+	var err error
+
 	now := e.clock.Now().UTC()
 	if reason == "no_acceptable_release" {
 		e.metrics.searchOutcomes.Inc("no_match")
 	} else {
 		e.metrics.searchOutcomes.Inc("error")
 	}
-	terminal := target.firstWanted != nil && now.Sub(*target.firstWanted) >= e.cfg.Schedules.SearchGiveUpAfter.Duration
-	delay := 6 * time.Hour
-	backoff := e.cfg.Schedules.SearchBackoff
-	if len(backoff) > 0 {
-		idx := target.attempts
-		if idx >= len(backoff) {
-			idx = len(backoff) - 1
+	if reason == "indexer_unavailable" || reason == "download_client_unavailable" {
+		delay := e.cfg.Schedules.SearchInterval.Duration
+		transition, err = e.store.Transitions().HoldLocked(ctx, lock, now.Add(delay), reason, detail)
+	} else {
+		delay := 6 * time.Hour
+		backoff := e.cfg.Schedules.SearchBackoff
+		if len(backoff) > 0 {
+			delay = backoff[min(target.attempts, len(backoff)-1)].Duration
 		}
-		delay = backoff[idx].Duration
+		transition, err = e.store.Transitions().SearchRetryWithBudgetLocked(ctx, lock, now.Add(delay), reason, detail,
+			e.cfg.Schedules.SearchGiveUpAfter.Duration)
 	}
-	_, err := e.store.Transitions().SearchRetryLocked(ctx, lock, now.Add(delay), reason, detail, terminal)
 	if err == nil {
-		state := model.StateWanted
-		if target.imported != nil {
-			state = model.StateImported
-		} else if terminal {
-			state = model.StateFailed
-		}
-		e.publish("state_transition", target.subject, target.id, map[string]any{"state": state, "reason": reason})
+		e.publish("state_transition", target.subject, target.id,
+			map[string]any{"state": transition.To, "reason": reason})
 	}
 	return err
 }

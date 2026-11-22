@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/TechXTT/reelay/internal/model"
 )
@@ -92,9 +93,22 @@ func (r *GrabRepository) CreateGrabbedFor(ctx context.Context, locks []*ItemLock
 	in.CreatedAt = r.s.nowUTC()
 	in.UpdatedAt, in.ProgressedAt = in.CreatedAt, in.CreatedAt
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
-		states := make(map[int64]model.ItemState, len(locks))
+		type itemSearchState struct {
+			state       model.ItemState
+			firstWanted *time.Time
+		}
+
+		var table = itemTable(lock.Subject)
+		states := make(map[int64]itemSearchState, len(locks))
 		for i, itemLock := range locks {
-			from, err := itemState(ctx, tx, itemLock.Subject, itemLock.ID)
+			var from model.ItemState
+			var firstWantedRaw sql.NullString
+
+			err := tx.QueryRowContext(ctx, `SELECT state, first_wanted_at FROM `+table+` WHERE id=?`,
+				itemLock.ID).Scan(&from, &firstWantedRaw)
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%s:%d: %w", itemLock.Subject, itemLock.ID, ErrNotFound)
+			}
 			if err != nil {
 				return err
 			}
@@ -102,7 +116,11 @@ func (r *GrabRepository) CreateGrabbedFor(ctx context.Context, locks []*ItemLock
 				return fmt.Errorf("create grabbed for %s:%d from %s: %w",
 					itemLock.Subject, itemLock.ID, from, ErrInvalidTransition)
 			}
-			states[itemLock.ID] = from
+			firstWanted, err := scanNullTime(firstWantedRaw)
+			if err != nil {
+				return err
+			}
+			states[itemLock.ID] = itemSearchState{state: from, firstWanted: firstWanted}
 		}
 		var activeID int64
 		err := tx.QueryRowContext(ctx, `SELECT id FROM grabs
@@ -129,9 +147,14 @@ func (r *GrabRepository) CreateGrabbedFor(ctx context.Context, locks []*ItemLock
 		if err != nil {
 			return err
 		}
-		var table = itemTable(lock.Subject)
 		for _, itemLock := range locks {
-			from := states[itemLock.ID]
+			searchState := states[itemLock.ID]
+			from := searchState.state
+			if searchState.firstWanted != nil {
+				if _, err := updateSearchHold(ctx, tx, itemLock, *searchState.firstWanted, in.CreatedAt, false); err != nil {
+					return err
+				}
+			}
 			res, err = tx.ExecContext(ctx, `UPDATE `+table+` SET state='grabbed',
  chosen_release_id=?, next_search_at=NULL, last_error='' WHERE id=? AND state=?`,
 				in.ReleaseID, itemLock.ID, from)

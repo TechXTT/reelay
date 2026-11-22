@@ -11,6 +11,8 @@ import (
 	"github.com/TechXTT/reelay/internal/model"
 )
 
+const downloadClientUnavailable = "download client unavailable: "
+
 func (e *Engine) StatusOnce(ctx context.Context) error {
 	grabs, err := e.store.Grabs().Active(ctx)
 	if err != nil || len(grabs) == 0 {

@@ -363,6 +363,17 @@ func (r *RecommendationRepository) List(ctx context.Context, serverID, userID, m
 	if status == "" {
 		status = "active"
 	}
+	return r.list(ctx, serverID, userID, mediaType, status, limit, offset)
+}
+
+// ListActive returns up to limit active recommendations of one media type,
+// best first. Unlike List it is not capped at 100 rows, so session steering
+// can re-rank the whole stored list; callers bound limit themselves.
+func (r *RecommendationRepository) ListActive(ctx context.Context, serverID, userID, mediaType string, limit int) ([]model.Recommendation, error) {
+	return r.list(ctx, serverID, userID, mediaType, "active", limit, 0)
+}
+
+func (r *RecommendationRepository) list(ctx context.Context, serverID, userID, mediaType, status string, limit, offset int) ([]model.Recommendation, error) {
 	rows, err := r.s.ro.QueryContext(ctx, `SELECT id,server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at FROM recommendations WHERE server_id=? AND user_id=? AND (?='' OR media_type=?) AND status=? AND (status<>'active' OR COALESCE(json_extract(features_json,'$.direction_pick'),0)=0) ORDER BY score DESC,id LIMIT ? OFFSET ?`, serverID, userID, mediaType, mediaType, status, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list recommendations: %w", err)

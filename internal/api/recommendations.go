@@ -140,11 +140,7 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) e
 	if s.recommendations == nil {
 		return Unavailable("recommendations are disabled")
 	}
-	values, err := s.store.Recommendations().List(r.Context(), serverID, userID, mediaType, "active", 100, 0)
-	if err != nil {
-		return err
-	}
-	values, err = s.recommendations.Steer(r.Context(), serverID, userID, values, steering)
+	values, err := s.recommendations.Steer(r.Context(), serverID, userID, mediaType, steering)
 	if err != nil {
 		return err
 	}

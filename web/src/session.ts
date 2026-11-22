@@ -13,7 +13,12 @@ export const session = {
   discoverType: (localStorage.getItem(discoverTypeKey) === "series" ? "series" : "movie") as MediaType,
   requestsOffset: 0,
   upgradesOffset: 0,
-  attentionOnly: false
+  attentionOnly: false,
+  // Tonight's constraints last for this page load only; never persist them.
+  tonightType: "" as MediaType | "",
+  tonightMaxRuntime: 0,
+  tonightUnfinished: false,
+  tonightOffset: 0
 };
 
 export const requestsPageSize = 100;

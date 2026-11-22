@@ -51,7 +51,20 @@ public sealed class SyncService
             .ToList();
         _logger.LogInformation("Found {ScannedCount} Jellyfin movies and series; synchronizing {ItemCount} real items with TMDB IDs", scanned.Count, items.Count);
 
-        var activityCompletionSupported = await SyncCatalogAsync(config.ServerId, users, items, now, cancellationToken).ConfigureAwait(false);
+        var catalog = await SyncCatalogAsync(config.ServerId, users, items, now, cancellationToken).ConfigureAwait(false);
+        var activityCompletionSupported = catalog?.ActivityCompletionSupported == true;
+        if (catalog?.UserLibrarySupported == true)
+        {
+            var catalogIds = items.Select(static item => item.ItemId).ToHashSet(StringComparer.Ordinal);
+            foreach (var user in users)
+            {
+                if (!await SyncUserLibraryAsync(config.ServerId, user, catalogIds, cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogDebug("Reelay does not support per-user libraries; skipping library visibility");
+                    break;
+                }
+            }
+        }
         progress?.Report(35);
 
         foreach (var user in users)
@@ -131,7 +144,25 @@ public sealed class SyncService
         foreach (var chunk in confirmed.Chunk(BatchSize)) await _client.SendEpisodeConfirmationsAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<bool> SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)
+    // Reports which catalog items the user can access in Jellyfin, excluding
+    // Reelay's virtual libraries. Returns false when Reelay lacks the endpoint.
+    private async Task<bool> SyncUserLibraryAsync(string serverId, JellyfinUser user, IReadOnlySet<string> catalogIds, CancellationToken cancellationToken)
+    {
+        var userId = user.Id.ToString("N");
+        var syncToken = Guid.NewGuid().ToString("N");
+        var visible = _libraryManager.GetItemList(new InternalItemsQuery(user) { IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series }, Recursive = true, IsVirtualItem = false })
+            .Where(item => !_virtual.IsManagedPath(item.Path))
+            .Select(static item => item.Id.ToString("N"))
+            .Where(catalogIds.Contains)
+            .ToList();
+        foreach (var chunk in visible.Chunk(BatchSize))
+        {
+            if (!await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, false, chunk), cancellationToken).ConfigureAwait(false)) return false;
+        }
+        return await _client.SendUserItemsAsync(new UserItemsRequest(serverId, userId, syncToken, true, Array.Empty<string>()), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SyncResponse?> SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)
     {
         var syncToken = Guid.NewGuid().ToString("N");
         var syncUsers = users.Select(user => new SyncUser(serverId, user.Id.ToString("N"), user.Username, true, now)).ToList();
@@ -140,8 +171,7 @@ public sealed class SyncService
         {
             await _client.SyncAsync(new SyncRequest(serverId, syncToken, false, Array.Empty<SyncUser>(), chunk), cancellationToken).ConfigureAwait(false);
         }
-        var response = await _client.SyncAsync(new SyncRequest(serverId, syncToken, true, Array.Empty<SyncUser>(), Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
-        return response?.ActivityCompletionSupported == true;
+        return await _client.SyncAsync(new SyncRequest(serverId, syncToken, true, Array.Empty<SyncUser>(), Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RefreshRecommendationsAsync(IReadOnlyList<JellyfinUser> users, IProgress<double>? progress, CancellationToken cancellationToken)

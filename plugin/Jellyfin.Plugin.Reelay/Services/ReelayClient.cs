@@ -33,6 +33,17 @@ public sealed class ReelayClient
     public Task CompleteActivitiesAsync(string serverId, string userId, CancellationToken cancellationToken)
         => PostAsync("/api/v1/integrations/jellyfin/events", new { server_id = serverId, user_id = userId, complete = true, events = Array.Empty<Activity>() }, cancellationToken);
 
+    // Returns false when this Reelay predates per-user libraries (404).
+    public async Task<bool> SendUserItemsAsync(UserItemsRequest body, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/user-items");
+        request.Content = JsonContent.Create(body);
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<IReadOnlyList<Recommendation>> GetRecommendationsAsync(string userId, string mediaType, CancellationToken cancellationToken)
     {
         var config = RequiredConfiguration();

@@ -63,6 +63,7 @@ func (s *Service) ChangeDirection(ctx context.Context, serverID, userID, mediaTy
 		picks[i].ServerID, picks[i].UserID, picks[i].MediaType = serverID, userID, mediaType
 		picks[i].Status, picks[i].GeneratedAt, picks[i].ExpiresAt = "active", now, now.Add(s.cfg.Expiry.Duration)
 		picks[i].Reasons = []string{"From TMDB discovery, outside your usual recommendations"}
+		picks[i].Sources = []model.RecommendationSource{{Kind: "catalog", Listing: "discover_outside_genre"}}
 	}
 	return repo.OfferDirection(ctx, serverID, userID, mediaType, picks)
 }

@@ -348,6 +348,18 @@ recommendations:
   rating_weight: 10
   preference_weight: 5
   novelty_weight: 10
+  # Diversity re-ranking, applied before storage so Discover and the Jellyfin
+  # plugin show the same order. Within each block of diversity_window ranked
+  # titles, at most diversity_seed_cap come from one seed title and at most
+  # diversity_genre_cap share a genre, while other candidates remain. A title
+  # moved down shows a negative "diversity" score component. Set a cap equal to
+  # diversity_window to turn it off. 0 or an absent key uses the default shown.
+  diversity_window: 10 # 0-100
+  diversity_seed_cap: 3 # 0-diversity_window
+  diversity_genre_cap: 5 # 0-diversity_window
+  # Score points one session steering choice in Discover ("More like this",
+  # "Less of a genre", ...) adds or removes. Steering is never stored.
+  steering_weight: 20 # 0-100
 
 # Household logins. Off by default: the static server.auth_token stays the only
 # credential. When enabled, Jellyfin users sign in with their Jellyfin

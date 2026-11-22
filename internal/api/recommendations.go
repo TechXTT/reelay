@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/recommendation"
 	"github.com/TechXTT/reelay/internal/store"
 )
 
@@ -116,17 +119,76 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) e
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	values, err := s.store.Recommendations().List(r.Context(), serverID, userID, mediaType, r.URL.Query().Get("status"), limit, offset)
+	steering, err := steeringFrom(r.URL.Query())
 	if err != nil {
 		return err
 	}
-	return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": limit, "offset": offset})
+	if steering.Empty() {
+		values, err := s.store.Recommendations().List(r.Context(), serverID, userID, mediaType, r.URL.Query().Get("status"), limit, offset)
+		if err != nil {
+			return err
+		}
+		return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": limit, "offset": offset})
+	}
+	// Session steering re-ranks the stored active list for this response only.
+	if mediaType == "" || (r.URL.Query().Get("status") != "" && r.URL.Query().Get("status") != "active") {
+		return BadRequest("steering requires media_type and applies to active recommendations only")
+	}
+	if s.recommendations == nil {
+		return Unavailable("recommendations are disabled")
+	}
+	values, err := s.store.Recommendations().List(r.Context(), serverID, userID, mediaType, "active", 100, 0)
+	if err != nil {
+		return err
+	}
+	values, err = s.recommendations.Steer(r.Context(), serverID, userID, values, steering)
+	if err != nil {
+		return err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 40
+	}
+	offset = min(max(offset, 0), len(values))
+	return reply(w, r, http.StatusOK, map[string]any{"items": values[offset:min(offset+limit, len(values))], "limit": limit, "offset": offset, "steered": true})
+}
+
+// maxSteeringChoices bounds each steering parameter.
+const maxSteeringChoices = 20
+
+// steeringFrom reads the optional session steering parameters: repeated
+// more_like, less_like, boost_seed and mute_seed TMDB ids and boost_genre and
+// mute_genre names.
+func steeringFrom(query url.Values) (recommendation.Steering, error) {
+	var steering = recommendation.Steering{BoostGenres: query["boost_genre"], MuteGenres: query["mute_genre"]}
+	var targets = map[string]*[]int{"more_like": &steering.MoreLike, "less_like": &steering.LessLike, "boost_seed": &steering.BoostSeeds, "mute_seed": &steering.MuteSeeds}
+
+	for key, target := range targets {
+		if len(query[key]) > maxSteeringChoices {
+			return steering, BadRequest("%s accepts at most %d values", key, maxSteeringChoices)
+		}
+		for _, raw := range query[key] {
+			id, err := strconv.Atoi(raw)
+			if err != nil || id <= 0 {
+				return steering, BadRequest("%s must be positive TMDB ids", key)
+			}
+			*target = append(*target, id)
+		}
+	}
+	for _, genres := range [][]string{steering.BoostGenres, steering.MuteGenres} {
+		if len(genres) > maxSteeringChoices || slices.ContainsFunc(genres, func(genre string) bool { return strings.TrimSpace(genre) == "" || len(genre) > 100 }) {
+			return steering, BadRequest("boost_genre and mute_genre accept at most %d genre names of up to 100 characters", maxSteeringChoices)
+		}
+	}
+	return steering, nil
 }
 
 type recommendationStatsResponse struct {
 	model.RecommendationStats
 	Days  int       `json:"days"`
 	Since time.Time `json:"since"`
+	// Concentration summarizes the top-ten concentration recorded at each
+	// generation in the same window, one entry per media type.
+	Concentration []model.RecommendationConcentrationTrend `json:"concentration"`
 }
 
 func (s *Server) handleRecommendationStats(w http.ResponseWriter, r *http.Request) error {
@@ -151,7 +213,11 @@ func (s *Server) handleRecommendationStats(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
-	return reply(w, r, http.StatusOK, recommendationStatsResponse{RecommendationStats: stats, Days: days, Since: since.UTC()})
+	concentration, err := s.store.Recommendations().ConcentrationTrends(r.Context(), serverID, userID, since)
+	if err != nil {
+		return err
+	}
+	return reply(w, r, http.StatusOK, recommendationStatsResponse{RecommendationStats: stats, Days: days, Since: since.UTC(), Concentration: concentration})
 }
 
 type recommendationPreviewResponse struct {

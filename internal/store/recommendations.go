@@ -436,6 +436,9 @@ func scanRecommendation(row scanner) (model.Recommendation, error) {
 		RuntimeMinutes int                `json:"runtime_minutes"`
 		VoteAverage    float64            `json:"vote_average"`
 		VoteCount      int                `json:"vote_count"`
+
+		// Sources is absent from rows stored before provenance was recorded.
+		Sources []model.RecommendationSource `json:"sources"`
 	}
 	if err := decodeJSON(reasons, &v.Reasons); err != nil {
 		return v, err
@@ -446,6 +449,7 @@ func scanRecommendation(row scanner) (model.Recommendation, error) {
 	v.Components, v.Genres, v.Keywords, v.People = data.Components, data.Genres, data.Keywords, data.People
 	v.Language, v.Country, v.RuntimeMinutes = data.Language, data.Country, data.RuntimeMinutes
 	v.VoteAverage, v.VoteCount = data.VoteAverage, data.VoteCount
+	v.Sources = data.Sources
 	var err error
 	if v.GeneratedAt, err = ParseTime(generated); err != nil {
 		return v, err
@@ -463,5 +467,9 @@ func (r *RecommendationRepository) MarkAvailable(ctx context.Context, serverID, 
 
 func (r *RecommendationRepository) Prune(ctx context.Context, now time.Time) error {
 	_, err := r.s.rw.ExecContext(ctx, `DELETE FROM recommendations WHERE expires_at<? AND status='active'`, FormatTime(now))
+	if err != nil {
+		return err
+	}
+	_, err = r.s.rw.ExecContext(ctx, `DELETE FROM recommendation_concentration WHERE generated_at<?`, FormatTime(now.AddDate(0, 0, -concentrationRetentionDays)))
 	return err
 }

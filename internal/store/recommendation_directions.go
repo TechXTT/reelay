@@ -9,7 +9,7 @@ import (
 )
 
 func recommendationFeatures(value model.Recommendation, directionPick bool) string {
-	features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount, "direction_pick": directionPick})
+	features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount, "direction_pick": directionPick, "sources": value.Sources})
 	return features
 }
 

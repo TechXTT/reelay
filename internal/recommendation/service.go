@@ -91,7 +91,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		return err
 	}
 	candidates := run.enrich(pool)
-	values := Rank(candidates, tasteProfile(signals), s.weights(preferences), s.cfg.ResultLimit)
+	values := s.diversity().Rank(candidates, tasteProfile(signals), s.weights(preferences), s.cfg.ResultLimit)
 	now := s.now().UTC()
 	for i := range values {
 		values[i].ServerID = serverID
@@ -104,8 +104,18 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	if err := repo.ReplaceOffered(ctx, serverID, userID, mediaType, values); err != nil {
 		return err
 	}
+	if len(values) > 0 {
+		if err := repo.RecordConcentration(ctx, serverID, userID, Concentration(mediaType, now, values)); err != nil {
+			return err
+		}
+	}
 	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
 	return nil
+}
+
+func (s *Service) diversity() Diversity {
+	window, seedCap, genreCap := s.cfg.Diversity()
+	return Diversity{Window: window, SeedCap: seedCap, GenreCap: genreCap}
 }
 
 func (s *Service) weights(preferences store.RecommendationPreferences) Weights {
@@ -166,7 +176,11 @@ type aggregate struct {
 	item     metadata.DiscoveryItem
 	provider float64
 	matches  int
+	sources  []model.RecommendationSource
 }
+
+// maxRecommendationSources bounds the provenance kept per candidate.
+const maxRecommendationSources = 5
 
 // generation is the state of one Generate call. Provider details are memoized
 // so an id shared by seeds, ratings and candidates is fetched once.
@@ -231,7 +245,7 @@ func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]
 		if err != nil {
 			return nil, err
 		}
-		g.addListing(pool, values, map[int]bool{})
+		g.addListing(pool, values, map[int]bool{}, model.RecommendationSource{Kind: "catalog", Listing: "discover"})
 		return pool, nil
 	}
 	queried := map[int]bool{}
@@ -245,9 +259,9 @@ func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]
 			return nil, fmt.Errorf("recommendations for %s: %w", seed.Title, err)
 		}
 		matched := map[int]bool{}
-		g.addListing(pool, values, matched)
+		g.addListing(pool, values, matched, model.RecommendationSource{Kind: "seed", Listing: "recommendations", TMDBID: seed.TMDBID, Title: seed.Title})
 		if similar, err := provider.Similar(g.ctx, g.mediaType, seed.TMDBID); err == nil {
-			g.addListing(pool, similar, matched)
+			g.addListing(pool, similar, matched, model.RecommendationSource{Kind: "seed", Listing: "similar", TMDBID: seed.TMDBID, Title: seed.Title})
 		}
 		if len(pool) >= g.service.cfg.CandidateLimit {
 			break
@@ -258,7 +272,9 @@ func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]
 
 // addListing scores one provider listing by position and merges the allowed
 // items into the pool. matched tracks which ids this seed already counted.
-func (g *generation) addListing(pool map[int]*aggregate, values []metadata.DiscoveryItem, matched map[int]bool) {
+// source is recorded as provenance, one entry per seed title or catalog
+// listing; the source with the best listing position comes first.
+func (g *generation) addListing(pool map[int]*aggregate, values []metadata.DiscoveryItem, matched map[int]bool, source model.RecommendationSource) {
 	for rank, item := range values {
 		if item.TMDBID <= 0 || g.excluded[item.TMDBID] || !g.filter.allows(item.Language, item.Genres, false) {
 			continue
@@ -269,8 +285,17 @@ func (g *generation) addListing(pool map[int]*aggregate, values []metadata.Disco
 			entry = &aggregate{item: item}
 			pool[item.TMDBID] = entry
 		}
+		index := slices.IndexFunc(entry.sources, func(known model.RecommendationSource) bool {
+			return known.Kind == source.Kind && known.TMDBID == source.TMDBID && (source.Kind == "seed" || known.Listing == source.Listing)
+		})
+		if index < 0 && (len(entry.sources) < maxRecommendationSources || score > entry.provider) {
+			entry.sources = append(entry.sources[:min(len(entry.sources), maxRecommendationSources-1)], source)
+			index = len(entry.sources) - 1
+		}
 		if score > entry.provider {
 			entry.provider = score
+			copy(entry.sources[1:index+1], entry.sources[:index])
+			entry.sources[0] = source
 		}
 		if !matched[item.TMDBID] {
 			entry.matches++
@@ -286,7 +311,9 @@ func (g *generation) enrich(pool map[int]*aggregate) []Candidate {
 	cfg := g.service.cfg
 	candidates := make([]Candidate, 0, len(pool))
 	for _, entry := range pool {
-		candidates = append(candidates, Candidate{Item: toModel(entry.item), ProviderScore: entry.provider, SeedMatches: entry.matches, VoteAverage: entry.item.VoteAverage, VoteCount: entry.item.VoteCount})
+		item := toModel(entry.item)
+		item.Sources = entry.sources
+		candidates = append(candidates, Candidate{Item: item, ProviderScore: entry.provider, SeedMatches: entry.matches, VoteAverage: entry.item.VoteAverage, VoteCount: entry.item.VoteCount})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].ProviderScore != candidates[j].ProviderScore {
@@ -301,7 +328,9 @@ func (g *generation) enrich(pool map[int]*aggregate) []Candidate {
 		if err != nil {
 			continue
 		}
+		sources := candidates[i].Item.Sources
 		candidates[i].Item, candidates[i].VoteAverage, candidates[i].VoteCount = toModel(detail), detail.VoteAverage, detail.VoteCount
+		candidates[i].Item.Sources = sources
 	}
 	return slices.DeleteFunc(candidates, func(candidate Candidate) bool {
 		return !g.filter.allows(candidate.Item.Language, candidate.Item.Genres, true)

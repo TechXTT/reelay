@@ -3,6 +3,7 @@
 package recommendation
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -32,20 +33,27 @@ type Candidate struct {
 	VoteCount     int
 }
 
+// relevanceComponents are the score components that measure how well a title
+// fits the taste profile, before novelty, diversity and steering adjust its
+// place in the list.
+var relevanceComponents = []string{"provider", "affinity", "people", "multi_seed", "rating", "preference"}
+
+// Rank scores and orders candidates without diversity bounds.
 func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) []model.Recommendation {
+	return Diversity{}.Rank(candidates, profile, weights, limit)
+}
+
+// Rank scores each candidate against the profile and orders the best limit of
+// them with d's diversity bounds (see arrange).
+func (d Diversity) Rank(candidates []Candidate, profile Profile, weights Weights, limit int) []model.Recommendation {
+	var scored = make([]ranked, 0, len(candidates))
+
 	if limit <= 0 {
 		limit = 40
 	}
 	if weights == (Weights{}) {
 		weights = DefaultWeights()
 	}
-	type rankedCandidate struct {
-		model.Recommendation
-		novelty float64
-		genres  map[string]bool
-	}
-	scored := make([]rankedCandidate, 0, len(candidates))
-
 	for _, c := range candidates {
 		components := map[string]float64{
 			"provider":   clamp(c.ProviderScore) * weights.Provider,
@@ -58,51 +66,10 @@ func Rank(candidates []Candidate, profile Profile, weights Weights, limit int) [
 		base := components["provider"] + components["affinity"] + components["people"] + components["multi_seed"] + components["rating"] + components["preference"]
 		c.Item.Score = math.Round(base*10) / 10
 		c.Item.Components = components
-		c.Item.Reasons = reasons(components, c.SeedMatches)
-		scored = append(scored, rankedCandidate{Recommendation: c.Item, novelty: 1, genres: genreSet(c.Item.Genres)})
+		c.Item.Reasons = reasons(components, c.SeedMatches, c.Item.Sources)
+		scored = append(scored, newRanked(c.Item))
 	}
-	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].Score != scored[j].Score {
-			return scored[i].Score > scored[j].Score
-		}
-		return scored[i].TMDBID < scored[j].TMDBID
-	})
-
-	// Greedy diversity bonus: reward a candidate that is unlike items already
-	// selected without allowing novelty to overwhelm relevance. Picked entries
-	// are flagged instead of removed so ties keep resolving to the earliest
-	// (highest relevance, lowest TMDB id) candidate.
-	selected := make([]model.Recommendation, 0, min(limit, len(scored)))
-	taken := make([]bool, len(scored))
-	for len(selected) < min(limit, len(scored)) {
-		best, bestValue := -1, math.Inf(-1)
-		for i := range scored {
-			if taken[i] {
-				continue
-			}
-			if best < 0 {
-				best = i
-			}
-			value := scored[i].Score + scored[i].novelty*weights.Novelty
-			if value > bestValue {
-				best, bestValue = i, value
-			}
-		}
-		pick := &scored[best]
-		pick.Components["novelty"] = math.Round((bestValue-pick.Score)*10) / 10
-		pick.Score = math.Min(100, math.Round(bestValue*10)/10)
-		selected = append(selected, pick.Recommendation)
-		taken[best] = true
-		if len(selected) == limit {
-			break
-		}
-		for i := range scored {
-			if !taken[i] {
-				scored[i].novelty = math.Min(scored[i].novelty, 1-jaccard(scored[i].genres, pick.genres))
-			}
-		}
-	}
-	return selected
+	return d.arrange(scored, weights.Novelty, limit)
 }
 
 func overlap(values []string, profile map[string]float64) float64 {
@@ -153,7 +120,9 @@ func bayesianRating(average float64, votes int) float64 {
 	return clamp((average / 10) * confidence)
 }
 
-func reasons(parts map[string]float64, seedMatches int) []string {
+// reasons explains a score: where the title came from first, when known, then
+// up to three of its strongest components.
+func reasons(parts map[string]float64, seedMatches int, sources []model.RecommendationSource) []string {
 	type part struct {
 		name  string
 		score float64
@@ -172,7 +141,32 @@ func reasons(parts map[string]float64, seedMatches int) []string {
 	if len(out) == 0 {
 		out = append(out, "Included to broaden your recommendations")
 	}
+	if len(sources) > 0 {
+		out = append([]string{sourceReason(sources)}, out...)
+	}
 	return out
+}
+
+// sourceReason names the seed titles behind a recommendation, or the catalog
+// listing it came from when there were no seeds.
+func sourceReason(sources []model.RecommendationSource) string {
+	var seeds []string
+
+	for _, source := range sources {
+		if source.Kind == "seed" {
+			seeds = append(seeds, source.Title)
+		}
+	}
+	switch len(seeds) {
+	case 0:
+		return "From TMDB's highly rated titles"
+	case 1:
+		return "Because you liked " + seeds[0]
+	case 2:
+		return "Because you liked " + seeds[0] + " and " + seeds[1]
+	default:
+		return fmt.Sprintf("Because you liked %s, %s and %d more", seeds[0], seeds[1], len(seeds)-2)
+	}
 }
 
 func jaccard(left, right map[string]bool) float64 {

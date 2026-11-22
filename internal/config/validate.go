@@ -199,6 +199,19 @@ func (c *Config) validateRecommendations(ck *checker) {
 	if total != 100 {
 		ck.bad("recommendations", "weights must sum to 100 (got %d)", total)
 	}
+	window, seedCap, genreCap := r.Diversity()
+	if r.DiversityWindow < 0 || r.DiversityWindow > 100 {
+		ck.bad("recommendations.diversity_window", "must be between 0 (default %d) and 100", DefaultDiversityWindow)
+	}
+	if r.DiversitySeedCap < 0 || seedCap > window {
+		ck.bad("recommendations.diversity_seed_cap", "must be between 0 (default %d) and diversity_window", DefaultDiversitySeedCap)
+	}
+	if r.DiversityGenreCap < 0 || genreCap > window {
+		ck.bad("recommendations.diversity_genre_cap", "must be between 0 (default %d) and diversity_window", DefaultDiversityGenreCap)
+	}
+	if r.SteeringWeight < 0 || r.SteeringWeight > 100 {
+		ck.bad("recommendations.steering_weight", "must be between 0 (default %d) and 100", DefaultSteeringWeight)
+	}
 }
 
 func (c *Config) validateServer(ck *checker) {

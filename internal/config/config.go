@@ -234,6 +234,40 @@ type Recommendations struct {
 	RatingWeight     int      `yaml:"rating_weight" json:"rating_weight"`
 	PreferenceWeight int      `yaml:"preference_weight" json:"preference_weight"`
 	NoveltyWeight    int      `yaml:"novelty_weight" json:"novelty_weight"`
+	// Diversity re-ranking: within each block of DiversityWindow ranked titles,
+	// at most DiversitySeedCap share one seed title and at most
+	// DiversityGenreCap share one genre while other candidates remain. Zero
+	// selects the Default* constants below.
+	DiversityWindow   int `yaml:"diversity_window" json:"diversity_window"`
+	DiversitySeedCap  int `yaml:"diversity_seed_cap" json:"diversity_seed_cap"`
+	DiversityGenreCap int `yaml:"diversity_genre_cap" json:"diversity_genre_cap"`
+	// SteeringWeight is the score change of one session steering choice in
+	// Discover. Zero selects DefaultSteeringWeight.
+	SteeringWeight int `yaml:"steering_weight" json:"steering_weight"`
+}
+
+// Defaults for the optional recommendation diversity and steering keys, used
+// when a key is absent (zero) so existing configuration files keep working.
+const (
+	DefaultDiversityWindow   = 10
+	DefaultDiversitySeedCap  = 3
+	DefaultDiversityGenreCap = 5
+	DefaultSteeringWeight    = 20
+)
+
+// Diversity returns the effective diversity window and caps.
+func (r Recommendations) Diversity() (window, seedCap, genreCap int) {
+	window, seedCap, genreCap = r.DiversityWindow, r.DiversitySeedCap, r.DiversityGenreCap
+	if window == 0 {
+		window = DefaultDiversityWindow
+	}
+	if seedCap == 0 {
+		seedCap = DefaultDiversitySeedCap
+	}
+	if genreCap == 0 {
+		genreCap = DefaultDiversityGenreCap
+	}
+	return window, seedCap, genreCap
 }
 
 // Load reads path, applies REELAY_* environment overrides, then validates.

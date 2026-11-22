@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -12,9 +13,25 @@ import (
 // than the longest stats window (365 days).
 const concentrationRetentionDays = 400
 
-// RecordConcentration stores the top-ten concentration of one generation.
-func (r *RecommendationRepository) RecordConcentration(ctx context.Context, serverID, userID string, c model.RecommendationConcentration) error {
-	_, err := r.s.rw.ExecContext(ctx, `INSERT INTO recommendation_concentration(server_id,user_id,media_type,generated_at,sample_size,dominant_genre,dominant_genre_share,dominant_seed,dominant_seed_share,distinct_interests,distinct_genres)
+// ReplaceGenerated stores one generation: it replaces the recommendations and
+// records impressions like ReplaceOffered and, in the same transaction, the
+// top-ten concentration snapshot, so a generation is stored with its snapshot
+// or not at all.
+func (r *RecommendationRepository) ReplaceGenerated(ctx context.Context, serverID, userID, mediaType string, values []model.Recommendation, c model.RecommendationConcentration) error {
+	return r.s.InTx(ctx, func(tx *sql.Tx) error {
+		if err := replaceRecommendations(ctx, tx, serverID, userID, mediaType, values); err != nil {
+			return err
+		}
+		if err := recordImpressions(ctx, tx, serverID, userID, mediaType, values); err != nil {
+			return err
+		}
+		return recordConcentration(ctx, tx, serverID, userID, c)
+	})
+}
+
+// recordConcentration stores the top-ten concentration of one generation.
+func recordConcentration(ctx context.Context, tx *sql.Tx, serverID, userID string, c model.RecommendationConcentration) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO recommendation_concentration(server_id,user_id,media_type,generated_at,sample_size,dominant_genre,dominant_genre_share,dominant_seed,dominant_seed_share,distinct_interests,distinct_genres)
 VALUES(?,?,?,?,?,?,?,?,?,?,?)`, serverID, userID, c.MediaType, FormatTime(c.GeneratedAt), c.SampleSize, c.DominantGenre, c.DominantGenreShare, c.DominantSeed, c.DominantSeedShare, c.DistinctInterests, c.DistinctGenres)
 	if err != nil {
 		return fmt.Errorf("record recommendation concentration: %w", err)

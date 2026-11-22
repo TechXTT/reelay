@@ -109,6 +109,41 @@ func (d Diversity) arrange(scored []ranked, novelty float64, limit int) []model.
 	return selected
 }
 
+// crowded returns the most common genre of the first block of an arranged
+// list when that block breaks a cap, meaning too few alternatives were left
+// to fill it, or "" when the caps hold or are off. Ties go to the first genre
+// by name so the result is deterministic.
+func (d Diversity) crowded(values []model.Recommendation) string {
+	var seeds = map[string]int{}
+	var genres = map[string]int{}
+	var over bool
+	var dominant string
+
+	if d.Window == 0 {
+		return ""
+	}
+	for _, value := range values[:min(d.Window, len(values))] {
+		candidate := newRanked(value)
+		if candidate.interest != "" {
+			seeds[candidate.interest]++
+			over = over || seeds[candidate.interest] > d.SeedCap
+		}
+		for genre := range candidate.genres {
+			genres[genre]++
+			over = over || genres[genre] > d.GenreCap
+		}
+	}
+	if !over {
+		return ""
+	}
+	for genre, count := range genres {
+		if dominant == "" || count > genres[dominant] || (count == genres[dominant] && genre < dominant) {
+			dominant = genre
+		}
+	}
+	return dominant
+}
+
 // fits reports whether placing candidate keeps the current block within the
 // seed and genre caps.
 func (d Diversity) fits(candidate ranked, seeds, genres map[string]int) bool {

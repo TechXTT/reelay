@@ -26,18 +26,24 @@ func (s Steering) Empty() bool {
 	return len(s.MoreLike)+len(s.LessLike)+len(s.BoostGenres)+len(s.MuteGenres)+len(s.BoostSeeds)+len(s.MuteSeeds) == 0
 }
 
-// Steer re-ranks a user's stored active recommendations with steering
-// applied. Each title's relevance components are kept, a "steering" component
-// is added, and the list is arranged again with the configured novelty and
-// diversity, so unsteered titles keep their regular relative order. Titles
-// marked "less like this" are left out. Nothing is written.
-func (s *Service) Steer(ctx context.Context, serverID, userID string, values []model.Recommendation, steering Steering) ([]model.Recommendation, error) {
+// Steer re-ranks a user's whole stored active list for one media type with
+// steering applied, up to recommendations.result_limit rows (at least 100), so
+// titles far down the list can be steered up. Each title's relevance
+// components are kept, a "steering" component is added, and the list is
+// arranged again with the configured novelty and diversity, so unsteered
+// titles keep their regular relative order. Titles marked "less like this"
+// are left out. Nothing is written.
+func (s *Service) Steer(ctx context.Context, serverID, userID, mediaType string, steering Steering) ([]model.Recommendation, error) {
 	var weight = float64(s.cfg.SteeringWeight)
-	var references = make(map[int]ranked, len(values))
-	var scored = make([]ranked, 0, len(values))
 	var boost = genreSet(steering.BoostGenres)
 	var mute = genreSet(steering.MuteGenres)
+	var references = map[int]ranked{}
+	var scored []ranked
 
+	values, err := s.store.Recommendations().ListActive(ctx, serverID, userID, mediaType, max(s.cfg.ResultLimit, 100))
+	if err != nil {
+		return nil, err
+	}
 	preferences, err := s.store.Recommendations().Preferences(ctx, serverID, userID)
 	if err != nil {
 		return nil, err

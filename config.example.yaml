@@ -357,6 +357,12 @@ recommendations:
   diversity_window: 10 # 0-100
   diversity_seed_cap: 3 # 0-diversity_window
   diversity_genre_cap: 5 # 0-diversity_window
+  # When the caps cannot be met in the top diversity_window titles because the
+  # candidates all share a genre or seed title, fetch up to this many TMDB
+  # Discover pages (20 titles each, cached) outside the dominant genre so the
+  # list can broaden. Saved preferences, owned, watched, rated and dismissed
+  # titles are still left out. -1 turns it off.
+  diversity_extra_pages: 1 # -1-5
   # Score points one session steering choice in Discover ("More like this",
   # "Less of a genre", ...) adds or removes. Steering is never stored.
   steering_weight: 20 # 0-100

@@ -241,6 +241,11 @@ type Recommendations struct {
 	DiversityWindow   int `yaml:"diversity_window" json:"diversity_window"`
 	DiversitySeedCap  int `yaml:"diversity_seed_cap" json:"diversity_seed_cap"`
 	DiversityGenreCap int `yaml:"diversity_genre_cap" json:"diversity_genre_cap"`
+	// DiversityExtraPages is how many TMDB Discover pages outside the dominant
+	// genre a generation may fetch when the caps leave too few alternatives to
+	// fill the first block. Zero selects DefaultDiversityExtraPages; -1 turns
+	// the extra fetch off.
+	DiversityExtraPages int `yaml:"diversity_extra_pages" json:"diversity_extra_pages"`
 	// SteeringWeight is the score change of one session steering choice in
 	// Discover. Zero selects DefaultSteeringWeight.
 	SteeringWeight int `yaml:"steering_weight" json:"steering_weight"`
@@ -253,7 +258,22 @@ const (
 	DefaultDiversitySeedCap  = 3
 	DefaultDiversityGenreCap = 5
 	DefaultSteeringWeight    = 20
+	// DefaultDiversityExtraPages is one Discover page (20 titles), fetched only
+	// for a crowded first block and cached by the TMDB client.
+	DefaultDiversityExtraPages = 1
 )
+
+// ExtraCandidatePages returns the effective number of extra Discover pages; 0
+// means the extra fetch is off.
+func (r Recommendations) ExtraCandidatePages() int {
+	switch r.DiversityExtraPages {
+	case 0:
+		return DefaultDiversityExtraPages
+	case -1:
+		return 0
+	}
+	return r.DiversityExtraPages
+}
 
 // Diversity returns the effective diversity window and caps.
 func (r Recommendations) Diversity() (window, seedCap, genreCap int) {

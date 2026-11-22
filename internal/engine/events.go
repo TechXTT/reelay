@@ -41,6 +41,13 @@ func (b *EventBus) Publish(event Event) {
 	}
 }
 
+// Subscribers is the number of connected clients.
+func (b *EventBus) Subscribers() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.clients)
+}
+
 func (b *EventBus) Subscribe() (<-chan Event, func(), bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

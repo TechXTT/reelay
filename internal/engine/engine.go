@@ -65,6 +65,7 @@ type Engine struct {
 	recentTrigger         chan struct{}
 	recommendationTrigger chan struct{}
 	recommendations       *recommendation.Service
+	metrics               *Metrics
 }
 
 func New(opt Options) (*Engine, error) {
@@ -96,6 +97,7 @@ func New(opt Options) (*Engine, error) {
 		searchTrigger: make(chan struct{}, 1), statusTrigger: make(chan struct{}, 1),
 		metadataTrigger: make(chan struct{}, 1), recentTrigger: make(chan struct{}, 1),
 		recommendationTrigger: make(chan struct{}, 1), recommendations: opt.Recommendations,
+		metrics: newMetrics(),
 	}, nil
 }
 

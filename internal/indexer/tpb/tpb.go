@@ -140,6 +140,9 @@ func (c *Client) Name() string { return c.name }
 // indexer traffic is a good way to get rate-limited by your own dashboard.
 func (c *Client) Healthy(context.Context) error { return c.breaker.Allow() }
 
+// BreakerState snapshots the circuit breaker for the metrics endpoint.
+func (c *Client) BreakerState() indexer.BreakerState { return c.breaker.State() }
+
 // Stats is the snapshot the API exposes.
 //
 // FailedRequests is deliberately not called Failures: the embedded

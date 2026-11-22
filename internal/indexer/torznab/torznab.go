@@ -66,6 +66,9 @@ func New(cfg config.Indexer, opt Options) (*Client, error) {
 func (c *Client) Name() string                  { return c.cfg.Name }
 func (c *Client) Healthy(context.Context) error { return c.breaker.Allow() }
 
+// BreakerState snapshots the circuit breaker for the metrics endpoint.
+func (c *Client) BreakerState() indexer.BreakerState { return c.breaker.State() }
+
 func (c *Client) get(ctx context.Context, query url.Values) (*http.Response, error) {
 	var endpoint = *c.base
 

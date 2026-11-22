@@ -112,6 +112,13 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
     JSON) covering queue depth, search and grab success rates, indexer
     circuit-breaker state, import times, memory and SQLite size. Nothing like this
     exists yet.
+    **Implemented 2026-10-04:** `GET /api/v1/metrics` (bearer auth, Prometheus
+    text, no new dependency) exports item and grab states, outbox depth, indexer
+    breaker state, SSE clients, database size, newest backup, Go memory, and
+    in-process search, grab, failure and import counters with an import-duration
+    histogram. Verified with go build, vet, staticcheck, and
+    `go test ./internal/... ./cmd/...` including new metrics, store, engine, and
+    API tests.
 20. **Scheduled automatic backups with retention (S).** Backup and restore exist
     but only run manually (`--backup`, settings view). Add a nightly snapshot that
     keeps the last N copies.

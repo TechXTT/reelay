@@ -131,20 +131,23 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, releases []indexer.Release, queryErr error) error {
 	lock, err := e.store.Locks().Acquire(ctx, target.subject, target.id, "engine-search", 5*time.Minute)
 	if err != nil {
-		return err
+		if errors.Is(err, store.ErrLocked) {
+			return err
+		}
+		return e.searchFailed(err)
 	}
 	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
 	if target.subject == model.SubjectEpisode {
 		active, err := e.store.Episodes().SeriesHasActive(ctx, target.seriesID)
 		if err != nil {
-			return err
+			return e.searchFailed(err)
 		}
 		if active {
 			return nil
 		}
 		episode, err := e.store.Episodes().Get(ctx, target.id)
 		if err != nil {
-			return err
+			return e.searchFailed(err)
 		}
 		if episode.State != model.StateWanted {
 			return nil
@@ -152,7 +155,7 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 	}
 	if _, err := e.store.Transitions().TransitionLocked(ctx, lock, model.StateSearching,
 		"search_started", fmt.Sprintf("candidates=%d", len(releases))); err != nil {
-		return err
+		return e.searchFailed(err)
 	}
 
 	blacklist, err := e.store.Decisions().BlacklistFor(ctx, target.subject, target.id)
@@ -193,15 +196,21 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		locks = append(locks, packLocks...)
 	}
 	if lowDisk := e.checkSpace(best.Release.SizeBytes, target.savePath, e.libraryRoot(target.subject)); lowDisk != nil {
-		return e.holdForSpace(ctx, lock, target.subject, target.id, lowDisk)
+		if err := e.holdForSpace(ctx, lock, target.subject, target.id, lowDisk); err != nil {
+			return e.searchFailed(err)
+		}
+		e.metrics.searchOutcomes.Inc("held")
+		return nil
 	}
 	request, err := e.addRequestFor(ctx, best.Release.Indexer, best.Release.Magnet, best.Release.DownloadURL)
 	if err != nil {
+		e.metrics.grabAddFailures.Inc()
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
 	request.Category, request.SavePath, request.Paused = target.category, target.savePath, e.cfg.Downloader.AddPaused
 	hash, err := e.addDownload(ctx, request)
 	if err != nil {
+		e.metrics.grabAddFailures.Inc()
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
 	grab, err := e.store.Grabs().CreateGrabbedFor(ctx, locks, model.Grab{SubjectType: target.subject,
@@ -209,8 +218,10 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		fmt.Sprintf("selected %s with score %d", best.Release.Title, best.Score))
 	if err != nil {
 		_ = e.downloader.Remove(context.WithoutCancel(ctx), hash, false)
-		return fmt.Errorf("record grab: %w", err)
+		return e.searchFailed(fmt.Errorf("record grab: %w", err))
 	}
+	e.metrics.searchOutcomes.Inc("grabbed")
+	e.metrics.grabsStarted.Inc("search")
 	e.publish("state_transition", target.subject, target.id, map[string]any{"state": model.StateGrabbed,
 		"grab_id": grab.ID, "release": best.Release.Title, "score": best.Score,
 		"covered_items": len(locks)})
@@ -293,6 +304,11 @@ func (e *Engine) persistCandidates(ctx context.Context, target searchTarget, res
 
 func (e *Engine) retrySearch(ctx context.Context, lock *store.ItemLock, target searchTarget, reason, detail string) error {
 	now := e.clock.Now().UTC()
+	if reason == "no_acceptable_release" {
+		e.metrics.searchOutcomes.Inc("no_match")
+	} else {
+		e.metrics.searchOutcomes.Inc("error")
+	}
 	terminal := target.firstWanted != nil && now.Sub(*target.firstWanted) >= e.cfg.Schedules.SearchGiveUpAfter.Duration
 	delay := 6 * time.Hour
 	backoff := e.cfg.Schedules.SearchBackoff

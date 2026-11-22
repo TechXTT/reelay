@@ -163,6 +163,10 @@ falls back to a verified copy.
 4. The dashboard retains operator access through the existing bearer token.
    Selecting a Jellyfin user filters data; it does not create separate household
    authentication or quota enforcement.
+5. `GET /api/v1/metrics` exposes Prometheus text metrics to operators (the same
+   bearer token). Engine counters are in-process and reset on restart; gauges are read
+   from SQLite, the indexer breakers and the runtime at scrape time. Label sets
+   are fixed, so metric memory does not grow with data.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
 10.11.11 (`net9.0`) and Jellyfin 12.1.0 (`net10.0`). ABI-specific package

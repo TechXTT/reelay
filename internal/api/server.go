@@ -195,6 +195,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 		{"GET /api/v1/settings", s.handleSettings},
 		{"GET /api/v1/setup", s.handleSetup},
+		{"GET /api/v1/metrics", s.handleMetrics},
 		{"POST /api/v1/database/backup", s.handleDatabaseBackup},
 		{"POST /api/v1/system/trigger/{loop}", s.handleTrigger},
 

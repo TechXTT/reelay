@@ -103,6 +103,7 @@ func (e *Engine) grabStoredRelease(ctx context.Context, subject model.SubjectTyp
 		hash, err = e.addDownload(ctx, request)
 	}
 	if err != nil {
+		e.metrics.grabAddFailures.Inc()
 		_, _ = e.store.Transitions().SearchRetryLocked(ctx, lock, e.clock.Now().Add(15*time.Minute),
 			intent.owner+" grab failed", err.Error(), false)
 		return model.Grab{}, err
@@ -111,6 +112,8 @@ func (e *Engine) grabStoredRelease(ctx context.Context, subject model.SubjectTyp
 		SubjectID: id, ReleaseID: releaseID, TorrentHash: hash, Category: category}, intent.reason)
 	if err != nil {
 		_ = e.downloader.Remove(context.WithoutCancel(ctx), hash, false)
+	} else {
+		e.metrics.grabsStarted.Inc(intent.owner)
 	}
 	return grab, err
 }

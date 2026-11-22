@@ -293,6 +293,27 @@ still need the checks below.
    before choosing that database for normal service startup. Keep the original
    database and any remaining WAL/SHM companions together.
 
+## Monitoring with Prometheus
+
+`GET /api/v1/metrics` returns Prometheus text metrics (item and grab counts by
+state, search/grab/import counters, indexer breaker state, database size, and Go
+runtime figures). It needs the same bearer token as the rest of the API. Save
+the token alone in a file readable by Prometheus and scrape it:
+
+```yaml
+scrape_configs:
+  - job_name: reelay
+    metrics_path: /api/v1/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/reelay-token
+    static_configs:
+      - targets: ["reelay-host:7878"]
+```
+
+Counters restart from zero when Reelay restarts; Prometheus handles that as a
+counter reset.
+
 ## Development checks and optional future work
 
 1. [ ] Re-run `.\make.ps1 test` and `.\make.ps1 vet` after any code changes.

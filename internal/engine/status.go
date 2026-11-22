@@ -88,6 +88,7 @@ func (e *Engine) handleMissingTorrent(ctx context.Context, grab model.Grab, down
 	if grab.State == model.GrabCompleted || grab.State == model.GrabImporting {
 		return e.completeGrab(ctx, grab)
 	}
+	e.metrics.grabFailures.Inc("vanished")
 	return e.failGrab(ctx, grab,
 		"torrent disappeared from download client before completion", true)
 }
@@ -103,6 +104,7 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered 
 	grab.Progress = status.Progress
 	grab.ContentPath = status.ContentPath
 	if status.Failed() && !downloadsPaused {
+		e.metrics.grabFailures.Inc("client_error")
 		return e.failGrab(ctx, grab, "download client error: "+status.ErrorMessage, true)
 	}
 	if idle || downloadsPaused {
@@ -112,6 +114,7 @@ func (e *Engine) updateGrabStatus(ctx context.Context, grab model.Grab, covered 
 	}
 	if !idle && !downloadsPaused && !status.Complete() && status.Progress < 1 &&
 		now.Sub(grab.ProgressedAt) >= e.cfg.Downloader.StallTimeout.Duration {
+		e.metrics.grabFailures.Inc("stalled")
 		return e.failGrab(ctx, grab, "torrent made no progress before stall timeout", true)
 	}
 	if status.Complete() {
@@ -200,7 +203,11 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 		if e.importer == nil {
 			return errors.New("no importer configured")
 		}
-		if err := e.importer.ImportCompleted(ctx, grab.ID); err != nil {
+		started := e.clock.Now()
+		err := e.importer.ImportCompleted(ctx, grab.ID)
+		e.metrics.importDuration.Observe(e.clock.Now().Sub(started).Seconds())
+		if err != nil {
+			e.metrics.imports.Inc("failed")
 			cleanup := context.WithoutCancel(ctx)
 
 			grab.State, grab.LastError = model.GrabFailed, err.Error()
@@ -215,6 +222,7 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			e.publishGrabState(grab, subjectIDs, string(model.GrabFailed))
 			return err
 		}
+		e.metrics.imports.Inc("ok")
 	}
 	grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""
 	if err := e.store.Grabs().Update(ctx, grab); err != nil {

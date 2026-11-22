@@ -91,7 +91,18 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		return err
 	}
 	candidates := run.enrich(pool)
-	values := s.diversity().Rank(candidates, tasteProfile(signals), s.weights(preferences), s.cfg.ResultLimit)
+	profile, weights, diversity := tasteProfile(signals), s.weights(preferences), s.diversity()
+	values := diversity.Rank(candidates, profile, weights, s.cfg.ResultLimit)
+	// Diversity only reorders candidates. When they all share a genre or seed
+	// title, the first block cannot meet the caps, so fetch a few catalog
+	// titles outside the dominant genre and rank again.
+	extra := 0
+	if genre := diversity.crowded(values); genre != "" {
+		if more := run.outsideGenre(genre, pool); len(more) > 0 {
+			extra = len(more)
+			values = diversity.Rank(append(candidates, more...), profile, weights, s.cfg.ResultLimit)
+		}
+	}
 	now := s.now().UTC()
 	for i := range values {
 		values[i].ServerID = serverID
@@ -111,7 +122,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 	if err != nil {
 		return err
 	}
-	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))
+	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "extra", extra, "results", len(values))
 	return nil
 }
 
@@ -337,6 +348,41 @@ func (g *generation) enrich(pool map[int]*aggregate) []Candidate {
 	return slices.DeleteFunc(candidates, func(candidate Candidate) bool {
 		return !g.filter.allows(candidate.Item.Language, candidate.Item.Genres, true)
 	})
+}
+
+// outsideGenre fetches up to recommendations.diversity_extra_pages TMDB
+// Discover pages of titles outside genre. Titles already in the pool,
+// excluded titles (owned, watched, rated, dismissed or requested) and titles
+// the preferences reject are skipped. The extra titles are optional, so a
+// provider error ends the fetch without failing the generation.
+func (g *generation) outsideGenre(genre string, pool map[int]*aggregate) []Candidate {
+	var candidates []Candidate
+	var seen = map[int]bool{}
+
+	provider, ok := g.service.provider.(directionProvider)
+	if !ok {
+		return nil
+	}
+	for page := 1; page <= g.service.cfg.ExtraCandidatePages(); page++ {
+		listing, err := provider.DiscoverOutsideGenre(g.ctx, g.mediaType, genre, page)
+		if err != nil {
+			g.service.log.Warn("extra recommendation candidates unavailable", "type", g.mediaType, "genre", genre, "error", err)
+			break
+		}
+		for rank, item := range listing {
+			if item.TMDBID <= 0 || seen[item.TMDBID] || pool[item.TMDBID] != nil || g.excluded[item.TMDBID] || len(item.Genres) == 0 || !g.filter.allows(item.Language, item.Genres, true) {
+				continue
+			}
+			seen[item.TMDBID] = true
+			value := toModel(item)
+			value.Sources = []model.RecommendationSource{{Kind: "catalog", Listing: "discover_outside_genre"}}
+			candidates = append(candidates, Candidate{Item: value, ProviderScore: (1 - float64(rank)/float64(len(listing))) / float64(page), VoteAverage: item.VoteAverage, VoteCount: item.VoteCount})
+		}
+		if len(listing) == 0 {
+			break
+		}
+	}
+	return candidates
 }
 
 type tasteSignal struct {

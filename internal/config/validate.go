@@ -209,6 +209,9 @@ func (c *Config) validateRecommendations(ck *checker) {
 	if r.DiversityGenreCap < 0 || genreCap > window {
 		ck.bad("recommendations.diversity_genre_cap", "must be between 0 (default %d) and diversity_window", DefaultDiversityGenreCap)
 	}
+	if r.DiversityExtraPages < -1 || r.DiversityExtraPages > 5 {
+		ck.bad("recommendations.diversity_extra_pages", "must be between -1 (off) and 5; 0 uses the default %d", DefaultDiversityExtraPages)
+	}
 	if r.SteeringWeight < 0 || r.SteeringWeight > 100 {
 		ck.bad("recommendations.steering_weight", "must be between 0 (default %d) and 100", DefaultSteeringWeight)
 	}

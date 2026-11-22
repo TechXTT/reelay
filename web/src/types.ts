@@ -142,6 +142,37 @@ export interface Recommendation {
   tmdb_id: number;
   generated_at: string;
   expires_at: string;
+  components?: Record<string, number>;
+  sources?: RecommendationSource[] | null;
+}
+
+export interface RecommendationSource {
+  kind: "seed" | "catalog";
+  listing: string;
+  tmdb_id?: number;
+  title?: string;
+}
+
+export interface RecommendationConcentration {
+  media_type: MediaType;
+  generated_at: string;
+  sample_size: number;
+  dominant_genre: string;
+  dominant_genre_share: number;
+  dominant_seed: string;
+  dominant_seed_share: number;
+  distinct_interests: number;
+  distinct_genres: number;
+}
+
+export interface RecommendationConcentrationTrend {
+  media_type: MediaType;
+  generations: number;
+  average_dominant_genre_share: number;
+  average_dominant_seed_share: number;
+  average_distinct_interests: number;
+  earliest: RecommendationConcentration;
+  latest: RecommendationConcentration;
 }
 
 export interface RecommendationStats {
@@ -157,6 +188,7 @@ export interface RecommendationStats {
   completed: number;
   days: number;
   since: string;
+  concentration?: RecommendationConcentrationTrend[] | null;
 }
 
 export interface RecommendationRating {

@@ -1,8 +1,9 @@
 import { api, esc } from "../api.ts";
 import { discoverTypeKey, discoverUserKey, hooks, isMember, session } from "../session.ts";
 import type {
-  ItemList, JellyfinUser, MediaType, Recommendation, RecommendationAction, RecommendationHistoryResponse,
-  RecommendationPreferences, RecommendationPreview, RecommendationStats, RequestMonitorMode, Trial, TrialDecision, TrialScope
+  ItemList, JellyfinUser, MediaType, Recommendation, RecommendationAction, RecommendationConcentrationTrend,
+  RecommendationHistoryResponse, RecommendationPreferences, RecommendationPreview, RecommendationStats, RequestMonitorMode, Trial,
+  TrialDecision, TrialScope
 } from "../types.ts";
 import {
   bindAll, bindRequest, content, date, jsonRequest, openDialog, option, pick, runControl, showError, showToast,
@@ -43,7 +44,28 @@ function statsMarkup(stats: RecommendationStats) {
     ["Average rating", stats.rated ? `${stats.average_rating.toFixed(1)} / 5 (${stats.rated})` : "No ratings"]
   ];
   return `<dl class="rec-stats-grid">${figures.map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join("")}</dl>
-    <p class="rec-stats-note">Titles first offered in the last ${stats.days} days. Measuring since ${esc(date(stats.measuring_since))}.</p>`;
+    <p class="rec-stats-note">Titles first offered in the last ${stats.days} days. Measuring since ${esc(date(stats.measuring_since))}.</p>
+    ${concentrationMarkup(stats.concentration ?? [])}`;
+}
+
+// Shares come from the stored top ten of each generation: the latest list is shown with the first one in the window for comparison.
+function concentrationMarkup(trends: RecommendationConcentrationTrend[]) {
+  if (!trends.length) return `<h3 class="rec-stats-subhead">Top-ten concentration</h3><p class="rec-stats-note">Measured at each refresh; nothing recorded in this window yet.</p>`;
+  const share = (value: number) => `${Math.round(value * 100)}%`;
+  const was = (trend: RecommendationConcentrationTrend, value: string) => trend.generations > 1 ? `<small>was ${esc(value)} on ${esc(date(trend.earliest.generated_at))}</small>` : "";
+  const rows = trends.map(trend => {
+    const { latest, earliest } = trend;
+    const figures: [string, string, string][] = [
+      [trend.media_type === "series" ? "Series refreshes" : "Movie refreshes", String(trend.generations), ""],
+      ["Top genre", `${latest.dominant_genre || "None"} · ${share(latest.dominant_genre_share)}`, was(trend, `${earliest.dominant_genre || "None"} · ${share(earliest.dominant_genre_share)}`)],
+      ["Top source", `${latest.dominant_seed} · ${share(latest.dominant_seed_share)}`, was(trend, `${earliest.dominant_seed} · ${share(earliest.dominant_seed_share)}`)],
+      ["Distinct interests", `${latest.distinct_interests} of ${latest.sample_size}`, was(trend, `${earliest.distinct_interests} of ${earliest.sample_size}`)],
+      ["Average top-genre share", share(trend.average_dominant_genre_share), ""]
+    ];
+    return `<dl class="rec-stats-grid rec-concentration">${figures.map(([label, value, previous]) => `<div><dt>${label}</dt><dd>${esc(value)}</dd>${previous}</div>`).join("")}</dl>`;
+  });
+  return `<h3 class="rec-stats-subhead">Top-ten concentration</h3>${rows.join("")}
+    <p class="rec-stats-note">Share of the top ten held by the most common genre and by the most common seed title or catalog source. Lower shares and more interests mean a broader list.</p>`;
 }
 
 // Never blocks Discover: a failure leaves a small message in the panel only.
@@ -84,6 +106,17 @@ function seriesScopeControls(title: string) {
         <small class="scope-explanation">Trials start from the beginning and skip specials. Short series use up to 3 known episodes; a season trial follows all known episodes of the first season. A Continue/Stop vote and personal rating are required afterward.</small></label>`;
 }
 
+function steerControls(item: Recommendation) {
+  const source = item.sources?.[0];
+  const seedID = source?.kind === "seed" ? source.tmdb_id : undefined;
+  const seedTitle = source?.title ?? "";
+  const button = (kind: SteeringKind, value: string | number, label: string, text: string) =>
+    `<button class="command compact rec-steer" data-kind="${kind}" data-value="${esc(value)}" data-label="${esc(label)}">${esc(text)}</button>`;
+  return `<div class="row-actions steer-actions" role="group" aria-label="Steer this session's list from ${esc(item.title)}"><small>This session:</small>
+      ${button("more_like", item.tmdb_id, item.title, "More like this")}${button("less_like", item.tmdb_id, item.title, "Less like this")}
+      ${seedID ? button("mute_seed", seedID, seedTitle, `Less from ${seedTitle}`) : ""}</div>`;
+}
+
 function recommendationCard(item: Recommendation, mediaType: MediaType, directionPick = false) {
   return `<article class="recommendation-card">
       ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="" loading="lazy">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
@@ -91,6 +124,7 @@ function recommendationCard(item: Recommendation, mediaType: MediaType, directio
       <div class="audience-rating" data-audience-rating>${audienceRating(item.vote_average, item.vote_count)}</div>
       ${item.genres?.length ? `<small class="recommendation-genres">${esc(item.genres.join(" · "))}</small>` : ""}
       <p>${esc(item.overview || "No description available.")}</p><ol>${(item.reasons ?? []).map(reason => `<li>${esc(reason)}</li>`).join("")}</ol>
+      ${directionPick ? "" : steerControls(item)}
       <button class="command compact rec-preview" data-id="${item.id}" aria-label="Preview ${esc(item.title)}">Preview &amp; trailers</button>
       <div class="row-actions recommendation-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button>
       <label class="rating-field"><span>Your rating</span><select class="rec-rating" aria-label="Your rating for ${esc(item.title)}"><option value="">Choose 1–5</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
@@ -112,9 +146,20 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
   session.discoverType = mediaType;
   localStorage.setItem(discoverUserKey, key);
   localStorage.setItem(discoverTypeKey, mediaType);
-  const query = `server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}&media_type=${mediaType}`;
+  let steering = loadSteering(key, mediaType);
+  // A steered request that fails must not lock the viewer out of Discover: drop the session steering and load the regular order.
+  const listRecommendations = async () => {
+    try {
+      return await api<ItemList<Recommendation>>(`/api/v1/recommendations?${recommendationQuery(user, mediaType, steering)}`);
+    } catch (error) {
+      if (!steering.length) throw error;
+      steering = [];
+      saveSteering(key, mediaType, steering);
+      return api<ItemList<Recommendation>>(`/api/v1/recommendations?${recommendationQuery(user, mediaType, steering)}`);
+    }
+  };
   const [recommendationPage, trialPage] = await Promise.all([
-    api<ItemList<Recommendation>>(`/api/v1/recommendations?${query}`),
+    listRecommendations(),
     api<{ items: Trial[] }>(`/api/v1/trials?server_id=${encodeURIComponent(user.server_id)}&user_id=${encodeURIComponent(user.user_id)}`)
   ]);
   const recommendations = recommendationPage.items ?? [];
@@ -124,7 +169,7 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
     <div class="discover-toolbar"><label>Look beyond<select id="direction-genre"></select></label>
       <button class="command" id="change-direction">Change direction</button><button class="command" id="usual-picks" hidden>Back to my picks</button></div>
     <p id="direction-status" role="status"></p>
-    <section id="usual-results"><div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div></section>
+    <section id="usual-results">${steeringPanel()}<div class="recommendation-grid">${recommendationGrid(recommendations, mediaType)}</div></section>
     <section id="direction-results" hidden><div class="recommendation-grid"></div></section>
     ${statsPanelShell()}${notificationsPanelShell()}`);
   void loadRecommendationStats(node, user, key);
@@ -133,6 +178,163 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
   bindTrialControls(node, key, mediaType);
   bindRecommendationCards(node, recommendations);
   bindDirection(node, user, mediaType, recommendations);
+  bindSteering(node, user, key, mediaType, steering, recommendations);
+}
+
+function recommendationGrid(recommendations: Recommendation[], mediaType: MediaType) {
+  return recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`;
+}
+
+// Session steering: choices live in sessionStorage for this tab only, are sent with each list request, and the server re-ranks
+// that one response. Saved preferences are the only lasting channel.
+type SteeringKind = "more_like" | "less_like" | "boost_genre" | "mute_genre" | "boost_seed" | "mute_seed";
+
+interface SteeringChoice {
+  kind: SteeringKind;
+  value: string;
+  label: string;
+}
+
+const steeringKinds: SteeringKind[] = ["more_like", "less_like", "boost_genre", "mute_genre", "boost_seed", "mute_seed"];
+const steeringOpposite: Record<SteeringKind, SteeringKind> = {
+  more_like: "less_like", less_like: "more_like", boost_genre: "mute_genre", mute_genre: "boost_genre", boost_seed: "mute_seed", mute_seed: "boost_seed"
+};
+const steeringLimit = 20;
+
+const steeringStorageKey = (key: string, mediaType: MediaType) => `reelay.steering:${key}:${mediaType}`;
+
+function loadSteering(key: string, mediaType: MediaType) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sessionStorage.getItem(steeringStorageKey(key, mediaType)) ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return (parsed as unknown[]).filter((choice: unknown): choice is SteeringChoice => {
+    if (typeof choice !== "object" || choice === null) return false;
+    const fields = choice as Record<string, unknown>;
+    return steeringKinds.some(kind => kind === fields.kind) && typeof fields.value === "string" && typeof fields.label === "string";
+  });
+}
+
+function saveSteering(key: string, mediaType: MediaType, choices: SteeringChoice[]) {
+  try {
+    if (choices.length) sessionStorage.setItem(steeringStorageKey(key, mediaType), JSON.stringify(choices));
+    else sessionStorage.removeItem(steeringStorageKey(key, mediaType));
+  } catch {
+    // Storage can be unavailable; steering still applies until the view reloads.
+  }
+}
+
+function recommendationQuery(user: JellyfinUser, mediaType: MediaType, choices: SteeringChoice[]) {
+  const query = new URLSearchParams({ server_id: user.server_id, user_id: user.user_id, media_type: mediaType });
+  for (const choice of choices) query.append(choice.kind, choice.value);
+  return query;
+}
+
+// Adding a choice replaces its opposite for the same title, genre, or seed.
+function addSteering(choices: SteeringChoice[], choice: SteeringChoice) {
+  const others = choices.filter(existing => existing.value !== choice.value || (existing.kind !== choice.kind && existing.kind !== steeringOpposite[choice.kind]));
+  const sameKind = others.filter(existing => existing.kind === choice.kind);
+  const oldest = sameKind.length >= steeringLimit ? sameKind[0] : undefined;
+  return [...others.filter(existing => existing !== oldest), choice];
+}
+
+function steeringLabel(choice: SteeringChoice) {
+  switch (choice.kind) {
+    case "more_like": return `More like ${choice.label}`;
+    case "less_like": return `Less like ${choice.label} (hidden)`;
+    case "boost_genre": return `More ${choice.label}`;
+    case "mute_genre": return `Less ${choice.label}`;
+    case "boost_seed": return `More from ${choice.label}`;
+    case "mute_seed": return `Less from ${choice.label}`;
+  }
+}
+
+function steeringPanel() {
+  return `<section class="steer-panel" aria-labelledby="steer-heading"><div class="steer-head"><h2 id="steer-heading">Steer this list</h2><span class="steer-scope">For this session only</span></div>
+    <p class="steer-note">Re-ranks your picks right away in this browser tab. Nothing is saved and the Jellyfin plugin keeps the regular order. To make a lasting change, save it as a preference.</p>
+    <div class="steer-controls"><label>Genre<select id="steer-genre"></select></label><button class="command compact" id="steer-genre-more">More of this genre</button>
+      <button class="command compact" id="steer-genre-less">Less of this genre</button><button class="command compact" id="steer-reset">Reset steering</button></div>
+    <ul class="steer-chips" aria-label="Session steering choices"></ul><p class="steer-status" role="status"></p></section>`;
+}
+
+function bindSteering(node: HTMLElement, user: JellyfinUser, key: string, mediaType: MediaType, initial: SteeringChoice[], recommendations: Recommendation[]) {
+  const panel = pick<HTMLElement>(node, ".steer-panel");
+  const grid = pick<HTMLElement>(node, "#usual-results .recommendation-grid");
+  const genreSelect = pick<HTMLSelectElement>(panel, "#steer-genre");
+  const chips = pick<HTMLElement>(panel, ".steer-chips");
+  const status = pick<HTMLElement>(panel, ".steer-status");
+  const reset = pick<HTMLButtonElement>(panel, "#steer-reset");
+  let choices = initial;
+  let request = 0;
+
+  const fillGenres = (shown: Recommendation[]) => {
+    const counts = new Map<string, number>();
+    for (const item of shown) for (const genre of item.genres ?? []) counts.set(genre, (counts.get(genre) ?? 0) + 1);
+    for (const choice of choices) if (choice.kind === "boost_genre" || choice.kind === "mute_genre") counts.set(choice.value, counts.get(choice.value) ?? 0);
+    const selected = genreSelect.value;
+    genreSelect.replaceChildren(...[...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([genre]) => new Option(genre, genre, false, genre === selected)));
+  };
+  const renderChips = () => {
+    reset.disabled = !choices.length;
+    chips.innerHTML = choices.map((choice, index) => `<li><span>${esc(steeringLabel(choice))}</span>
+      ${choice.kind === "mute_genre" ? `<button class="link-button steer-save" data-index="${index}">Save as preference</button>` : ""}
+      <button class="steer-remove" data-index="${index}" aria-label="Remove ${esc(steeringLabel(choice))}">×</button></li>`).join("");
+    bindAll<HTMLButtonElement>(chips, ".steer-remove", button => button.onclick = () =>
+      void update(choices.filter((_, index) => index !== Number(button.dataset.index))));
+    bindAll<HTMLButtonElement>(chips, ".steer-save", button => button.onclick = () =>
+      void runControl(button, () => saveGenreExclusion(user, choices[Number(button.dataset.index)].value)));
+  };
+  const bindCards = (shown: Recommendation[]) => {
+    bindAll<HTMLButtonElement>(grid, ".rec-steer", button => button.onclick = () => void update(addSteering(choices, {
+      kind: button.dataset.kind as SteeringKind, value: button.dataset.value ?? "", label: button.dataset.label ?? ""
+    })));
+    fillGenres(shown);
+  };
+  const update = async (next: SteeringChoice[]) => {
+    const current = ++request;
+    choices = next;
+    saveSteering(key, mediaType, choices);
+    renderChips();
+    status.textContent = "Re-ranking…";
+    try {
+      const page = await api<ItemList<Recommendation>>(`/api/v1/recommendations?${recommendationQuery(user, mediaType, choices)}`);
+      if (current !== request || !grid.isConnected) return;
+      const shown = page.items ?? [];
+      grid.innerHTML = recommendationGrid(shown, mediaType);
+      bindRecommendationCards(grid, shown);
+      bindCards(shown);
+      status.textContent = choices.length ? `Re-ranked for this session with ${choices.length} ${choices.length === 1 ? "choice" : "choices"}.` : "Showing your regular order.";
+    } catch (error) {
+      if (current !== request) return;
+      status.textContent = "Couldn’t re-rank your picks. Try again.";
+      showError(error);
+    }
+  };
+  const steerGenre = (kind: SteeringKind) => {
+    if (!genreSelect.value) return;
+    void update(addSteering(choices, { kind, value: genreSelect.value, label: genreSelect.value }));
+  };
+  pick<HTMLButtonElement>(panel, "#steer-genre-more").onclick = () => steerGenre("boost_genre");
+  pick<HTMLButtonElement>(panel, "#steer-genre-less").onclick = () => steerGenre("mute_genre");
+  reset.onclick = () => void update([]);
+  renderChips();
+  bindCards(recommendations);
+  if (choices.length) status.textContent = `Re-ranked for this session with ${choices.length} ${choices.length === 1 ? "choice" : "choices"}.`;
+}
+
+// Turning a session choice into a lasting preference is always an explicit step.
+async function saveGenreExclusion(user: JellyfinUser, genre: string) {
+  const query = new URLSearchParams({ server_id: user.server_id, user_id: user.user_id });
+  const preferences = await api<RecommendationPreferences>(`/api/v1/recommendations/preferences?${query}`);
+  if (preferences.excluded_genres.some(value => value.toLowerCase() === genre.toLowerCase())) {
+    showToast(`${genre} is already excluded in your preferences`);
+    return;
+  }
+  await api(`/api/v1/recommendations/preferences?${query}`, jsonRequest("PUT", { ...preferences, excluded_genres: [...preferences.excluded_genres, genre] }));
+  showToast(`${genre} saved as an excluded genre; it applies from the next refresh`);
 }
 
 function bindDirection(node: HTMLElement, user: JellyfinUser, mediaType: MediaType, ordinary: Recommendation[]) {

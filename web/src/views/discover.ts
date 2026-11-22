@@ -114,7 +114,7 @@ function steerControls(item: Recommendation) {
     `<button class="command compact rec-steer" data-kind="${kind}" data-value="${esc(value)}" data-label="${esc(label)}">${esc(text)}</button>`;
   return `<div class="row-actions steer-actions" role="group" aria-label="Steer this session's list from ${esc(item.title)}"><small>This session:</small>
       ${button("more_like", item.tmdb_id, item.title, "More like this")}${button("less_like", item.tmdb_id, item.title, "Less like this")}
-      ${seedID ? button("mute_seed", seedID, seedTitle, `Less from ${seedTitle}`) : ""}</div>`;
+      ${seedID ? button("boost_seed", seedID, seedTitle, `More from ${seedTitle}`) + button("mute_seed", seedID, seedTitle, `Less from ${seedTitle}`) : ""}</div>`;
 }
 
 function recommendationCard(item: Recommendation, mediaType: MediaType, directionPick = false) {

@@ -31,16 +31,27 @@ function requestTrialLine(record: MediaRequest) {
 
 function requestControls(record: MediaRequest) {
   const retryable = (record.media_type === "series" || !record.available) && retryableStates.includes(record.state);
-  return `<div class="row-actions request-controls">${record.jellyfin_url ? `<a class="preview-external" href="${esc(record.jellyfin_url)}" target="_blank" rel="noopener noreferrer">Open in Jellyfin</a>` : ""}
+  return `<div class="row-actions request-controls">${record.jellyfin_url ? `<a class="preview-external" href="${esc(record.jellyfin_url)}" target="_blank" rel="noopener noreferrer">${record.ready_episode ? `Play ${esc(episodeCode(record.ready_season ?? 0, record.ready_episode))}` : "Open in Jellyfin"}</a>` : ""}
       ${record.can_retry_import ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry_import">Retry import</button>` : ""}
       ${retryable ? `<button class="command compact request-action" data-id="${record.id}" data-action="retry">${record.can_retry_import ? "Search again" : "Retry"}</button>` : ""}
       ${!record.cancelled_at ? `<button class="command compact request-action" data-id="${record.id}" data-action="cancel">Withdraw request</button>` : ""}<button class="command compact request-details" data-id="${record.id}">Diagnostics</button></div>`;
 }
 
+function episodeCode(season: number, episode: number) {
+  return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
+}
+
+// A confirmed episode is shown by number; a series parent alone only proves the series is listed.
+function availabilityBadge(record: MediaRequest) {
+  if (record.ready_episode) return `<span class="state state-available">${esc(episodeCode(record.ready_season ?? 0, record.ready_episode))} ready in Jellyfin</span>`;
+  if (!record.available) return "";
+  return `<span class="state state-available">${record.media_type === "series" ? "Series listed in Jellyfin" : "Available in Jellyfin"}</span>`;
+}
+
 function requestRow(record: MediaRequest) {
   return `<article class="request-row">
       <div class="request-title"><strong>${esc(record.title)}</strong><small>${esc(record.media_type)}${record.year ? ` · ${esc(record.year)}` : ""}</small></div>
-      <div class="request-status"><span>Status</span>${state(record.state)}${record.available ? `<span class="state state-available">${record.media_type === "series" ? "Series listed in Jellyfin" : "Available in Jellyfin"}</span>` : ""}</div>
+      <div class="request-status"><span>Status</span>${state(record.state)}${availabilityBadge(record)}</div>
       ${requestProgress(record)}
       <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}

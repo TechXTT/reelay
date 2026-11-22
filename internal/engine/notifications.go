@@ -66,6 +66,9 @@ func (e *Engine) globalNotifications(ctx context.Context, client *http.Client) e
 		if e.cfg.Availability.WebhookFormat == "ntfy" {
 			req.Header.Set("Title", message.title)
 			req.Header.Set("Tags", "popcorn")
+			if click := e.playableURL(notification.Payload); click != "" {
+				req.Header.Set("Click", click)
+			}
 		}
 		req.Header.Set("X-Reelay-Event-ID", strconv.FormatInt(notification.ID, 10))
 		failure := ""
@@ -202,6 +205,8 @@ func availabilityMessage(payload, format string) (notificationMessage, error) {
 	var event struct {
 		Title     string `json:"title"`
 		MediaType string `json:"media_type"`
+		Episode   int    `json:"episode"`
+		Season    int    `json:"season"`
 	}
 
 	if format != "ntfy" {
@@ -219,7 +224,11 @@ func availabilityMessage(payload, format string) (notificationMessage, error) {
 		contentType: "text/plain; charset=utf-8",
 	}
 
-	if event.MediaType == "series" {
+	// Only a plugin-confirmed episode carries an episode number; a series event
+	// without one means only the series parent has been seen.
+	if event.MediaType == "series" && event.Episode > 0 {
+		message.body = fmt.Sprintf("%s S%02dE%02d is ready to watch in Jellyfin.", event.Title, event.Season, event.Episode)
+	} else if event.MediaType == "series" {
 		message.title = "Reelay: series listed in Jellyfin"
 		message.body = event.Title + " is listed in Jellyfin. Episode availability is unconfirmed."
 	}

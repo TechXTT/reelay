@@ -228,6 +228,8 @@ export interface MediaRequest {
   cancelled_at: string | null;
   seasons: number[] | null;
   jellyfin_url: string;
+  ready_season?: number;
+  ready_episode?: number;
   trial?: Trial;
 }
 

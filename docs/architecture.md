@@ -158,6 +158,22 @@ falls back to a verified copy.
    an ntfy topic on the operator-configured `availability.user_ntfy_base_url`;
    arbitrary webhook URLs are operator-only. Disabled or deleted destinations
    close queued events as "destination removed" instead of retrying.
+7. Episode readiness. A plugin that sends `X-Reelay-Plugin-Capabilities:
+   episode-confirmation` on sync marks its server in `kv`; while it does, a
+   present series parent no longer queues a series request's availability
+   event. The plugin reads `GET /api/v1/integrations/jellyfin/episode-confirmations`
+   (requested-scope episodes Reelay imported and Jellyfin has not confirmed for
+   that user), resolves each episode under the series with the user's access
+   and without virtual "missing" placeholders, and posts the episode items back.
+   Reelay stores only confirmations that match a current candidate in
+   `jellyfin_episode_confirmations` (migration 0014). A request's first
+   confirmation queues one event with `season`, `episode` and the episode's
+   `jellyfin_item_id`, so the notification and the Requests link open that
+   episode; both outboxes stay unique per request, so repeated syncs never
+   notify again. Requests reports the lowest confirmed episode as
+   `ready_season`/`ready_episode`. Older plugins send no header and keep the
+   series-level "listed in Jellyfin" signal. Confirmations are not revoked if
+   the episode later disappears from Jellyfin.
 
 ## Source and maintenance boundaries
 

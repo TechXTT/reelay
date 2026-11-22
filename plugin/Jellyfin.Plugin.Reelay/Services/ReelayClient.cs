@@ -17,6 +17,7 @@ public sealed class ReelayClient
     public async Task<SyncResponse?> SyncAsync(SyncRequest body, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/sync");
+        request.Headers.Add("X-Reelay-Plugin-Capabilities", "episode-confirmation");
         request.Content = JsonContent.Create(body);
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
@@ -52,6 +53,18 @@ public sealed class ReelayClient
     {
         if (episodes.Count == 0) return;
         await PostAsync("/api/v1/integrations/jellyfin/trial-playback", new { server_id = RequiredConfiguration().ServerId, user_id = userId, episodes }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PendingEpisodeConfirmation>> GetEpisodeConfirmationsAsync(string userId, CancellationToken cancellationToken)
+    {
+        var page = await GetAsync<EpisodeConfirmationPage>($"/api/v1/integrations/jellyfin/episode-confirmations?{UserQuery(RequiredConfiguration(), userId)}", true, cancellationToken).ConfigureAwait(false);
+        return page?.Items ?? new List<PendingEpisodeConfirmation>();
+    }
+
+    public async Task SendEpisodeConfirmationsAsync(string userId, IReadOnlyList<EpisodeConfirmation> episodes, CancellationToken cancellationToken)
+    {
+        if (episodes.Count == 0) return;
+        await PostAsync("/api/v1/integrations/jellyfin/episode-confirmations", new EpisodeConfirmationRequest(RequiredConfiguration().ServerId, userId, episodes), cancellationToken).ConfigureAwait(false);
     }
 
     public Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)

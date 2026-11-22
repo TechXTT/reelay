@@ -66,6 +66,7 @@ public sealed class SyncService
         foreach (var user in users)
         {
             await SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
+            await ConfirmEpisodesAsync(user, cancellationToken).ConfigureAwait(false);
         }
         progress?.Report(55);
 
@@ -96,6 +97,27 @@ public sealed class SyncService
             }
         }
         foreach (var chunk in watched.Chunk(BatchSize)) await _client.SendTrialPlaybackAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task ConfirmEpisodesAsync(JellyfinUser user, CancellationToken cancellationToken)
+    {
+        var userId = user.Id.ToString("N");
+        var pending = await _client.GetEpisodeConfirmationsAsync(userId, cancellationToken).ConfigureAwait(false);
+        if (pending.Count == 0) return;
+        var seriesByTmdb = new Dictionary<int, BaseItem>();
+        foreach (var series in JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Series).Where(item => !_virtual.IsManagedPath(item.Path)))
+        {
+            seriesByTmdb.TryAdd(JellyfinIdentity.ProviderId(series, MetadataProvider.Tmdb), series);
+        }
+        var confirmed = new List<EpisodeConfirmation>();
+        foreach (var item in pending)
+        {
+            if (!seriesByTmdb.TryGetValue(item.TmdbId, out var parent)) continue;
+            var episode = _libraryManager.GetItemList(new InternalItemsQuery(user) { ParentId = parent.Id, IncludeItemTypes = new[] { BaseItemKind.Episode }, Recursive = true, ParentIndexNumber = item.Season, IndexNumber = item.Number, IsVirtualItem = false, Limit = 1 }).FirstOrDefault();
+            if (episode is null || _virtual.IsManagedPath(episode.Path)) continue;
+            confirmed.Add(new EpisodeConfirmation(item.RequestId, item.Season, item.Number, episode.Id.ToString("N")));
+        }
+        foreach (var chunk in confirmed.Chunk(BatchSize)) await _client.SendEpisodeConfirmationsAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)

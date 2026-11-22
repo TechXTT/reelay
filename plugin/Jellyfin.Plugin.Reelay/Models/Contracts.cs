@@ -96,3 +96,26 @@ public sealed record TrialPlayback(
     [property: JsonPropertyName("request_id")] long RequestId,
     [property: JsonPropertyName("season")] int Season,
     [property: JsonPropertyName("number")] int Number);
+
+public sealed class EpisodeConfirmationPage
+{
+    [JsonPropertyName("items")]
+    public List<PendingEpisodeConfirmation> Items { get; init; } = new();
+}
+
+public sealed record PendingEpisodeConfirmation(
+    [property: JsonPropertyName("request_id")] long RequestId,
+    [property: JsonPropertyName("tmdb_id")] int TmdbId,
+    [property: JsonPropertyName("season")] int Season,
+    [property: JsonPropertyName("number")] int Number);
+
+public sealed record EpisodeConfirmation(
+    [property: JsonPropertyName("request_id")] long RequestId,
+    [property: JsonPropertyName("season")] int Season,
+    [property: JsonPropertyName("number")] int Number,
+    [property: JsonPropertyName("item_id")] string ItemId);
+
+public sealed record EpisodeConfirmationRequest(
+    [property: JsonPropertyName("server_id")] string ServerId,
+    [property: JsonPropertyName("user_id")] string UserId,
+    [property: JsonPropertyName("episodes")] IReadOnlyList<EpisodeConfirmation> Episodes);

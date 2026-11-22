@@ -61,6 +61,9 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 	}
 	removed := 0
 	if req.Complete {
+		if err := s.store.Recommendations().SetEpisodeConfirmationSupport(r.Context(), req.ServerID, pluginSupports(r, "episode-confirmation")); err != nil {
+			return err
+		}
 		removed, err = s.store.Recommendations().CompleteSync(r.Context(), req.ServerID, req.SyncToken)
 		if err != nil {
 			return BadRequest("invalid sync completion").WithCause(err)

@@ -225,6 +225,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"POST /api/v1/integrations/jellyfin/events", accessOperator, s.handleJellyfinEvents},
 		{"GET /api/v1/integrations/jellyfin/users", accessMember, s.handleJellyfinUsers},
 		{"POST /api/v1/integrations/jellyfin/trial-playback", accessOperator, s.handleTrialPlayback},
+		{"GET /api/v1/integrations/jellyfin/episode-confirmations", accessOperator, s.handleEpisodeConfirmationCandidates},
+		{"POST /api/v1/integrations/jellyfin/episode-confirmations", accessOperator, s.handleEpisodeConfirmations},
 
 		{"GET /api/v1/recommendations", accessMember, s.handleRecommendations},
 		{"GET /api/v1/recommendations/preferences", accessMember, s.handleRecommendationPreferences},

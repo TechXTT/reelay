@@ -243,6 +243,10 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
  JOIN selected_episodes ep ON ep.series_id=anchor.series_id AND ep.chosen_release_id=g.release_id
  WHERE g.state IN ('pending','downloading','completed','importing')
    AND ep.state IN ('grabbed','downloading','importing') GROUP BY ep.request_id
+), ready_episode AS (
+ SELECT c.request_id,c.season,c.number,c.item_id FROM jellyfin_episode_confirmations c
+ WHERE c.request_id IN (SELECT id FROM selected_requests)
+   AND c.rowid=(SELECT x.rowid FROM jellyfin_episode_confirmations x WHERE x.request_id=c.request_id ORDER BY x.season,x.number LIMIT 1)
 )
 SELECT
  mr.id,mr.server_id,mr.user_id,mr.media_type,mr.tmdb_id,mr.title,mr.year,mr.requested_at,mr.monitor_mode,mr.subject_type,mr.subject_id,
@@ -268,12 +272,14 @@ SELECT
  CASE WHEN mr.media_type='movie' THEN m.next_search_at ELSE e.next_search_at END,
  EXISTS(SELECT 1 FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1),
  COALESCE(e.imported,0),COALESCE(e.total,0),mr.cancelled_at,mr.seasons_json,
- COALESCE((SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 ORDER BY ji.item_id LIMIT 1),''),
+ COALESCE(rd.item_id,(SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 ORDER BY ji.item_id LIMIT 1),''),
  CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
       WHEN mr.media_type='movie' THEN EXISTS(SELECT 1 FROM grabs g WHERE `+recoverableMovieImport+`)
       WHEN sr.status='following' THEN COALESCE(e.can_retry_import,0)
-      ELSE 0 END
+      ELSE 0 END,
+ COALESCE(rd.season,0),COALESCE(rd.number,0)
 FROM selected_requests mr
+LEFT JOIN ready_episode rd ON rd.request_id=mr.id
 LEFT JOIN movies m ON mr.subject_type='movie' AND m.id=mr.subject_id AND m.tmdb_id=mr.tmdb_id
 LEFT JOIN series sr ON mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id
 LEFT JOIN episode_summary e ON mr.subject_type='series' AND e.request_id=mr.id
@@ -309,7 +315,8 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	var downloadWait int
 
 	if err := row.Scan(append(requestIdentityTargets(&value, &requested), &value.State, &value.Progress, &value.LastError,
-		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport)...); err != nil {
+		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport,
+		&value.ReadySeason, &value.ReadyEpisode)...); err != nil {
 		return value, err
 	}
 	if err := finishRequest(&value, requested, cancelled, seasons); err != nil {

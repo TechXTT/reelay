@@ -134,14 +134,24 @@ public sealed class SyncService
         var pending = await _client.GetEpisodeConfirmationsAsync(userId, cancellationToken).ConfigureAwait(false);
         if (pending.Count == 0) return;
         var confirmed = new List<EpisodeConfirmation>();
+        var missing = new List<EpisodeKey>();
         foreach (var item in pending)
         {
-            if (!seriesByTmdb.Value.TryGetValue(item.TmdbId, out var parent)) continue;
-            var episode = _libraryManager.GetItemList(new InternalItemsQuery(user) { ParentId = parent.Id, IncludeItemTypes = new[] { BaseItemKind.Episode }, Recursive = true, ParentIndexNumber = item.Season, IndexNumber = item.Number, IsVirtualItem = false, Limit = 1 }).FirstOrDefault();
-            if (episode is null || _virtual.IsManagedPath(episode.Path)) continue;
-            confirmed.Add(new EpisodeConfirmation(item.RequestId, item.Season, item.Number, episode.Id.ToString("N")));
+            var episode = seriesByTmdb.Value.TryGetValue(item.TmdbId, out var parent)
+                ? _libraryManager.GetItemList(new InternalItemsQuery(user) { ParentId = parent.Id, IncludeItemTypes = new[] { BaseItemKind.Episode }, Recursive = true, ParentIndexNumber = item.Season, IndexNumber = item.Number, IsVirtualItem = false, Limit = 1 }).FirstOrDefault()
+                : null;
+            if (episode is not null && !_virtual.IsManagedPath(episode.Path))
+            {
+                confirmed.Add(new EpisodeConfirmation(item.RequestId, item.Season, item.Number, episode.Id.ToString("N")));
+            }
+            else if (item.Recheck)
+            {
+                // A recheck that no longer finds the episode withdraws its confirmation.
+                missing.Add(new EpisodeKey(item.RequestId, item.Season, item.Number));
+            }
         }
-        foreach (var chunk in confirmed.Chunk(BatchSize)) await _client.SendEpisodeConfirmationsAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
+        foreach (var chunk in confirmed.Chunk(BatchSize)) await _client.SendEpisodeConfirmationsAsync(userId, chunk, Array.Empty<EpisodeKey>(), cancellationToken).ConfigureAwait(false);
+        foreach (var chunk in missing.Chunk(BatchSize)) await _client.SendEpisodeConfirmationsAsync(userId, Array.Empty<EpisodeConfirmation>(), chunk, cancellationToken).ConfigureAwait(false);
     }
 
     // Reports which catalog items the user can access in Jellyfin, excluding

@@ -6,16 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // EpisodeConfirmationLimit bounds one candidate page and one confirmation batch.
 const EpisodeConfirmationLimit = 400
 
+// EpisodeRecheckInterval is how long a confirmation stands before the plugin
+// is asked to check that the episode is still visible to the requester.
+const EpisodeRecheckInterval = 6 * time.Hour
+
 // EpisodeCandidate is a requested episode Reelay imported that Jellyfin has not
 // yet confirmed as visible to the requester.
+// Recheck marks an existing confirmation that is due to be checked again.
 type EpisodeCandidate struct {
 	RequestID int64 `json:"request_id"`
 	TMDBID    int   `json:"tmdb_id"`
+	Season    int   `json:"season"`
+	Number    int   `json:"number"`
+	Recheck   bool  `json:"recheck"`
+}
+
+// EpisodeKey names a requested episode the plugin no longer finds for the
+// requester during a recheck.
+type EpisodeKey struct {
+	RequestID int64 `json:"request_id"`
 	Season    int   `json:"season"`
 	Number    int   `json:"number"`
 }
@@ -62,11 +77,17 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_
 }
 
 // PendingEpisodeConfirmations lists the user's requested, imported episodes
-// that Jellyfin has not confirmed yet, oldest request first.
+// that Jellyfin has not confirmed yet, then confirmations of the user's active
+// requests that are due for a recheck, oldest first within each group.
 func (r *RecommendationRepository) PendingEpisodeConfirmations(ctx context.Context, serverID, userID string) ([]EpisodeCandidate, error) {
-	var rows, err = r.s.ro.QueryContext(ctx, `SELECT request_id,tmdb_id,season,number FROM (`+requestedImportedEpisodes+`) candidate
+	var due = FormatTime(r.s.nowUTC().Add(-EpisodeRecheckInterval))
+	var rows, err = r.s.ro.QueryContext(ctx, `SELECT request_id,tmdb_id,season,number,recheck FROM (
+ SELECT candidate.*,0 AS recheck,'' AS confirmed_at FROM (`+requestedImportedEpisodes+`) candidate
  WHERE NOT EXISTS(SELECT 1 FROM jellyfin_episode_confirmations c WHERE c.request_id=candidate.request_id AND c.season=candidate.season AND c.number=candidate.number)
- ORDER BY request_id,season,number LIMIT ?`, serverID, userID, EpisodeConfirmationLimit)
+ UNION ALL
+ SELECT c.request_id,mr.tmdb_id,c.season,c.number,1,c.confirmed_at FROM jellyfin_episode_confirmations c JOIN media_requests mr ON mr.id=c.request_id
+ WHERE mr.server_id=? AND mr.user_id=? AND mr.cancelled_at IS NULL AND c.confirmed_at<=?
+) ORDER BY recheck,confirmed_at,request_id,season,number LIMIT ?`, serverID, userID, serverID, userID, due, EpisodeConfirmationLimit)
 
 	if err != nil {
 		return nil, fmt.Errorf("list pending episode confirmations: %w", err)
@@ -74,26 +95,44 @@ func (r *RecommendationRepository) PendingEpisodeConfirmations(ctx context.Conte
 	return collectRows(rows, func(row scanner) (EpisodeCandidate, error) {
 		var value EpisodeCandidate
 
-		return value, row.Scan(&value.RequestID, &value.TMDBID, &value.Season, &value.Number)
+		return value, row.Scan(&value.RequestID, &value.TMDBID, &value.Season, &value.Number, &value.Recheck)
 	})
 }
 
 // ConfirmEpisodes stores confirmations that match one of the user's current
-// candidates and returns how many were new. A request's first confirmation
-// queues its availability event for the lowest confirmed episode; each outbox
-// holds at most one event per request, so repeated syncs never notify again.
-func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID, userID string, confirmations []EpisodeConfirmation) (int, error) {
+// candidates, refreshes ones it already holds, and withdraws the user's
+// confirmations for missing episodes. It returns how many confirmations were
+// new and how many were withdrawn. A request's first confirmation queues its
+// availability event for the lowest confirmed episode; each outbox holds at
+// most one event per request, so rechecks and repeated syncs never notify
+// again, even after a withdrawn episode is confirmed anew.
+func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID, userID string, confirmations []EpisodeConfirmation, missing []EpisodeKey) (int, int, error) {
 	var confirmed int
+	var withdrawn int
 
 	if strings.TrimSpace(serverID) == "" || strings.TrimSpace(userID) == "" {
-		return 0, errors.New("confirm episodes requires server id and user id")
+		return 0, 0, errors.New("confirm episodes requires server id and user id")
 	}
 	err := r.s.InTx(ctx, func(tx *sql.Tx) error {
 		var now = FormatTime(r.s.nowUTC())
 		var touched = make(map[int64]bool)
 
 		for _, confirmation := range confirmations {
-			var result, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO jellyfin_episode_confirmations(request_id,season,number,item_id,confirmed_at)
+			var result, err = tx.ExecContext(ctx, `UPDATE jellyfin_episode_confirmations SET item_id=?,confirmed_at=?
+ WHERE request_id=? AND season=? AND number=? AND request_id IN (SELECT id FROM media_requests WHERE server_id=? AND user_id=?)`,
+				confirmation.ItemID, now, confirmation.RequestID, confirmation.Season, confirmation.Number, serverID, userID)
+
+			if err != nil {
+				return fmt.Errorf("refresh episode confirmation: %w", err)
+			}
+			refreshed, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if refreshed > 0 {
+				continue
+			}
+			result, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO jellyfin_episode_confirmations(request_id,season,number,item_id,confirmed_at)
  SELECT candidate.request_id,candidate.season,candidate.number,?,? FROM (`+requestedImportedEpisodes+`) candidate
  WHERE candidate.request_id=? AND candidate.season=? AND candidate.number=?`,
 				confirmation.ItemID, now, serverID, userID, confirmation.RequestID, confirmation.Season, confirmation.Number)
@@ -110,6 +149,20 @@ func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID
 				touched[confirmation.RequestID] = true
 			}
 		}
+		for _, key := range missing {
+			var result, err = tx.ExecContext(ctx, `DELETE FROM jellyfin_episode_confirmations
+ WHERE request_id=? AND season=? AND number=? AND request_id IN (SELECT id FROM media_requests WHERE server_id=? AND user_id=?)`,
+				key.RequestID, key.Season, key.Number, serverID, userID)
+
+			if err != nil {
+				return fmt.Errorf("withdraw episode confirmation: %w", err)
+			}
+			count, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			withdrawn += int(count)
+		}
 		for requestID := range touched {
 			if err := queueEpisodeAvailability(ctx, tx, requestID, now); err != nil {
 				return err
@@ -117,7 +170,7 @@ func (r *RecommendationRepository) ConfirmEpisodes(ctx context.Context, serverID
 		}
 		return nil
 	})
-	return confirmed, err
+	return confirmed, withdrawn, err
 }
 
 // queueEpisodeAvailability mirrors CompleteSync: the per-user event first, and

@@ -115,6 +115,12 @@ public sealed record PendingEpisodeConfirmation(
     [property: JsonPropertyName("request_id")] long RequestId,
     [property: JsonPropertyName("tmdb_id")] int TmdbId,
     [property: JsonPropertyName("season")] int Season,
+    [property: JsonPropertyName("number")] int Number,
+    [property: JsonPropertyName("recheck")] bool Recheck);
+
+public sealed record EpisodeKey(
+    [property: JsonPropertyName("request_id")] long RequestId,
+    [property: JsonPropertyName("season")] int Season,
     [property: JsonPropertyName("number")] int Number);
 
 public sealed record EpisodeConfirmation(
@@ -126,4 +132,5 @@ public sealed record EpisodeConfirmation(
 public sealed record EpisodeConfirmationRequest(
     [property: JsonPropertyName("server_id")] string ServerId,
     [property: JsonPropertyName("user_id")] string UserId,
-    [property: JsonPropertyName("episodes")] IReadOnlyList<EpisodeConfirmation> Episodes);
+    [property: JsonPropertyName("episodes")] IReadOnlyList<EpisodeConfirmation> Episodes,
+    [property: JsonPropertyName("missing")] IReadOnlyList<EpisodeKey> Missing);

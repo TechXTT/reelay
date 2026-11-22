@@ -25,6 +25,7 @@ type episodeConfirmationsRequest struct {
 	ServerID string                      `json:"server_id"`
 	UserID   string                      `json:"user_id"`
 	Episodes []store.EpisodeConfirmation `json:"episodes"`
+	Missing  []store.EpisodeKey          `json:"missing"`
 }
 
 func (s *Server) handleEpisodeConfirmationCandidates(w http.ResponseWriter, r *http.Request) error {
@@ -44,20 +45,25 @@ func (s *Server) handleEpisodeConfirmations(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.ServerID) == "" || strings.TrimSpace(body.UserID) == "" || len(body.Episodes) > store.EpisodeConfirmationLimit {
+	if strings.TrimSpace(body.ServerID) == "" || strings.TrimSpace(body.UserID) == "" || len(body.Episodes)+len(body.Missing) > store.EpisodeConfirmationLimit {
 		return BadRequest("episode confirmations need server_id, user_id, and at most %d episodes", store.EpisodeConfirmationLimit)
+	}
+	for i, key := range body.Missing {
+		if key.RequestID <= 0 || key.Season < 0 || key.Number <= 0 {
+			return BadRequest("missing episode at index %d needs request_id, season, and number", i)
+		}
 	}
 	for i, episode := range body.Episodes {
 		if episode.RequestID <= 0 || episode.Season < 0 || episode.Number <= 0 || strings.TrimSpace(episode.ItemID) == "" {
 			return BadRequest("episode at index %d needs request_id, season, number, and item_id", i)
 		}
 	}
-	confirmed, err := s.store.Recommendations().ConfirmEpisodes(r.Context(), body.ServerID, body.UserID, body.Episodes)
+	confirmed, withdrawn, err := s.store.Recommendations().ConfirmEpisodes(r.Context(), body.ServerID, body.UserID, body.Episodes, body.Missing)
 	if err != nil {
 		return err
 	}
-	if confirmed > 0 {
+	if confirmed > 0 || withdrawn > 0 {
 		s.publishRequestsUpdated(body.ServerID, body.UserID)
 	}
-	return reply(w, r, http.StatusOK, map[string]any{"confirmed": confirmed})
+	return reply(w, r, http.StatusOK, map[string]any{"confirmed": confirmed, "withdrawn": withdrawn})
 }

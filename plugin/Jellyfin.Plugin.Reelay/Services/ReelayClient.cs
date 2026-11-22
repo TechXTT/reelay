@@ -72,10 +72,10 @@ public sealed class ReelayClient
         return page?.Items ?? new List<PendingEpisodeConfirmation>();
     }
 
-    public async Task SendEpisodeConfirmationsAsync(string userId, IReadOnlyList<EpisodeConfirmation> episodes, CancellationToken cancellationToken)
+    public async Task SendEpisodeConfirmationsAsync(string userId, IReadOnlyList<EpisodeConfirmation> episodes, IReadOnlyList<EpisodeKey> missing, CancellationToken cancellationToken)
     {
-        if (episodes.Count == 0) return;
-        await PostAsync("/api/v1/integrations/jellyfin/episode-confirmations", new EpisodeConfirmationRequest(RequiredConfiguration().ServerId, userId, episodes), cancellationToken).ConfigureAwait(false);
+        if (episodes.Count == 0 && missing.Count == 0) return;
+        await PostAsync("/api/v1/integrations/jellyfin/episode-confirmations", new EpisodeConfirmationRequest(RequiredConfiguration().ServerId, userId, episodes, missing), cancellationToken).ConfigureAwait(false);
     }
 
     public Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)

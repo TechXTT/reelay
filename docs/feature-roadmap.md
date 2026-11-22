@@ -83,6 +83,12 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
    rejection reasons, so tuning a profile isn't guesswork.
 10. **Profile preview (S).** "Test this profile against the last search": re-score
     saved candidates under edited settings before saving them.
+27. **Subtitle and dubbed-audio selection for torrents (M).** Let users choose
+    desired subtitle languages and a specific dubbed-audio language when
+    requesting a title or searching torrents. Use those choices to search and
+    filter release candidates, show matching subtitle and audio languages in
+    the results, and distinguish confirmed matches from unknown language
+    information before a torrent is selected.
 
 ## Requests and household use
 
@@ -152,11 +158,11 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
 20. **Scheduled automatic backups with retention (S).** Backup and restore exist
     but only run manually (`--backup`, settings view). Add a nightly snapshot that
     keeps the last N copies.
-   **Implemented 2026-10-04:** `database.backup_interval`, `backup_dir` and
-   `backup_keep` drive an hourly-checked engine loop that writes timestamped
-   `VACUUM INTO` snapshots and prunes only its own files; setup checks show the
-   status. Verified with go build, vet, staticcheck, and
-   `go test ./internal/... ./cmd/...` including new config and engine tests.
+    **Implemented 2026-10-04:** `database.backup_interval`, `backup_dir` and
+    `backup_keep` drive an hourly-checked engine loop that writes timestamped
+    `VACUUM INTO` snapshots and prunes only its own files; setup checks show the
+    status. Verified with go build, vet, staticcheck, and
+    `go test ./internal/... ./cmd/...` including new config and engine tests.
 21. **Activity and history page (S).** A searchable log of grabs, imports,
     failures and state changes across all items. The data is already in
     `state_transitions`.

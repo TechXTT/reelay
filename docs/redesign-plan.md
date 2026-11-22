@@ -38,14 +38,26 @@ Committed through merges `efaf85a`, `63196de` and `3a0dd06`, implemented in para
 
 **Not verified:** a live Jellyfin server and plugin install (user-access filtering, placeholder exclusion, poster loading), a live qBittorrent or indexer outage, and the new views in a browser.
 
+## Follow-up delivery
+
+Closes the remaining items of the third delivery; committed as `f0d47dc`, `30a3534` and the merges of the two follow-up branches.
+
+1. **Every series copy.** Trial progress and episode confirmation try each real series sharing a TMDB id.
+2. **Later episodes.** Each batch of new confirmations sends one message naming the first new episode and how many arrived; an episode is never announced twice, even after a recheck withdraws and re-confirms it (migration 0018).
+3. **Current played state.** The plugin reports finished titles with each library pass, so Tonight's "Not finished yet" follows titles later marked unplayed.
+4. **Steering and diversity.** Steering covers the whole stored list, cards offer "More from" a seed, the concentration snapshot shares the list's transaction, and narrow profiles fetch a cached page of catalog titles outside the crowded genre (`recommendations.diversity_extra_pages`). In the animation-only fixture the top-ten Animation share fell from 100% to 50%.
+5. **Incidents.** Storage and indexer incidents recover without due items (indexers are probed once per search interval, never through an open breaker); causes removed from configuration close at startup with a note; unreachable completed downloads and TMDB failures in the recommendation loop open incidents.
+
+**Verified** on the merged tree: go build, vet, `go test ./...` (store schema test at 18), gofmt, TypeScript, `npm run build`, `.\make.ps1 plugin-test` on both Jellyfin targets, and scratch fixtures for batches, played state, the 0018 upgrade on existing data, steering depth, transactional snapshots, extra candidates, indexer probes, removed causes across a restart, download-file and TMDB incidents, and viewer-safe waits.
+
+**Not verified:** a live Jellyfin server and plugin install, live qBittorrent and indexer outages, and the views in a browser.
+
 **Remaining:**
 
-1. When two real series share a TMDB id, only the first is checked for trials and confirmations. This can miss a confirmation but never invents one.
-2. Notifications stay once per request, for the first confirmed episode; later episodes of a followed series do not notify.
-3. Tonight's "unfinished" filter uses append-only activity, so a title marked unplayed later still counts as finished. Posters load directly from the Jellyfin base URL.
-4. Steering re-ranks at most the top 100 stored rows, and `boost_seed` has no control in the UI yet. Diversity reorders the existing candidates; it does not fetch new ones.
-5. Indexer and storage incidents resolve only on a search pass with due items; an incident for an indexer removed from config stays open until resolved another way. A completed download whose source path is unavailable shows a viewer wait but no incident, and TMDB failures are not tracked.
-6. The concentration snapshot is written after the recommendations, not in the same transaction.
+1. Extra catalog candidates skip TMDB details, so they carry no keywords, people or runtime; narrow profiles will see a visible shift toward them in later blocks.
+2. The probe fallback for indexers without a capabilities request is one recent-feed query per search interval while an incident is open.
+3. A storage incident keyed by an ancestor path still counts as configured and can stay open while that path stays low on space. Removed causes close only at startup, since configuration has no live reload.
+4. Download-file incidents also resolve when the waiting grab is cancelled or fails, not only when the files return.
 
 ## Acceptance journeys
 

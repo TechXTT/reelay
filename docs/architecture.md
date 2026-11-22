@@ -142,21 +142,28 @@ falls back to a verified copy.
     demoted title carries a negative `diversity` component so stored scores stay
     ordered and still sum. This runs before storage, so the plugin's top 40 and
     Discover agree. 0 or an absent key uses the defaults 10, 3 and 5; a cap equal
-    to the window turns that cap off.
+    to the window turns that cap off. When the first block still breaks a cap
+    because too few alternatives exist, generation fetches up to
+    `recommendations.diversity_extra_pages` TMDB Discover pages outside the
+    crowded genre (default 1, -1 off, at most 5; cached 24 hours and shared
+    across users), filters them like any candidate, and ranks again.
 16. Every generation writes one `recommendation_concentration` row (migration
     0016) for the top ten: dominant genre and its share, dominant source and its
     share, distinct sources and distinct genres. Stats return per-media-type
     averages with the earliest and latest snapshot in the window as
-    `concentration`. Rows older than 400 days are pruned.
+    `concentration`. The snapshot is written in the same transaction as the
+    stored list. Rows older than 400 days are pruned.
 17. Session steering rides on `GET /api/v1/recommendations` as repeated
     `more_like`, `less_like`, `boost_genre`, `mute_genre`, `boost_seed` and
     `mute_seed` parameters (at most 20 each, `media_type` required). The server
-    re-ranks the stored active list (up to 100 rows) with a `steering` component
+    re-ranks the whole stored active list (up to `result_limit`, at least 100
+    rows) with a `steering` component
     scaled by `recommendations.steering_weight`, applies the same diversity
     rules, hides less-like titles, and writes nothing. The browser keeps
     steering in `sessionStorage` per user and media type; saved preferences stay
     the only lasting channel, and a muted genre can be saved as an exclusion
-    only through an explicit action.
+    only through an explicit action. Cards offer "More from" and "Less from"
+    their seed title.
 
 ## Request recovery and availability
 
@@ -202,7 +209,12 @@ falls back to a verified copy.
    series-level "listed in Jellyfin" signal. A confirmation older than six
    hours returns to the plugin as a `recheck` candidate; the plugin re-reports
    episodes it still finds and lists the rest under `missing`, and Reelay
-   withdraws those confirmations. Re-confirmation never notifies again.
+   withdraws those confirmations. Each batch of new confirmations queues one
+   event per request naming the first new episode and `episode_count`;
+   `episode_notifications` (migration 0018) records every announced episode, so
+   rechecks and re-confirmations never announce one twice. The outboxes are
+   unique per (request, item); title-level events keep one per request in code.
+   The plugin checks every real series that shares the TMDB id.
 8. Per-user movie readiness. When the plugin reports a user's library through
    `POST /api/v1/integrations/jellyfin/user-items` (staged under a sync token and
    made current atomically on `complete`, migration 0015), a movie request is
@@ -218,7 +230,14 @@ falls back to a verified copy.
    restart; resolved ones are pruned with `runtime.audit_retention` and capped
    at 200. `GET /api/v1/incidents` (operator) and the dashboard show the cause,
    affected count, next step and check time, operator action and raw detail;
-   metrics export `reelay_incidents_open{kind}`.
+   metrics export `reelay_incidents_open{kind}`. Each search pass rechecks free
+   space for open storage incidents and, when nothing is due, probes indexers
+   with open incidents once (never while the breaker is open). Completed
+   downloads whose files are unreachable open `storage` incidents keyed
+   `download_files:<mapped path>`, owned by the status loop. TMDB failures in the
+   recommendation loop open a `metadata`/`tmdb` incident; interactive calls do
+   not. At startup, incidents whose cause left the configuration resolve with a
+   `resolved_note`.
 10. Each listed request carries viewer-safe `wait_kind`, `waiting_for`,
     `next_check_at`, `needs_action` and `action_hint`, derived from the latest
     transition reason, download waits and open incidents. The copy never names
@@ -285,7 +304,10 @@ falls back to a verified copy.
    `DELETE /api/v1/tonight/saved/{item_id}`) lists only titles in the viewer's
    last completed library pass that are present in the catalog, with
    per-request filters for media type, maximum runtime and unfinished titles
-   that the browser keeps in memory only. Without per-user data it returns
+   that the browser keeps in memory only. "Unfinished" uses the played state
+   the plugin reports with each library pass (`played_item_ids`, offered only
+   when the sync response sets `user_played_supported`), falling back to watch
+   activity for passes without it. Without per-user data it returns
    `supported: false` and no items, so the server catalog never leaks. Save for
    later keeps up to 200 titles per user (`saved_for_later`); saved titles the
    viewer can no longer access come back with `playable: false` and no links.

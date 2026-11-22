@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/config"
+	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -122,9 +125,89 @@ func (e *Engine) incidentOpen(kind, key string) bool {
 	return open
 }
 
+// openIncidentKeys returns the keys of the open incidents of a kind, as known
+// since the last flush.
+func (e *Engine) openIncidentKeys(ctx context.Context, kind string) ([]string, error) {
+	var keys []string
+
+	e.incidents.mu.Lock()
+	defer e.incidents.mu.Unlock()
+	if err := e.loadOpenIncidents(ctx); err != nil {
+		return nil, err
+	}
+	for cause := range e.incidents.open {
+		if cause.kind == kind {
+			keys = append(keys, cause.key)
+		}
+	}
+	return keys, nil
+}
+
+// loadOpenIncidents reads the open incidents once per process. An incident
+// whose cause is no longer configured resolves with a note instead, since
+// nothing would observe it again. Callers hold mu.
+func (e *Engine) loadOpenIncidents(ctx context.Context) error {
+	var t = &e.incidents
+	var now = e.clock.Now().UTC()
+
+	if t.open != nil {
+		return nil
+	}
+	open, err := e.store.Incidents().Open(ctx)
+	if err != nil {
+		return err
+	}
+	loaded := make(map[incidentCause]*openIncident, len(open))
+	for _, incident := range open {
+		cause := incidentCause{kind: incident.Kind, key: incident.Key}
+		if !e.incidentCauseConfigured(cause) {
+			if err := e.store.Incidents().Resolve(ctx, cause.kind, cause.key, store.IncidentCauseRemoved, now); err != nil {
+				return err
+			}
+			e.log.Info("incident resolved: cause removed from configuration", "kind", cause.kind, "cause", cause.key)
+			continue
+		}
+		loaded[cause] = &openIncident{items: make(map[string]bool), affected: incident.Affected, writtenAt: incident.LastSeenAt}
+	}
+	t.open = loaded
+	return nil
+}
+
+// incidentCauseConfigured reports whether the configuration still has the
+// cause, so that something can observe it again.
+func (e *Engine) incidentCauseConfigured(cause incidentCause) bool {
+	switch cause.kind {
+	case store.IncidentIndexer:
+		return slices.ContainsFunc(e.indexers, func(client indexer.Indexer) bool { return client.Name() == cause.key })
+	case store.IncidentDownloadClient:
+		return cause.key == downloadClientIncidentKey
+	case store.IncidentStorage:
+		if cause.key == e.cfg.Library.MovieRoot || cause.key == e.cfg.Library.TVRoot {
+			return true
+		}
+		// A free-space check measures the local download path or, while it
+		// does not exist yet, its nearest existing ancestor.
+		for _, savePath := range []string{e.cfg.Downloader.SavePathTV, e.cfg.Downloader.SavePathMovies} {
+			rel, err := filepath.Rel(cause.key, e.pathMapper.Local(savePath))
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	case store.IncidentLibrary:
+		return cause.key == e.cfg.Library.MovieRoot || cause.key == e.cfg.Library.TVRoot
+	case store.IncidentMetadata:
+		return cause.key == tvmazeIncidentKey && e.tvmaze != nil
+	case store.IncidentNotifications:
+		return cause.key == userNtfyIncidentKey || (cause.key == webhookIncidentKey && e.cfg.Availability.WebhookURL != "")
+	}
+	panic(fmt.Sprintf("unknown incident kind %q", cause.kind))
+}
+
 // flushIncidents writes the pending observations of the given kinds: a failing
 // cause opens or refreshes its incident, a cause seen only healthy resolves
-// its open incident, and an unobserved cause is left alone.
+// its open incident, and an unobserved cause is left alone. Without kinds it
+// only loads the open incidents.
 func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
 	var t = &e.incidents
 	var now = e.clock.Now().UTC()
@@ -132,16 +215,8 @@ func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.open == nil {
-		open, err := e.store.Incidents().Open(ctx)
-		if err != nil {
-			return err
-		}
-		t.open = make(map[incidentCause]*openIncident, len(open))
-		for _, incident := range open {
-			t.open[incidentCause{kind: incident.Kind, key: incident.Key}] = &openIncident{
-				items: make(map[string]bool), affected: incident.Affected, writtenAt: incident.LastSeenAt}
-		}
+	if err := e.loadOpenIncidents(ctx); err != nil {
+		return err
 	}
 	for cause, obs := range t.pending {
 		if !slices.Contains(kinds, cause.kind) {
@@ -153,7 +228,7 @@ func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
 			if !obs.healthy || !open {
 				continue
 			}
-			if err := e.store.Incidents().Resolve(ctx, cause.kind, cause.key, now); err != nil {
+			if err := e.store.Incidents().Resolve(ctx, cause.kind, cause.key, "", now); err != nil {
 				errs = append(errs, err)
 				continue
 			}

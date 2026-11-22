@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/engine"
@@ -59,6 +60,8 @@ type incidentDTO struct {
 	Cause          string `json:"cause"`
 	NextStep       string `json:"next_step"`
 	OperatorAction string `json:"operator_action"`
+	// ResolvedNote says why an incident closed other than being seen healthy.
+	ResolvedNote string `json:"resolved_note,omitempty"`
 }
 
 // nextCheck moves a scheduled check that has already passed forward by whole
@@ -80,6 +83,9 @@ func (s *Server) describeIncidents(incidents []store.Incident, now time.Time) []
 		}
 		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, incident.Key),
 			NextStep: guidance.nextStep, OperatorAction: guidance.action}
+		if incident.ResolvedAt != nil && strings.HasPrefix(incident.Detail, store.IncidentCauseRemoved) {
+			out[i].ResolvedNote = store.IncidentCauseRemoved
+		}
 	}
 	return out
 }

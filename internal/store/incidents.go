@@ -85,12 +85,18 @@ func (r *IncidentRepository) Observe(ctx context.Context, value Incident, at tim
 	return nil
 }
 
+// IncidentCauseRemoved is the note that leads the detail of an incident closed
+// because its cause is no longer configured, rather than seen healthy.
+const IncidentCauseRemoved = "Cause removed from configuration."
+
 // Resolve closes the open incident of a cause, if any, and trims the oldest
-// resolved incidents beyond resolvedIncidentLimit.
-func (r *IncidentRepository) Resolve(ctx context.Context, kind, key string, at time.Time) error {
+// resolved incidents beyond resolvedIncidentLimit. A non-empty note says why
+// it closed and is kept ahead of the recorded detail.
+func (r *IncidentRepository) Resolve(ctx context.Context, kind, key, note string, at time.Time) error {
 	return r.s.InTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE incidents SET resolved_at=?, next_check_at=NULL
- WHERE kind=? AND cause_key=? AND resolved_at IS NULL`, FormatTime(at), kind, key)
+		_, err := tx.ExecContext(ctx, `UPDATE incidents SET resolved_at=?, next_check_at=NULL,
+ detail=CASE WHEN ?='' THEN detail WHEN detail='' THEN ? ELSE ? || ' Last error: ' || detail END
+ WHERE kind=? AND cause_key=? AND resolved_at IS NULL`, FormatTime(at), note, note, note, kind, key)
 		if err != nil {
 			return fmt.Errorf("resolve %s incident %q: %w", kind, key, err)
 		}

@@ -435,6 +435,7 @@ export interface Incident {
   cause: string;
   next_step: string;
   operator_action: string;
+  resolved_note?: string;
 }
 
 export interface IncidentsResponse {

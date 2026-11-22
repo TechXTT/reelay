@@ -225,6 +225,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"POST /api/v1/integrations/jellyfin/events", accessOperator, s.handleJellyfinEvents},
 		{"GET /api/v1/integrations/jellyfin/users", accessMember, s.handleJellyfinUsers},
 		{"POST /api/v1/integrations/jellyfin/trial-playback", accessOperator, s.handleTrialPlayback},
+		{"POST /api/v1/integrations/jellyfin/user-items", accessOperator, s.handleJellyfinUserItems},
 
 		{"GET /api/v1/recommendations", accessMember, s.handleRecommendations},
 		{"GET /api/v1/recommendations/preferences", accessMember, s.handleRecommendationPreferences},
@@ -248,6 +249,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 		{"GET /api/v1/trials", accessMember, s.handleTrials},
 		{"POST /api/v1/trials/{id}/vote", accessMember, withID(s.handleTrialVote)},
+
+		{"GET /api/v1/tonight", accessMember, s.handleTonight},
+		{"GET /api/v1/tonight/saved", accessMember, s.handleSavedForLater},
+		{"POST /api/v1/tonight/saved", accessMember, s.handleSaveForLater},
+		{"DELETE /api/v1/tonight/saved/{item_id}", accessMember, s.handleUnsaveForLater},
 	}
 	for _, route := range routes {
 		if route.access == accessPublic {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/TechXTT/reelay/internal/model"
 )
@@ -314,4 +315,37 @@ func (r *RequestRepository) SelectedSeasonsBySeries(ctx context.Context, seriesI
 		}
 	}
 	return seasons, nil
+}
+
+// RequestExists reports whether the user already has a request row for the
+// title, cancelled or not. Re-requesting reopens that row without creating one.
+func (r *RequestRepository) RequestExists(ctx context.Context, serverID, userID, mediaType string, tmdbID int) (bool, error) {
+	var exists bool
+	var err = r.s.ro.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM media_requests WHERE server_id=? AND user_id=? AND media_type=? AND tmdb_id=?)`,
+		serverID, userID, mediaType, tmdbID).Scan(&exists)
+
+	if err != nil {
+		return false, fmt.Errorf("check media request: %w", err)
+	}
+	return exists, nil
+}
+
+// CountRequestedSince counts the user's request rows created at or after
+// since, cancelled ones included so cancelling does not refund quota. It also
+// returns the oldest such requested_at, or the zero time when there are none.
+// requested_at is set when the row is created and never moved by reactivation.
+func (r *RequestRepository) CountRequestedSince(ctx context.Context, serverID, userID string, since time.Time) (int, time.Time, error) {
+	var count int
+	var oldest sql.NullString
+	var err = r.s.ro.QueryRowContext(ctx, `SELECT COUNT(*),MIN(requested_at) FROM media_requests WHERE server_id=? AND user_id=? AND requested_at>=?`,
+		serverID, userID, FormatTime(since)).Scan(&count, &oldest)
+
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("count media requests: %w", err)
+	}
+	first, err := scanNullTime(oldest)
+	if err != nil || first == nil {
+		return count, time.Time{}, err
+	}
+	return count, *first, nil
 }

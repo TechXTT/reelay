@@ -37,6 +37,15 @@ func (s *Server) handleTrialVote(w http.ResponseWriter, r *http.Request, id int6
 	if (body.Decision != "continue" && body.Decision != "stop") || body.Rating < 1 || body.Rating > 5 {
 		return BadRequest("choose continue or stop and a rating from 1 to 5")
 	}
+	if principalFrom(r).Role != roleOperator {
+		owned, err := s.store.Requests().Trial(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		if owned == nil || !ownsRecord(r, owned.ServerID, owned.UserID) {
+			return NotFound("trial not found")
+		}
+	}
 	if err := s.store.Requests().VoteTrial(r.Context(), id, body.Decision, body.Rating); err != nil {
 		return Conflict("trial vote could not be completed").WithCause(err)
 	}

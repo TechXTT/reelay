@@ -56,6 +56,16 @@ type Config struct {
 	Scoring         Scoring         `yaml:"scoring"`
 	Recommendations Recommendations `yaml:"recommendations"`
 	Availability    Availability    `yaml:"availability"`
+	Auth            Auth            `yaml:"auth"`
+}
+
+// Auth configures household logins. With logins_enabled false, the static
+// server.auth_token remains the only credential.
+type Auth struct {
+	LoginsEnabled      bool     `yaml:"logins_enabled"`
+	SessionTTL         Duration `yaml:"session_ttl"`
+	MemberRequestQuota int      `yaml:"member_request_quota"` // new requests per member per window; 0 = unlimited
+	MemberQuotaWindow  Duration `yaml:"member_quota_window"`
 }
 
 type Availability struct {

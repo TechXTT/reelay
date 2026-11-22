@@ -156,7 +156,7 @@ type recommendationPreviewResponse struct {
 
 func (s *Server) handleRecommendationPreview(w http.ResponseWriter, r *http.Request, id int64) error {
 	rec, err := s.store.Recommendations().Get(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && !ownsRecord(r, rec.ServerID, rec.UserID)) {
 		return NotFound("recommendation %d not found", id)
 	}
 	if err != nil {
@@ -258,7 +258,7 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	rec, err := s.store.Recommendations().Get(r.Context(), id)
-	if err != nil {
+	if err != nil || !ownsRecord(r, rec.ServerID, rec.UserID) {
 		return NotFound("recommendation %d not found", id)
 	}
 	if rec.MediaType != "series" && (req.MonitorMode != "" || len(req.Seasons) > 0 || req.Trial != "") {
@@ -313,6 +313,11 @@ func (s *Server) applyRequestAction(ctx context.Context, rec model.Recommendatio
 	}
 	if !recorded && rec.MediaType == "series" {
 		if err := s.checkTrialRules(ctx, rec, req.Trial); err != nil {
+			return nil, false, err
+		}
+	}
+	if !recorded {
+		if err := s.checkMemberQuota(ctx, rec); err != nil {
 			return nil, false, err
 		}
 	}

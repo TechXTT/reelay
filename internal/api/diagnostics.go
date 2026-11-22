@@ -38,7 +38,7 @@ const (
 
 func (s *Server) handleRequestDiagnostics(w http.ResponseWriter, r *http.Request, id int64) error {
 	request, err := s.store.Requests().Get(r.Context(), id)
-	if err != nil {
+	if err != nil || !ownsRecord(r, request.ServerID, request.UserID) {
 		return NotFound("request not found")
 	}
 	subjects, err := s.diagnosticSubjects(r.Context(), request)

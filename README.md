@@ -22,7 +22,8 @@ controls, and backup/restore are implemented. Follow the
 3. qBittorrent category isolation, live progress, and stall recovery.
 4. Hardlink-first imports, verified copy fallback, configurable naming,
   season-pack discovery, subtitle carry-over, and recycle-on-upgrade.
-5. Versioned REST API, bearer auth, health checks, SSE, and a responsive UI.
+5. Versioned REST API, bearer auth with optional Jellyfin household logins,
+  health checks, SSE, and a responsive UI.
 6. Explainable per-user recommendations and an optional Jellyfin plugin that
   exposes missing titles as Discover libraries and routes requests to Reelay.
 7. Discover previews with descriptions, TMDB audience ratings, cast, runtime,
@@ -309,8 +310,22 @@ synchronized Jellyfin user, even after the recommendation leaves Discover. It
 shows download and import status, errors, retry timing, and series episode counts. Imported
 media and availability confirmed by Jellyfin library sync are separate signals;
 a series present in Jellyfin does not mean all its episodes are available.
-The user selector is an operator filter under Reelay's shared bearer token,
-not a separate login or permission boundary.
+With `auth.logins_enabled` off, the user selector is an operator filter under
+Reelay's shared bearer token. With it on, household members sign in with their
+Jellyfin account and see only their own data; see [Household logins](#household-logins).
+
+#### Household logins
+
+Set `auth.logins_enabled: true` (with `server.auth_token` and
+`availability.jellyfin_servers`) to let Jellyfin users sign in with their
+Jellyfin username and password. Reelay checks them against your Jellyfin server
+and stores no passwords. Jellyfin administrators become operators; other users
+enabled in Reelay become members who see only their own recommendations,
+requests and trials and get 403 elsewhere. `auth.member_request_quota` and
+`auth.member_quota_window` optionally cap how many new requests a member can
+make. The static bearer token still works for the plugin, Prometheus and
+scripts. Cookie-authenticated writes must send `X-Reelay-Request: 1`. See the
+[setup checklist](docs/setup-checklist.md#household-logins).
 
 Use **Attention needed** to filter persisted failures and **Diagnostics** to
 inspect recent search history, retry timing, import errors, and candidate rejection

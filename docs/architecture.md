@@ -123,7 +123,8 @@ falls back to a verified copy.
     completed trial accepts a Continue/Stop vote with a 1-5 rating. Continue
     widens monitoring to all episodes; Stop withdraws only that request. Request
     summaries and recovery controls stay limited to the trial's selected episodes
-    until continuation. The operator bearer token remains the authorization boundary.
+    until continuation. A member may vote only on their own trials (see the
+    access model in the operations notes below).
 13. Each stored refresh records the best 40 titles (what the plugin shows) as
     impressions, keeping the first offer time and score and the best rank.
     `GET /api/v1/recommendations/stats` aggregates, per user and window, how many
@@ -173,10 +174,36 @@ falls back to a verified copy.
    (`database.backup_interval`) write timestamped snapshots to `backup_dir` and
    keep the newest `backup_keep`. Configuration and media files are outside the
    database snapshot.
-4. The dashboard retains operator access through the existing bearer token.
-   Selecting a Jellyfin user filters data; it does not create separate household
-   authentication or quota enforcement.
-5. `GET /api/v1/metrics` exposes Prometheus text metrics to operators (the same
+4. Access has two roles. Operators can use every endpoint: the static
+   `server.auth_token` (unchanged, for the plugin, Prometheus, scripts and the
+   dashboard's token prompt) and, when `auth.logins_enabled` is true, Jellyfin
+   administrators who sign in. Members are other Jellyfin users enabled in
+   Reelay. Sign-in (`POST /api/v1/auth/login`) forwards the Jellyfin username and
+   password to the server named in `availability.jellyfin_servers`, which
+   verifies them; Reelay never stores the password and logs the Jellyfin session
+   it created out again at once. The session is a random token in the
+   `reelay_session` cookie (HttpOnly, SameSite=Strict, Secure behind HTTPS); only
+   its SHA-256 is stored in `sessions`, it lasts `auth.session_ttl`, and expired
+   rows are pruned daily. Disabling a user in Reelay revokes their session on the
+   next request. A cookie-authenticated request that changes state must send
+   `X-Reelay-Request: 1`; bearer requests are exempt. Failed sign-ins are limited
+   to 5 per 10 minutes per client address (the peer address, never
+   `X-Forwarded-For`; behind a reverse proxy all users share the proxy's
+   address).
+5. Every route declares a level: public (ping, `auth/config`, `auth/login`),
+   member, or operator. Members may use only the recommendation, request and
+   trial endpoints of their own Jellyfin user plus `auth/me` and `auth/logout`;
+   everything else, including the event stream, metrics, settings, queue and
+   upgrades, answers 403. A member's scope comes from the session: omitted
+   `server_id`/`user_id` are filled in, naming another user is 403, and another
+   member's recommendation, request or trial id is 404. Operators still name the
+   user and may act for anyone.
+6. `auth.member_request_quota` (0 = unlimited) caps how many new requests a member
+   creates in `auth.member_quota_window`. The excess answers 429
+   `quota_exceeded` with `Retry-After`. Cancelled requests still count, and
+   replaying an action or re-requesting a title the member already has is never
+   blocked. Operators are not limited.
+7. `GET /api/v1/metrics` exposes Prometheus text metrics to operators (the same
    bearer token). Engine counters are in-process and reset on restart; gauges are read
    from SQLite, the indexer breakers and the runtime at scrape time. Label sets
    are fixed, so metric memory does not grow with data.

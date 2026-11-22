@@ -53,7 +53,7 @@ func (s *Server) handleRequestAction(w http.ResponseWriter, r *http.Request, id 
 		return err
 	}
 	request, err := s.store.Requests().Get(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && !ownsRecord(r, request.ServerID, request.UserID)) {
 		return NotFound("request not found")
 	}
 	if err != nil {

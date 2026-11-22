@@ -25,6 +25,7 @@ import (
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/indexer"
+	"github.com/TechXTT/reelay/internal/jellyfinauth"
 	"github.com/TechXTT/reelay/internal/metadata"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/recommendation"
@@ -51,6 +52,9 @@ type Server struct {
 	recommendations *recommendation.Service
 	externalSeries  metadata.ExternalSeriesProvider
 	discovery       metadata.RecommendationProvider
+	loginVerifier   LoginVerifier
+	logins          *loginLimiter
+	publicPaths     map[string]bool
 	static          fs.FS
 
 	http      *http.Server
@@ -73,6 +77,8 @@ type Options struct {
 	Recommendations *recommendation.Service
 	ExternalSeries  metadata.ExternalSeriesProvider
 	Discovery       metadata.RecommendationProvider
+	// LoginVerifier checks Jellyfin credentials; nil uses the real client.
+	LoginVerifier LoginVerifier
 }
 
 func New(opt Options) *Server {
@@ -93,6 +99,12 @@ func New(opt Options) *Server {
 		recommendations: opt.Recommendations,
 		externalSeries:  opt.ExternalSeries,
 		discovery:       opt.Discovery,
+		loginVerifier:   opt.LoginVerifier,
+		logins:          newLoginLimiter(),
+		publicPaths:     make(map[string]bool),
+	}
+	if s.loginVerifier == nil {
+		s.loginVerifier = jellyfinauth.New(opt.Logger)
 	}
 	s.static, _ = fs.Sub(webui.Dist, "dist")
 
@@ -147,7 +159,7 @@ func (s *Server) handler() http.Handler {
 		cors(s.cfg.Server.CORSOrigins),
 		compress,
 		recoverPanic,
-		bearerAuth(s.cfg.Server.AuthToken),
+		s.authenticate,
 	)
 }
 
@@ -155,77 +167,87 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Go 1.22 pattern routing: method and wildcards in the pattern itself.
 	routes := []struct {
 		pattern string
+		access  access
 		handler handler
 	}{
-		{"GET " + pathPing, s.handlePing},
-		{"GET /api/v1/health", s.handleHealth},
-		{"GET " + pathEvents, s.handleEvents},
-		{"GET /api/v1/search", s.handleLiveSearch},
-		{"GET /api/v1/metadata/search", s.handleMetadataSearch},
+		{"GET " + pathPing, accessPublic, s.handlePing},
+		{"GET " + pathAuthConfig, accessPublic, s.handleAuthConfig},
+		{"POST " + pathAuthLogin, accessPublic, s.handleLogin},
+		{"POST /api/v1/auth/logout", accessMember, s.handleLogout},
+		{"GET /api/v1/auth/me", accessMember, s.handleAuthMe},
+		{"GET /api/v1/health", accessOperator, s.handleHealth},
+		{"GET " + pathEvents, accessOperator, s.handleEvents},
+		{"GET /api/v1/search", accessOperator, s.handleLiveSearch},
+		{"GET /api/v1/metadata/search", accessOperator, s.handleMetadataSearch},
 
-		{"GET /api/v1/series", listHandler(s.store.Series().List)},
-		{"POST /api/v1/series", s.handleSeriesCreate},
-		{"GET /api/v1/series/{id}", withID(s.handleSeriesGet)},
-		{"PATCH /api/v1/series/{id}", withID(s.handleSeriesPatch)},
-		{"DELETE /api/v1/series/{id}", collectionDelete(s.deleteSeriesCollection)},
-		{"POST /api/v1/series/{id}/search", withID(s.handleSeriesSearch)},
+		{"GET /api/v1/series", accessOperator, listHandler(s.store.Series().List)},
+		{"POST /api/v1/series", accessOperator, s.handleSeriesCreate},
+		{"GET /api/v1/series/{id}", accessOperator, withID(s.handleSeriesGet)},
+		{"PATCH /api/v1/series/{id}", accessOperator, withID(s.handleSeriesPatch)},
+		{"DELETE /api/v1/series/{id}", accessOperator, collectionDelete(s.deleteSeriesCollection)},
+		{"POST /api/v1/series/{id}/search", accessOperator, withID(s.handleSeriesSearch)},
 
-		{"GET /api/v1/movies", listHandler(s.store.Movies().List)},
-		{"POST /api/v1/movies", s.handleMovieCreate},
-		{"GET /api/v1/movies/{id}", withID(s.handleMovieGet)},
-		{"PATCH /api/v1/movies/{id}", withID(s.handleMoviePatch)},
-		{"DELETE /api/v1/movies/{id}", collectionDelete(s.deleteMovieCollection)},
-		{"POST /api/v1/movies/{id}/search", s.forceSearch(model.SubjectMovie, "movie")},
+		{"GET /api/v1/movies", accessOperator, listHandler(s.store.Movies().List)},
+		{"POST /api/v1/movies", accessOperator, s.handleMovieCreate},
+		{"GET /api/v1/movies/{id}", accessOperator, withID(s.handleMovieGet)},
+		{"PATCH /api/v1/movies/{id}", accessOperator, withID(s.handleMoviePatch)},
+		{"DELETE /api/v1/movies/{id}", accessOperator, collectionDelete(s.deleteMovieCollection)},
+		{"POST /api/v1/movies/{id}/search", accessOperator, s.forceSearch(model.SubjectMovie, "movie")},
 
-		{"PATCH /api/v1/episodes/{id}", withID(s.handleEpisodePatch)},
-		{"POST /api/v1/episodes/{id}/search", s.forceSearch(model.SubjectEpisode, "episode")},
-		{"GET /api/v1/episodes/{id}/candidates", withID(s.handleCandidates)},
-		{"POST /api/v1/episodes/{id}/grab", withID(s.handleEpisodeGrab)},
+		{"PATCH /api/v1/episodes/{id}", accessOperator, withID(s.handleEpisodePatch)},
+		{"POST /api/v1/episodes/{id}/search", accessOperator, s.forceSearch(model.SubjectEpisode, "episode")},
+		{"GET /api/v1/episodes/{id}/candidates", accessOperator, withID(s.handleCandidates)},
+		{"POST /api/v1/episodes/{id}/grab", accessOperator, withID(s.handleEpisodeGrab)},
 
-		{"GET /api/v1/upgrades", s.handleUpgrades},
-		{"POST /api/v1/upgrades/{subject}/{id}/search", s.handleUpgradeSearch},
+		{"GET /api/v1/upgrades", accessOperator, s.handleUpgrades},
+		{"POST /api/v1/upgrades/{subject}/{id}/search", accessOperator, s.handleUpgradeSearch},
 
-		{"GET /api/v1/queue", s.handleQueue},
-		{"POST /api/v1/queue/pause", s.setQueuePaused(true)},
-		{"POST /api/v1/queue/resume", s.setQueuePaused(false)},
-		{"DELETE /api/v1/queue/{id}", withID(s.handleQueueDelete)},
-		{"GET /api/v1/history", s.handleHistory},
+		{"GET /api/v1/queue", accessOperator, s.handleQueue},
+		{"POST /api/v1/queue/pause", accessOperator, s.setQueuePaused(true)},
+		{"POST /api/v1/queue/resume", accessOperator, s.setQueuePaused(false)},
+		{"DELETE /api/v1/queue/{id}", accessOperator, withID(s.handleQueueDelete)},
+		{"GET /api/v1/history", accessOperator, s.handleHistory},
 
-		{"GET /api/v1/profiles", listHandler(s.store.Profiles().List)},
-		{"POST /api/v1/profiles", s.handleProfileCreate},
-		{"PATCH /api/v1/profiles/{id}", withID(s.handleProfilePatch)},
-		{"DELETE /api/v1/profiles/{id}", withID(s.handleProfileDelete)},
+		{"GET /api/v1/profiles", accessOperator, listHandler(s.store.Profiles().List)},
+		{"POST /api/v1/profiles", accessOperator, s.handleProfileCreate},
+		{"PATCH /api/v1/profiles/{id}", accessOperator, withID(s.handleProfilePatch)},
+		{"DELETE /api/v1/profiles/{id}", accessOperator, withID(s.handleProfileDelete)},
 
-		{"GET /api/v1/settings", s.handleSettings},
-		{"GET /api/v1/setup", s.handleSetup},
-		{"GET /api/v1/metrics", s.handleMetrics},
-		{"POST /api/v1/database/backup", s.handleDatabaseBackup},
-		{"POST /api/v1/system/trigger/{loop}", s.handleTrigger},
+		{"GET /api/v1/settings", accessOperator, s.handleSettings},
+		{"GET /api/v1/setup", accessOperator, s.handleSetup},
+		{"GET /api/v1/metrics", accessOperator, s.handleMetrics},
+		{"POST /api/v1/database/backup", accessOperator, s.handleDatabaseBackup},
+		{"POST /api/v1/system/trigger/{loop}", accessOperator, s.handleTrigger},
 
-		{"POST /api/v1/integrations/jellyfin/sync", s.handleJellyfinSync},
-		{"POST /api/v1/integrations/jellyfin/events", s.handleJellyfinEvents},
-		{"GET /api/v1/integrations/jellyfin/users", listHandler(s.store.Recommendations().Users)},
-		{"POST /api/v1/integrations/jellyfin/trial-playback", s.handleTrialPlayback},
+		{"POST /api/v1/integrations/jellyfin/sync", accessOperator, s.handleJellyfinSync},
+		{"POST /api/v1/integrations/jellyfin/events", accessOperator, s.handleJellyfinEvents},
+		{"GET /api/v1/integrations/jellyfin/users", accessMember, s.handleJellyfinUsers},
+		{"POST /api/v1/integrations/jellyfin/trial-playback", accessOperator, s.handleTrialPlayback},
 
-		{"GET /api/v1/recommendations", s.handleRecommendations},
-		{"GET /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
-		{"PUT /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
-		{"GET /api/v1/recommendations/history", s.handleRecommendationHistory},
-		{"GET /api/v1/recommendations/stats", s.handleRecommendationStats},
-		{"GET /api/v1/recommendations/{id}/preview", withID(s.handleRecommendationPreview)},
-		{"POST /api/v1/recommendations/generate", s.handleRecommendationGenerate},
-		{"POST /api/v1/recommendations/{id}/actions", withID(s.handleRecommendationAction)},
+		{"GET /api/v1/recommendations", accessMember, s.handleRecommendations},
+		{"GET /api/v1/recommendations/preferences", accessMember, s.handleRecommendationPreferences},
+		{"PUT /api/v1/recommendations/preferences", accessMember, s.handleRecommendationPreferences},
+		{"GET /api/v1/recommendations/history", accessMember, s.handleRecommendationHistory},
+		{"GET /api/v1/recommendations/stats", accessMember, s.handleRecommendationStats},
+		{"GET /api/v1/recommendations/{id}/preview", accessMember, withID(s.handleRecommendationPreview)},
+		{"POST /api/v1/recommendations/generate", accessOperator, s.handleRecommendationGenerate},
+		{"POST /api/v1/recommendations/{id}/actions", accessMember, withID(s.handleRecommendationAction)},
 
-		{"GET /api/v1/requests", s.handleRequests},
-		{"POST /api/v1/requests/{id}/actions", withID(s.handleRequestAction)},
-		{"GET /api/v1/requests/{id}/diagnostics", withID(s.handleRequestDiagnostics)},
-		{"POST /api/v1/requests/{id}/grab", withID(s.handleRequestGrab)},
+		{"GET /api/v1/requests", accessMember, s.handleRequests},
+		{"POST /api/v1/requests/{id}/actions", accessMember, withID(s.handleRequestAction)},
+		{"GET /api/v1/requests/{id}/diagnostics", accessMember, withID(s.handleRequestDiagnostics)},
+		{"POST /api/v1/requests/{id}/grab", accessOperator, withID(s.handleRequestGrab)},
 
-		{"GET /api/v1/trials", s.handleTrials},
-		{"POST /api/v1/trials/{id}/vote", withID(s.handleTrialVote)},
+		{"GET /api/v1/trials", accessMember, s.handleTrials},
+		{"POST /api/v1/trials/{id}/vote", accessMember, withID(s.handleTrialVote)},
 	}
 	for _, route := range routes {
-		mux.HandleFunc(route.pattern, s.wrap(route.handler))
+		if route.access == accessPublic {
+			// authenticate skips these paths; the method is part of the pattern only.
+			_, path, _ := strings.Cut(route.pattern, " ")
+			s.publicPaths[path] = true
+		}
+		mux.HandleFunc(route.pattern, s.wrap(s.guard(route.access, route.handler)))
 	}
 
 	// Everything under /api that has no route yet gets a JSON 404 rather than

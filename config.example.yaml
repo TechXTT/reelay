@@ -347,3 +347,16 @@ recommendations:
   rating_weight: 10
   preference_weight: 5
   novelty_weight: 10
+
+# Household logins. Off by default: the static server.auth_token stays the only
+# credential. When enabled, Jellyfin users sign in with their Jellyfin
+# username and password (verified against the server, never stored) and see only
+# their own recommendations and requests; Jellyfin administrators become
+# operators. Requires server.auth_token and availability.jellyfin_servers, and
+# a user must be synced and enabled in Reelay to sign in. Serve Reelay over
+# HTTPS when exposing logins beyond your LAN.
+auth:
+  logins_enabled: false
+  session_ttl: 168h # 1h-8760h; sessions are revoked server-side on logout and expiry
+  member_request_quota: 0 # new requests one member may create per window; 0 = unlimited
+  member_quota_window: 24h # at least 1h; used only when member_request_quota > 0

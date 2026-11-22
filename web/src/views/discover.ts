@@ -1,5 +1,5 @@
 import { api, esc } from "../api.ts";
-import { discoverTypeKey, discoverUserKey, hooks, session } from "../session.ts";
+import { discoverTypeKey, discoverUserKey, hooks, isMember, session } from "../session.ts";
 import type {
   ItemList, JellyfinUser, MediaType, Recommendation, RecommendationAction, RecommendationHistoryResponse,
   RecommendationPreferences, RecommendationPreview, RecommendationStats, RequestMonitorMode, Trial, TrialDecision, TrialScope
@@ -22,8 +22,8 @@ function audienceRating(average: number, votes: number) {
 
 function discoverHead(user: JellyfinUser, users: JellyfinUser[], key: string, mediaType: MediaType, recommendations: Recommendation[]) {
   return `<div class="page-head"><div><h1>Discover</h1><p>Recommendations for ${esc(user.display_name)}</p></div>
-    <div class="row-actions"><button class="command" id="discover-preferences">Preferences</button><button class="command" id="discover-history">Rating &amp; dismissal history</button><button class="command" id="generate-recommendations">Refresh</button></div></div>
-    <div class="discover-toolbar"><label>User<select id="discover-user">${userOptions(users, key)}</select></label>
+    <div class="row-actions"><button class="command" id="discover-preferences">Preferences</button><button class="command" id="discover-history">Rating &amp; dismissal history</button>${isMember() ? "" : `<button class="command" id="generate-recommendations">Refresh</button>`}</div></div>
+    <div class="discover-toolbar">${isMember() ? "" : `<label>User<select id="discover-user">${userOptions(users, key)}</select></label>`}
     <div class="segmented"><label><input type="radio" name="discover-type" value="movie" ${mediaType === "movie" ? "checked" : ""}><span>Movies</span></label>
     <label><input type="radio" name="discover-type" value="series" ${mediaType === "series" ? "checked" : ""}><span>Series</span></label></div></div>
     <p class="discover-freshness">Jellyfin sync: ${user.last_synced_at ? esc(date(user.last_synced_at)) : "Not yet synchronized"}${recommendations[0]?.generated_at ? ` · Recommendations generated ${esc(date(recommendations[0].generated_at))}` : ""}${recommendations[0]?.expires_at ? ` · Expires ${esc(date(recommendations[0].expires_at))}` : ""}</p>`;
@@ -129,11 +129,13 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
 }
 
 function bindDiscoverToolbar(node: HTMLElement, user: JellyfinUser, key: string, mediaType: MediaType) {
-  pick<HTMLSelectElement>(node, "#discover-user").onchange = event =>
+  const userSelect = node.querySelector<HTMLSelectElement>("#discover-user");
+  if (userSelect) userSelect.onchange = event =>
     void discoverView((event.currentTarget as HTMLSelectElement).value, mediaType).catch(showError);
   bindAll<HTMLInputElement>(node, "[name=discover-type]", input => input.onchange = () =>
     void discoverView(key, input.value as MediaType).catch(showError));
-  bindRequest(pick<HTMLButtonElement>(node, "#generate-recommendations"), "/api/v1/recommendations/generate",
+  const generate = node.querySelector<HTMLButtonElement>("#generate-recommendations");
+  if (generate) bindRequest(generate, "/api/v1/recommendations/generate",
     jsonRequest("POST", { server_id: user.server_id, user_id: user.user_id, media_type: mediaType }),
     "Recommendations refreshed", () => discoverView(key, mediaType));
   pick<HTMLButtonElement>(node, "#discover-preferences").onclick = () =>

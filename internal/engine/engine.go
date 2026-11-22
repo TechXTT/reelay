@@ -159,6 +159,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	if e.cfg.Runtime.AuditRetention.Duration > 0 {
 		loops = append(loops, loopSpec{"audit", 24 * time.Hour, nil, e.PruneAuditOnce, true})
 	}
+	if e.cfg.Auth.LoginsEnabled {
+		loops = append(loops, loopSpec{"sessions", 24 * time.Hour, nil, e.PruneSessionsOnce, true})
+	}
 	var wg sync.WaitGroup
 	for _, spec := range loops {
 		wg.Add(1)

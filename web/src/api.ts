@@ -1,7 +1,7 @@
 const tokenKey = "reelay.auth-token";
 
 export class APIError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) {
+  constructor(message: string, readonly status: number, readonly code: string, readonly retryAfter = 0) {
     super(message);
     this.name = "APIError";
   }
@@ -38,11 +38,13 @@ export async function api<T>(path: string, init: RequestInit = {}, acceptedStatu
   const token = authToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(path, { ...init, headers });
+  // Cookie-authenticated writes require this header; it is harmless for bearer requests.
+  headers.set("X-Reelay-Request", "1");
+  const response = await fetch(path, { credentials: "same-origin", ...init, headers });
   if (!response.ok && !acceptedStatuses.includes(response.status)) {
     const payload = await response.json().catch(() => ({}));
     throw new APIError(payload?.error?.message ?? `${response.status} ${response.statusText}`,
-      response.status, payload?.error?.code ?? "http_error");
+      response.status, payload?.error?.code ?? "http_error", Number(response.headers.get("Retry-After")) || 0);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

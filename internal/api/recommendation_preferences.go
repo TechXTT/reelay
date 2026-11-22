@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -36,11 +35,13 @@ func (s *Server) handleRecommendationPreferences(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleRecommendationHistory(w http.ResponseWriter, r *http.Request) error {
-	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	serverID, userID, err := userScope(r)
+	if err != nil {
+		return err
+	}
 	mediaType := r.URL.Query().Get("media_type")
-	if serverID == "" || userID == "" || (mediaType != "movie" && mediaType != "series") {
-		return BadRequest("server_id, user_id and media_type are required")
+	if mediaType != "movie" && mediaType != "series" {
+		return BadRequest("media_type must be movie or series")
 	}
 	values, err := s.store.Recommendations().List(r.Context(), serverID, userID, mediaType, "dismissed", 100, 0)
 	if err != nil {

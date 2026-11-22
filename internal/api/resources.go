@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
@@ -52,14 +51,10 @@ func listHandler[T any](list func(context.Context) ([]T, error)) handler {
 	}
 }
 
-// userScope reads the required server_id and user_id query parameters.
+// userScope reads the server_id and user_id query parameters. Operators must
+// supply both; a member always gets their own scope (see scopeFor).
 func userScope(r *http.Request) (string, string, error) {
-	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	if serverID == "" || userID == "" {
-		return "", "", BadRequest("server_id and user_id are required")
-	}
-	return serverID, userID, nil
+	return scopeFor(r, r.URL.Query().Get("server_id"), r.URL.Query().Get("user_id"))
 }
 
 func (s *Server) publishRequestsUpdated(serverID, userID string) {

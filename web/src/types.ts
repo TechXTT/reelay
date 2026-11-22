@@ -313,3 +313,16 @@ export interface ConfirmOptions {
   confirmLabel: string;
   checks: DialogCheck[];
 }
+
+export interface Principal {
+  role: "operator" | "member";
+  server_id?: string;
+  user_id?: string;
+  name: string;
+  session: boolean;
+}
+
+export interface AuthConfig {
+  logins_enabled: boolean;
+  servers: string[];
+}

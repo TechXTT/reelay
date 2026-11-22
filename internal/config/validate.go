@@ -110,6 +110,7 @@ func (c *Config) Validate() ([]string, error) {
 	c.validateScoring(ck)
 	c.validateRecommendations(ck)
 	c.validateAvailability(ck)
+	c.validateAuth(ck)
 
 	sort.Strings(ck.problems)
 	if len(ck.problems) > 0 {
@@ -131,6 +132,26 @@ func (c *Config) validateAvailability(ck *checker) {
 	}
 	if format := c.Availability.WebhookFormat; format != "" && format != "json" && format != "ntfy" {
 		ck.bad("availability.webhook_format", "must be json or ntfy")
+	}
+}
+
+func (c *Config) validateAuth(ck *checker) {
+	a := c.Auth
+	ck.notNegative("auth.member_request_quota", a.MemberRequestQuota)
+	if a.MemberRequestQuota > 0 && a.MemberQuotaWindow.Duration < time.Hour {
+		ck.bad("auth.member_quota_window", "must be at least 1h when auth.member_request_quota is set")
+	}
+	if !a.LoginsEnabled {
+		return
+	}
+	if a.SessionTTL.Duration < time.Hour || a.SessionTTL.Duration > 8760*time.Hour {
+		ck.bad("auth.session_ttl", "must be between 1h and 8760h when logins are enabled")
+	}
+	if c.Server.AuthToken == "" {
+		ck.bad("auth.logins_enabled", "requires server.auth_token")
+	}
+	if len(c.Availability.JellyfinServers) == 0 {
+		ck.bad("auth.logins_enabled", "requires at least one entry in availability.jellyfin_servers")
 	}
 }
 

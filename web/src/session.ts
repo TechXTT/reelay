@@ -1,9 +1,10 @@
-import type { MediaType, View } from "./types.ts";
+import type { MediaType, Principal, View } from "./types.ts";
 
 export const discoverUserKey = "reelay.discover-user";
 export const discoverTypeKey = "reelay.discover-type";
 
 export const session = {
+  principal: null as Principal | null,
   current: "dashboard" as View,
   selectedSeries: null as number | null,
   connectionStatus: "Connecting",
@@ -27,3 +28,6 @@ export const hooks = {
   navigate: unregistered("navigate") as (view: View) => Promise<void>,
   authRequired: unregistered("authRequired") as (message: string) => void
 };
+
+// Members are signed-in Jellyfin users without operator rights; everything else acts as an operator.
+export const isMember = () => session.principal?.role === "member";

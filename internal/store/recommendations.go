@@ -68,6 +68,16 @@ func (r *RecommendationRepository) UserExists(ctx context.Context, serverID, use
 	return exists, nil
 }
 
+// UserEnabled reports whether the Jellyfin user is known and enabled in Reelay.
+func (r *RecommendationRepository) UserEnabled(ctx context.Context, serverID, userID string) (bool, error) {
+	var enabled bool
+	err := r.s.ro.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jellyfin_users WHERE server_id=? AND user_id=? AND enabled=1)`, serverID, userID).Scan(&enabled)
+	if err != nil {
+		return false, fmt.Errorf("check enabled jellyfin user: %w", err)
+	}
+	return enabled, nil
+}
+
 func (r *RecommendationRepository) UpsertItems(ctx context.Context, items []model.JellyfinItem, syncToken string) error {
 	if len(items) == 0 {
 		return nil

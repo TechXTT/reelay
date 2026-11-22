@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"io"
 	"log/slog"
@@ -18,6 +17,7 @@ type ctxKey int
 
 const (
 	ctxLogger ctxKey = iota
+	ctxPrincipal
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -167,40 +167,6 @@ func recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-// bearerAuth enforces the static token on API data and command routes except
-// the liveness probe. Static UI assets contain no operator data and remain
-// reachable so the browser can collect a token. Comparison is constant time.
-func bearerAuth(token string) middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// The SPA shell contains no operator data and must be reachable before
-			// the browser can present the token stored from its Settings view.
-			// Every data and command route remains under /api and authenticated.
-			if token == "" || r.URL.Path == pathPing || !strings.HasPrefix(r.URL.Path, "/api/") {
-				next.ServeHTTP(w, r)
-				return
-			}
-			// CORS preflight carries no Authorization header by design.
-			if r.Method == http.MethodOptions {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			presented := presentedToken(r)
-			if presented == "" {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="reelay"`)
-				writeError(w, loggerFrom(r), Unauthorized("missing bearer token"))
-				return
-			}
-			if subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
-				writeError(w, loggerFrom(r), Unauthorized("invalid bearer token"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // presentedToken accepts the standard Authorization header, and an
 // X-Api-Key header because that is what curl one-liners and the SSE
 // EventSource API (which cannot set Authorization) can actually send.
@@ -237,7 +203,7 @@ func cors(origins []string) middleware {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Set("Access-Control-Allow-Credentials", "true")
-				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Request-ID")
+				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Request-ID, X-Reelay-Request")
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 				h.Set("Access-Control-Max-Age", "600")
 				h.Add("Vary", "Origin")

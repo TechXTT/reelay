@@ -1,5 +1,5 @@
 import { api, esc } from "../api.ts";
-import { discoverUserKey, hooks, requestsPageSize, session } from "../session.ts";
+import { discoverUserKey, hooks, isMember, requestsPageSize, session } from "../session.ts";
 import type { DiagnosticsResponse, DiagnosticSubject, ItemList, JellyfinUser, MediaRequest, RequestListResponse, RequestMonitorMode } from "../types.ts";
 import { bindAll, bindRequest, content, date, jsonRequest, openDialog, percent, pick, runControl, showError, showToast, state, userKey, userOptions } from "../ui.ts";
 import { trialLabel } from "./discover.ts";
@@ -14,7 +14,7 @@ function monitorLabel(mode: RequestMonitorMode) {
 
 function requestsHead(user: JellyfinUser, users: JellyfinUser[], key: string, hasMore: boolean) {
   return `<div class="page-head requests-head"><div><h1>Recent requests</h1><p>Most recent requests for ${esc(user.display_name)} · follow each title until it is available in Jellyfin</p></div>
-    <div class="row-actions"><label class="request-user">Jellyfin user<select id="requests-user">${userOptions(users, key)}</select></label>
+    <div class="row-actions">${isMember() ? "" : `<label class="request-user">Jellyfin user<select id="requests-user">${userOptions(users, key)}</select></label>`}
     <button class="command" id="refresh-requests" aria-label="Refresh requests">↻ <span>Refresh</span></button></div></div>
     <div class="row-actions request-filters"><button class="command requests-attention" aria-pressed="${session.attentionOnly}">${session.attentionOnly ? "Show all requests" : "Attention needed"}</button><button class="command requests-previous" ${session.requestsOffset===0 ? "disabled" : ""}>Newer</button><button class="command requests-next" ${!hasMore ? "disabled" : ""}>Older</button></div>`;
 }
@@ -76,7 +76,8 @@ export async function requestsView(selectedUser = session.discoverUser) {
 
 function bindRequestsView(node: HTMLElement, key: string) {
   const reload = () => void requestsView(key).catch(showError);
-  pick<HTMLSelectElement>(node, "#requests-user").onchange = event => {
+  const userSelect = node.querySelector<HTMLSelectElement>("#requests-user");
+  if (userSelect) userSelect.onchange = event => {
     session.requestsOffset = 0;
     void requestsView((event.currentTarget as HTMLSelectElement).value).catch(showError);
   };
@@ -109,7 +110,7 @@ function diagnosticSubject(subject: DiagnosticSubject) {
   return `<section><h3>${esc(subject.title || `${subject.type} #${subject.id}`)}</h3>${state(subject.state)}${subject.error ? `<p class="preview-error">${esc(subject.error)}</p>` : ""}
     <p>Search attempts: ${esc(subject.search_attempts ?? 0)} · Last search: ${subject.last_search_at ? esc(date(subject.last_search_at)) : "Not in recent history"}${subject.next_search_at ? ` · Next retry: ${esc(date(subject.next_search_at))}` : ""}</p>
     <ol>${(subject.history ?? []).map(transition => `<li>${date(transition.at)}: ${esc(transition.reason)} ${esc(transition.detail || "")}</li>`).join("")}</ol>
-    <div class="diagnostic-candidates">${subject.candidates.map(candidate => `<article><strong>${esc(candidate.release.raw_title)}</strong><p>${candidate.evaluation.accepted ? `Accepted · score ${candidate.evaluation.score}` : "Rejected"}: ${esc(candidate.evaluation.reason)}</p>${candidate.evaluation.accepted ? `<button class="command compact candidate-grab" data-subject="${subject.id}" data-type="${subject.type}" data-release="${candidate.release.id}">Select release</button>` : ""}</article>`).join("") || "No candidates persisted yet."}</div></section>`;
+    <div class="diagnostic-candidates">${subject.candidates.map(candidate => `<article><strong>${esc(candidate.release.raw_title)}</strong><p>${candidate.evaluation.accepted ? `Accepted · score ${candidate.evaluation.score}` : "Rejected"}: ${esc(candidate.evaluation.reason)}</p>${candidate.evaluation.accepted && !isMember() ? `<button class="command compact candidate-grab" data-subject="${subject.id}" data-type="${subject.type}" data-release="${candidate.release.id}">Select release</button>` : ""}</article>`).join("") || "No candidates persisted yet."}</div></section>`;
 }
 
 async function requestDiagnostics(id: number) {

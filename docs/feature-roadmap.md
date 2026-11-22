@@ -90,6 +90,15 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
     is the only access boundary. Add per-user logins (or Jellyfin single sign-on)
     with request permissions and quotas; the product plan already lists this as
     future work.
+    **Implemented 2026-10-07:** `auth.logins_enabled` lets household members sign
+    in with their Jellyfin account (migration 0012 sessions, HttpOnly SameSite
+    cookie plus a required request header); Jellyfin administrators and the
+    bearer token are operators. Every route has an explicit access level, members
+    only reach their own Discover, Requests, trials and stats, failed logins are
+    rate-limited, and `auth.member_request_quota` limits new requests. Verified
+    with go build, vet, staticcheck, `go test ./internal/... ./cmd/...` including
+    new auth, session and Jellyfin-client tests, and `npm run build`; not
+    exercised against a live Jellyfin server or in a browser.
 12. **Request approval queue (M).** Optionally require operator approval for
     requests from certain users, or above a size limit.
 13. **Per-user notifications (M).** Notify the person who made the request when

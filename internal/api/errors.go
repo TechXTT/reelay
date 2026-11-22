@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 // Error codes. Stable strings — the UI branches on these, not on prose.
 const (
 	CodeBadRequest          = "bad_request"
 	CodeUnauthorized        = "unauthorized"
+	CodeForbidden           = "forbidden"
 	CodeNotFound            = "not_found"
 	CodeConflict            = "conflict"
+	CodeRateLimited         = "rate_limited"
+	CodeQuotaExceeded       = "quota_exceeded"
 	CodeInsufficientStorage = "insufficient_storage"
 	CodeUnavailable         = "unavailable"
 	CodeInternal            = "internal"
@@ -30,6 +35,8 @@ type Error struct {
 	status int
 	// cause is wrapped for the server log and never shown to the client.
 	cause error
+	// retryAfter, when positive, is sent as a Retry-After header.
+	retryAfter time.Duration
 }
 
 func (e *Error) Error() string {
@@ -60,6 +67,16 @@ func BadRequest(format string, args ...any) *Error {
 
 func Unauthorized(message string) *Error {
 	return &Error{Code: CodeUnauthorized, Message: message, status: http.StatusUnauthorized}
+}
+
+func Forbidden(message string) *Error {
+	return &Error{Code: CodeForbidden, Message: message, status: http.StatusForbidden}
+}
+
+// TooManyRequests is a 429 with a machine-readable code and a Retry-After
+// header rounded up to whole seconds.
+func TooManyRequests(code, message string, retryAfter time.Duration) *Error {
+	return &Error{Code: code, Message: message, status: http.StatusTooManyRequests, retryAfter: retryAfter}
 }
 
 func NotFound(format string, args ...any) *Error {
@@ -127,6 +144,9 @@ func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
 		log.Error("request failed", "code", apiErr.Code, "error", apiErr.Error())
 	} else {
 		log.Debug("request rejected", "code", apiErr.Code, "message", apiErr.Message)
+	}
+	if apiErr.retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64((apiErr.retryAfter+time.Second-1)/time.Second), 10))
 	}
 	writeJSON(w, log, apiErr.status, errorEnvelope{Error: apiErr})
 }

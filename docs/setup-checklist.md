@@ -325,6 +325,47 @@ scrape_configs:
 Counters restart from zero when Reelay restarts; Prometheus handles that as a
 counter reset.
 
+## Household logins
+
+Off by default. The static `server.auth_token` keeps working unchanged for the
+plugin, Prometheus and scripts either way.
+
+1. [ ] Confirm `server.auth_token` is set and that
+   `availability.jellyfin_servers` maps your plugin's Jellyfin server ID to the
+   URL Reelay can reach (it is also used for playable links). The plugin has
+   already synced the users you want to allow.
+2. [ ] Add to `config.yaml`, then restart:
+
+   ```yaml
+   auth:
+     logins_enabled: true
+     session_ttl: 168h        # 1h to 8760h
+     member_request_quota: 5  # new requests per member per window; 0 = unlimited
+     member_quota_window: 24h # at least 1h when a quota is set
+   ```
+
+   Environment variables work too, for example `REELAY_AUTH_LOGINS_ENABLED=true`.
+3. [ ] Serve Reelay over HTTPS if it is reachable beyond your LAN. Sign-in sends
+   the Jellyfin password to Reelay, which forwards it to Jellyfin and discards
+   it. Behind a reverse proxy, send `X-Forwarded-Proto: https` so the session
+   cookie is marked Secure. Failed sign-ins are limited per peer address, so
+   all users behind one proxy share one allowance.
+4. [ ] Verify with `GET /api/v1/auth/config`, then sign in with
+   `POST /api/v1/auth/login` (`{"username": "...", "password": "..."}`; add
+   `server_id` when more than one server is configured). A Jellyfin administrator
+   becomes an operator; any other user must be enabled in Reelay (Jellyfin user
+   sync) and sees only their own recommendations, requests and trials. Other
+   endpoints answer 403 to members. State-changing calls made with the session
+   cookie must send `X-Reelay-Request: 1`.
+5. [ ] To revoke a member, disable them in Reelay; their session stops working
+   on the next request. Sessions otherwise end at logout
+   (`POST /api/v1/auth/logout`) or after `session_ttl`. An operator session is
+   not re-checked against Jellyfin; to end one early, delete its row from the
+   `sessions` table.
+
+The dashboard sign-in screen is a separate step; until then use the API above
+with a cookie jar, or keep using the bearer token.
+
 ## Development checks and optional future work
 
 1. [ ] Re-run `.\make.ps1 test` and `.\make.ps1 vet` after any code changes.
@@ -339,9 +380,9 @@ counter reset.
    from this working tree for the existing Jellyfin server line.
    Use the SDK constraints in `global.json` and pinned plugin targets; do not
    change them just to match the default SDK on PATH.
-4. [ ] Decide whether household members need direct dashboard access. Separate
-   end-user authentication, request permissions, and quotas are future work.
-   The current user selector is an operator filter under one bearer token.
+4. [ ] Decide whether household members need their own logins; see
+   [Household logins](#household-logins). Until `auth.logins_enabled` is true,
+   the dashboard user selector is an operator filter under one bearer token.
 
 See the [delivery status](product-plan.md#delivery-status) and
 [architecture](architecture.md) for implementation details and verification limits.

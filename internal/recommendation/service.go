@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -33,30 +34,59 @@ func NewService(st *store.Store, provider metadata.RecommendationProvider, cfg c
 	return &Service{store: st, provider: provider, cfg: cfg, now: now, log: log}
 }
 
-func (s *Service) GenerateAll(ctx context.Context) error {
+// ProviderReport is what one GenerateAll pass saw of the recommendation
+// provider: how many generations fetched provider listings, the first
+// provider failure, and the user/media type pairs the provider failed.
+type ProviderReport struct {
+	Generated int
+	Failure   error
+	Failed    []string
+}
+
+// providerError marks a generation that failed because the provider did,
+// rather than the store.
+type providerError struct{ err error }
+
+func (e *providerError) Error() string { return e.err.Error() }
+func (e *providerError) Unwrap() error { return e.err }
+
+func (s *Service) GenerateAll(ctx context.Context) (ProviderReport, error) {
+	var report ProviderReport
+	var first error
+
 	if !s.cfg.Enabled {
-		return nil
+		return report, nil
 	}
 	users, err := s.store.Recommendations().Users(ctx)
 	if err != nil {
-		return err
+		return report, err
 	}
-	var first error
 	for _, user := range users {
 		if !user.Enabled {
 			continue
 		}
 		for _, mediaType := range []string{"movie", "series"} {
-			if err := s.Generate(ctx, user.ServerID, user.UserID, mediaType); err != nil {
-				s.log.Error("recommendation generation failed", "server", user.ServerID, "user", user.UserID, "type", mediaType, "error", err)
-				if first == nil {
-					first = err
+			var failed *providerError
+
+			err := s.Generate(ctx, user.ServerID, user.UserID, mediaType)
+			if err == nil {
+				report.Generated++
+				continue
+			}
+			s.log.Error("recommendation generation failed", "server", user.ServerID, "user", user.UserID, "type", mediaType, "error", err)
+			if first == nil {
+				first = err
+			}
+			if errors.As(err, &failed) && ctx.Err() == nil {
+				if report.Failure == nil {
+					report.Failure = failed.err
 				}
+				report.Failed = append(report.Failed, "recommendations:"+user.ServerID+"/"+user.UserID+"/"+mediaType)
 			}
 		}
 	}
 	_ = s.store.Recommendations().Prune(ctx, s.now())
-	return first
+	return report, first
 }
 
 func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType string) error {
@@ -243,7 +273,7 @@ func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]
 	if len(searchSeeds) == 0 {
 		values, err := provider.Discover(g.ctx, g.mediaType)
 		if err != nil {
-			return nil, err
+			return nil, &providerError{err: err}
 		}
 		g.addListing(pool, values, map[int]bool{}, model.RecommendationSource{Kind: "catalog", Listing: "discover"})
 		return pool, nil
@@ -256,7 +286,7 @@ func (g *generation) fetchCandidates(searchSeeds []model.JellyfinItem) (map[int]
 		queried[seed.TMDBID] = true
 		values, err := provider.Recommendations(g.ctx, g.mediaType, seed.TMDBID)
 		if err != nil {
-			return nil, fmt.Errorf("recommendations for %s: %w", seed.Title, err)
+			return nil, &providerError{err: fmt.Errorf("recommendations for %s: %w", seed.Title, err)}
 		}
 		matched := map[int]bool{}
 		g.addListing(pool, values, matched, model.RecommendationSource{Kind: "seed", Listing: "recommendations", TMDBID: seed.TMDBID, Title: seed.Title})

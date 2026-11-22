@@ -82,12 +82,12 @@ func (s *Server) describeRequestWait(request *model.MediaRequest, incidents []st
 		// A free-space incident skips whole search passes without holding
 		// each item, and a TV listings outage leaves a series without
 		// episodes. Inaccessible download files reach requests through their
-		// download wait.
+		// download wait, and TMDB only feeds recommendations.
 		for _, incident := range incidents {
 			kind := ""
 			if incident.Kind == store.IncidentStorage && !strings.HasPrefix(incident.Key, engine.DownloadFilesKeyPrefix) && searching && due {
 				kind = model.WaitStorage
-			} else if incident.Kind == store.IncidentMetadata && request.State == "waiting_metadata" {
+			} else if incident.Kind == store.IncidentMetadata && incident.Key != engine.TMDBIncidentKey && request.State == "waiting_metadata" {
 				kind = model.WaitMetadata
 			}
 			if kind != "" {

@@ -25,6 +25,9 @@ const (
 	downloadClientIncidentKey = "download_client"
 	tvmazeIncidentKey         = "tvmaze"
 
+	// TMDBIncidentKey is the metadata incident of TMDB, which only the
+	// recommendation loop observes.
+	TMDBIncidentKey = "tmdb"
 	// DownloadFilesKeyPrefix leads the key of a storage incident for completed
 	// downloads whose files are not accessible, followed by the local download
 	// path. It keeps that cause apart from free space on the same path.
@@ -82,6 +85,8 @@ func IncidentCheckInterval(cfg *config.Config, kind, key string) time.Duration {
 		return cfg.Schedules.SearchInterval.Duration
 	case kind == store.IncidentDownloadClient:
 		return cfg.Schedules.StatusInterval.Duration
+	case kind == store.IncidentMetadata && key == TMDBIncidentKey:
+		return cfg.Recommendations.RefreshInterval.Duration
 	case kind == store.IncidentMetadata:
 		return cfg.Schedules.MetadataInterval.Duration
 	}
@@ -220,7 +225,8 @@ func (e *Engine) incidentCauseConfigured(cause incidentCause) bool {
 	case store.IncidentLibrary:
 		return cause.key == e.cfg.Library.MovieRoot || cause.key == e.cfg.Library.TVRoot
 	case store.IncidentMetadata:
-		return cause.key == tvmazeIncidentKey && e.tvmaze != nil
+		return (cause.key == tvmazeIncidentKey && e.tvmaze != nil) ||
+			(cause.key == TMDBIncidentKey && e.cfg.Recommendations.Enabled && e.recommendations != nil)
 	case store.IncidentNotifications:
 		return cause.key == userNtfyIncidentKey || (cause.key == webhookIncidentKey && e.cfg.Availability.WebhookURL != "")
 	}

@@ -63,6 +63,13 @@ var downloadFilesGuidance = incidentText{
 	action:   "Check that the download folder is mounted on the Reelay host and that downloader.path_mappings map the client's paths to it.",
 }
 
+// tmdbGuidance is for TMDB, which only recommendation generation checks.
+var tmdbGuidance = incidentText{
+	cause:    "Metadata provider %s is failing",
+	nextStep: "Generates recommendations again on the next recommendation refresh.",
+	action:   "Usually temporary. If it persists, check outbound network access from the Reelay host and the TMDB API key.",
+}
+
 type incidentDTO struct {
 	store.Incident
 	Cause          string `json:"cause"`
@@ -89,6 +96,8 @@ func (s *Server) describeIncidents(incidents []store.Incident, now time.Time) []
 		subject := incident.Key
 		if path, ok := strings.CutPrefix(incident.Key, engine.DownloadFilesKeyPrefix); ok && incident.Kind == store.IncidentStorage {
 			guidance, subject = downloadFilesGuidance, path
+		} else if incident.Kind == store.IncidentMetadata && incident.Key == engine.TMDBIncidentKey {
+			guidance = tmdbGuidance
 		}
 		if incident.ResolvedAt == nil {
 			incident.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind, incident.Key), now)

@@ -55,9 +55,10 @@ function availabilityBadge(record: MediaRequest) {
 }
 
 function requestRow(record: MediaRequest) {
+  const subtitleLabels = { present: "Subtitles available", missing: "No subtitles", unknown: "Subtitles not checked" };
   return `<article class="request-row">
       <div class="request-title"><strong>${esc(record.title)}</strong><small>${esc(record.media_type)}${record.year ? ` · ${esc(record.year)}` : ""}</small></div>
-      <div class="request-status"><span>Status</span>${state(record.state)}${availabilityBadge(record)}</div>
+      <div class="request-status"><span>Status</span>${state(record.state)}${availabilityBadge(record)}${record.subtitle_coverage ? `<small>${subtitleLabels[record.subtitle_coverage]}</small>` : ""}</div>
       ${requestProgress(record)}
       <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}

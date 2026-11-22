@@ -51,6 +51,7 @@ type MediaRequest struct {
 	ReadySeason      int          `json:"ready_season,omitempty"`
 	ReadyEpisode     int          `json:"ready_episode,omitempty"`
 	JellyfinItemID   string       `json:"jellyfin_item_id"`
+	SubtitleCoverage string       `json:"subtitle_coverage,omitempty"`
 	JellyfinURL      string       `json:"jellyfin_url"`
 	Trial            *SeriesTrial `json:"trial,omitempty"`
 

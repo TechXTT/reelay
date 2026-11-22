@@ -259,6 +259,9 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
  SELECT c.request_id,c.season,c.number,c.item_id FROM jellyfin_episode_confirmations c
  WHERE c.request_id IN (SELECT id FROM selected_requests)
    AND c.rowid=(SELECT x.rowid FROM jellyfin_episode_confirmations x WHERE x.request_id=c.request_id ORDER BY x.season,x.number LIMIT 1)
+), linked_item AS MATERIALIZED (
+ SELECT mr.id,COALESCE(rd.item_id,(SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 AND `+requesterSeesItem+` ORDER BY ji.item_id LIMIT 1),'') AS item_id
+ FROM selected_requests mr LEFT JOIN ready_episode rd ON rd.request_id=mr.id
 )
 SELECT
  mr.id,mr.server_id,mr.user_id,mr.media_type,mr.tmdb_id,mr.title,mr.year,mr.requested_at,mr.monitor_mode,mr.subject_type,mr.subject_id,
@@ -284,7 +287,11 @@ SELECT
  CASE WHEN mr.media_type='movie' THEN m.next_search_at ELSE e.next_search_at END,
  EXISTS(SELECT 1 FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 AND `+requesterSeesItem+`),
  COALESCE(e.imported,0),COALESCE(e.total,0),mr.cancelled_at,mr.seasons_json,
- COALESCE(rd.item_id,(SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 AND `+requesterSeesItem+` ORDER BY ji.item_id LIMIT 1),''),
+ linked.item_id,
+ CASE WHEN rd.item_id IS NOT NULL OR (mr.media_type='movie' AND EXISTS(
+   SELECT 1 FROM jellyfin_user_libraries l JOIN jellyfin_user_items v ON v.server_id=l.server_id AND v.user_id=l.user_id AND v.sync_token=l.sync_token
+   WHERE l.server_id=mr.server_id AND l.user_id=mr.user_id AND v.item_id=linked.item_id))
+ THEN COALESCE(sc.status,'unknown') ELSE '' END,
  CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
       WHEN mr.media_type='movie' THEN EXISTS(SELECT 1 FROM grabs g WHERE `+recoverableMovieImport+`)
       WHEN sr.status='following' THEN COALESCE(e.can_retry_import,0)
@@ -296,6 +303,8 @@ SELECT
       ELSE 0 END,
  CASE WHEN mr.media_type='movie' THEN mp.waited_at ELSE sp.waited_at END
 FROM selected_requests mr
+JOIN linked_item linked ON linked.id=mr.id
+LEFT JOIN subtitle_coverage sc ON sc.server_id=mr.server_id AND sc.media_source_id=linked.item_id AND sc.item_id=linked.item_id
 LEFT JOIN ready_episode rd ON rd.request_id=mr.id
 LEFT JOIN movies m ON mr.subject_type='movie' AND m.id=mr.subject_id AND m.tmdb_id=mr.tmdb_id
 LEFT JOIN series sr ON mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id
@@ -334,7 +343,7 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	var waitedAt sql.NullString
 
 	if err := row.Scan(append(requestIdentityTargets(&value, &requested), &value.State, &value.Progress, &value.LastError,
-		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport,
+		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.SubtitleCoverage, &value.CanRetryImport,
 		&value.ReadySeason, &value.ReadyEpisode, &searchHold, &waitedAt)...); err != nil {
 		return value, err
 	}

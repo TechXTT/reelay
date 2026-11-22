@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -167,26 +168,59 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 
 // recheckStorageIncidents measures the free space of every path with an open
 // storage incident against the reserve. Download-files causes are the status
-// loop's.
+// loop's. An incident recorded against the nearest existing ancestor of a
+// download path that has since been created stands for the paths measured
+// now: it resolves once all of them beneath it have room, instead of staying
+// tied to the ancestor's own free space.
 func (e *Engine) recheckStorageIncidents(ctx context.Context) error {
+	var current = e.spacePaths(e.cfg.Downloader.SavePathTV, e.cfg.Library.TVRoot)
+
+	current = append(current, e.spacePaths(e.cfg.Downloader.SavePathMovies, e.cfg.Library.MovieRoot)...)
 	paths, err := e.openIncidentKeys(ctx, store.IncidentStorage)
 	if err != nil {
 		return err
 	}
 	for _, path := range paths {
-		if !strings.HasPrefix(path, DownloadFilesKeyPrefix) {
+		var beneath []string
+
+		if strings.HasPrefix(path, DownloadFilesKeyPrefix) {
+			continue
+		}
+		if slices.Contains(current, path) {
 			e.checkPaths(0, []string{path})
+			continue
+		}
+		for _, measured := range current {
+			if rel, err := filepath.Rel(path, measured); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				beneath = append(beneath, measured)
+			}
+		}
+		if len(beneath) == 0 {
+			e.checkPaths(0, []string{path})
+		} else if e.checkPaths(0, beneath) == nil {
+			e.incidentHealthy(store.IncidentStorage, path)
 		}
 	}
 	return nil
 }
 
+// feedProbe is when an indexer without a capabilities request may next be
+// probed through its recent feed, and the wait that led there.
+type feedProbe struct {
+	next  time.Time
+	delay time.Duration
+}
+
 // probeIndexer checks an indexer with an open incident without searching for
 // an item: the Torznab capabilities endpoint where the client has one,
 // otherwise one recent-feed query. An open circuit breaker refuses the probe
-// without network traffic and keeps the incident open.
+// without network traffic and keeps the incident open. Feed probes back off
+// after each failure, doubling from the search interval up to an hour, so a
+// long outage of such an indexer costs few requests.
 func (e *Engine) probeIndexer(ctx context.Context, client indexer.Indexer) {
 	var prober, canProbe = client.(interface{ Probe(context.Context) error })
+	var now = e.clock.Now()
+	var schedule feedProbe
 	var err error
 
 	if err = client.Healthy(ctx); err != nil {
@@ -196,14 +230,29 @@ func (e *Engine) probeIndexer(ctx context.Context, client indexer.Indexer) {
 	if canProbe {
 		err = prober.Probe(ctx)
 	} else {
+		e.feedProbesMu.Lock()
+		schedule = e.feedProbes[client.Name()]
+		e.feedProbesMu.Unlock()
+		if now.Before(schedule.next) {
+			return
+		}
 		_, err = client.Search(ctx, indexer.Query{Recent: true, Categories: indexer.VideoCategories()})
 	}
 	switch {
 	case errors.Is(err, indexer.ErrUnsupported) || ctx.Err() != nil:
 	case err != nil:
 		e.incidentFailed(store.IncidentIndexer, client.Name(), fmt.Sprintf("%s probe: %v", client.Name(), err))
+		if !canProbe {
+			schedule.delay = min(max(schedule.delay*2, e.cfg.Schedules.SearchInterval.Duration), time.Hour)
+			e.feedProbesMu.Lock()
+			e.feedProbes[client.Name()] = feedProbe{next: now.Add(schedule.delay), delay: schedule.delay}
+			e.feedProbesMu.Unlock()
+		}
 	default:
 		e.incidentHealthy(store.IncidentIndexer, client.Name())
+		e.feedProbesMu.Lock()
+		delete(e.feedProbes, client.Name())
+		e.feedProbesMu.Unlock()
 	}
 }
 

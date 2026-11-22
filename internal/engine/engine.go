@@ -71,6 +71,11 @@ type Engine struct {
 	// upgradeMu serializes upgrade starts so the in-flight cap holds between
 	// the hourly pass and manual starts.
 	upgradeMu sync.Mutex
+
+	// feedProbes backs off recent-feed probes of indexers without a cheap
+	// capabilities request while their incident stays open.
+	feedProbesMu sync.Mutex
+	feedProbes   map[string]feedProbe
 }
 
 func New(opt Options) (*Engine, error) {
@@ -102,7 +107,7 @@ func New(opt Options) (*Engine, error) {
 		searchTrigger: make(chan struct{}, 1), statusTrigger: make(chan struct{}, 1),
 		metadataTrigger: make(chan struct{}, 1), recentTrigger: make(chan struct{}, 1),
 		recommendationTrigger: make(chan struct{}, 1), recommendations: opt.Recommendations,
-		metrics: newMetrics(),
+		metrics: newMetrics(), feedProbes: make(map[string]feedProbe),
 	}, nil
 }
 

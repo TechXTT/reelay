@@ -104,8 +104,10 @@ func (s *Server) describeIncidents(incidents []store.Incident, now time.Time) []
 		}
 		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, subject),
 			NextStep: guidance.nextStep, OperatorAction: guidance.action}
-		if incident.ResolvedAt != nil && strings.HasPrefix(incident.Detail, store.IncidentCauseRemoved) {
-			out[i].ResolvedNote = store.IncidentCauseRemoved
+		for _, note := range []string{store.IncidentCauseRemoved, store.IncidentNothingWaiting} {
+			if incident.ResolvedAt != nil && strings.HasPrefix(incident.Detail, note) {
+				out[i].ResolvedNote = note
+			}
 		}
 	}
 	return out

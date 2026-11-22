@@ -20,8 +20,8 @@ func (e *Engine) StatusOnce(ctx context.Context) (err error) {
 
 	defer func() {
 		// Once every grab was checked, a download-files cause that no grab
-		// waited on in this pass has recovered; a wait observed in the same
-		// pass wins.
+		// waited on in this pass is cleared; a wait observed in the same pass
+		// wins, and an import that read the files counts as recovery.
 		if filesChecked && ctx.Err() == nil {
 			err = errors.Join(err, e.downloadFilesChecked(context.WithoutCancel(ctx)))
 		}
@@ -161,7 +161,10 @@ func (e *Engine) recordDownloadWait(ctx context.Context, grab model.Grab, reason
 	return nil
 }
 
-// downloadFilesChecked marks every open download-files cause healthy.
+// downloadFilesChecked clears every open download-files cause. One whose
+// files an import read in this pass was already seen healthy; the rest close
+// with a note, since the waiting downloads went away (cancelled, failed or
+// removed) without their files being seen again.
 func (e *Engine) downloadFilesChecked(ctx context.Context) error {
 	keys, err := e.openIncidentKeys(ctx, store.IncidentStorage)
 	if err != nil {
@@ -169,7 +172,7 @@ func (e *Engine) downloadFilesChecked(ctx context.Context) error {
 	}
 	for _, key := range keys {
 		if strings.HasPrefix(key, DownloadFilesKeyPrefix) {
-			e.incidentHealthy(store.IncidentStorage, key)
+			e.incidentCleared(store.IncidentStorage, key, store.IncidentNothingWaiting)
 		}
 	}
 	return nil
@@ -316,6 +319,8 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			return err
 		}
 		e.metrics.imports.Inc("ok")
+		// The import read the completed files, so their path is reachable.
+		e.incidentHealthy(store.IncidentStorage, e.downloadFilesKey(grab.SubjectType))
 		e.incidentHealthy(store.IncidentLibrary, e.libraryRoot(grab.SubjectType))
 	}
 	grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""

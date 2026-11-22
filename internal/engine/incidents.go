@@ -54,9 +54,12 @@ func (c incidentCause) scope() string {
 
 // incidentObservation accumulates what one loop pass saw of a cause. A failure
 // observed in the same pass as a success wins.
+// note, when set, closes an open incident that nothing waits on any more
+// without counting it as recovered; a healthy observation clears it.
 type incidentObservation struct {
 	failed  bool
 	healthy bool
+	note    string
 	detail  string
 	items   map[string]bool
 }
@@ -138,7 +141,19 @@ func (e *Engine) incidentAffects(kind, item string) {
 func (e *Engine) incidentHealthy(kind, key string) {
 	e.incidents.mu.Lock()
 	defer e.incidents.mu.Unlock()
-	e.incidents.observation(kind, key).healthy = true
+	obs := e.incidents.observation(kind, key)
+	obs.healthy, obs.note = true, ""
+}
+
+// incidentCleared records that nothing waits on a cause any more. Unless the
+// pass also saw the cause healthy, its open incident resolves with note.
+func (e *Engine) incidentCleared(kind, key, note string) {
+	e.incidents.mu.Lock()
+	defer e.incidents.mu.Unlock()
+	obs := e.incidents.observation(kind, key)
+	if !obs.healthy {
+		obs.healthy, obs.note = true, note
+	}
 }
 
 // incidentOpen reports whether a cause has an open incident, as known since
@@ -268,7 +283,7 @@ func (e *Engine) flushIncidents(ctx context.Context, scopes ...string) error {
 			if !obs.healthy || !open {
 				continue
 			}
-			if err := e.store.Incidents().Resolve(ctx, cause.kind, cause.key, "", now); err != nil {
+			if err := e.store.Incidents().Resolve(ctx, cause.kind, cause.key, obs.note, now); err != nil {
 				errs = append(errs, err)
 				continue
 			}

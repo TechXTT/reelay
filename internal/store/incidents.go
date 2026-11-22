@@ -89,6 +89,11 @@ func (r *IncidentRepository) Observe(ctx context.Context, value Incident, at tim
 // because its cause is no longer configured, rather than seen healthy.
 const IncidentCauseRemoved = "Cause removed from configuration."
 
+// IncidentNothingWaiting is the note that leads the detail of an incident
+// closed because nothing waits on its cause any more, without seeing the
+// cause recover.
+const IncidentNothingWaiting = "Nothing waits on this cause any more; recovery was not observed."
+
 // Resolve closes the open incident of a cause, if any, and trims the oldest
 // resolved incidents beyond resolvedIncidentLimit. A non-empty note says why
 // it closed and is kept ahead of the recorded detail.

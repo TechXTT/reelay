@@ -119,10 +119,45 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,item_id) DO UPDA
 	})
 }
 
+// requesterSeesItem holds for a present item ji of request mr unless the plugin
+// reports per-user libraries for the requester and ji is a movie outside the
+// requester's last completed pass. Without per-user data the server catalog
+// remains the evidence, as with older plugins.
+const requesterSeesItem = `(mr.media_type<>'movie'
+ OR NOT EXISTS(SELECT 1 FROM jellyfin_user_libraries l WHERE l.server_id=mr.server_id AND l.user_id=mr.user_id)
+ OR EXISTS(SELECT 1 FROM jellyfin_user_libraries l JOIN jellyfin_user_items v ON v.server_id=l.server_id AND v.user_id=l.user_id AND v.sync_token=l.sync_token
+  WHERE l.server_id=mr.server_id AND l.user_id=mr.user_id AND v.item_id=ji.item_id))`
+
 // parentAvailability limits the title-present events to requests whose parent
-// item is the right evidence: movies always, series only while the server's
-// plugin does not confirm requested episodes (see ConfirmEpisodes).
-const parentAvailability = ` AND NOT (mr.media_type='series' AND EXISTS(SELECT 1 FROM kv WHERE kv.key='jellyfin.episode_confirmation:'||mr.server_id AND kv.value='1'))`
+// item is the right evidence: movies the requester can see, and series only
+// while the server's plugin does not confirm requested episodes (see
+// ConfirmEpisodes).
+const parentAvailability = ` AND NOT (mr.media_type='series' AND EXISTS(SELECT 1 FROM kv WHERE kv.key='jellyfin.episode_confirmation:'||mr.server_id AND kv.value='1')) AND ` + requesterSeesItem
+
+// queueTitleAvailability queues the title-present events for the requests that
+// match filter (a condition on mr with filterArgs). The per-user event goes
+// first, and only while no global event exists, so a destination saved after
+// the title became available does not replay it.
+func queueTitleAvailability(ctx context.Context, tx *sql.Tx, now, filter string, filterArgs ...any) error {
+	const payload = `SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
+ FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1`
+	var args = append([]any{now, now}, filterArgs...)
+
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
+ `+payload+`
+ JOIN notification_destinations nd ON nd.server_id=mr.server_id AND nd.user_id=mr.user_id AND nd.enabled=1
+ WHERE `+filter+` AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)`+parentAvailability+` GROUP BY mr.id`, args...)
+	if err != nil {
+		return fmt.Errorf("queue user title availability: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
+ `+payload+`
+ WHERE `+filter+` AND mr.cancelled_at IS NULL`+parentAvailability+` GROUP BY mr.id`, args...)
+	if err != nil {
+		return fmt.Errorf("queue title availability: %w", err)
+	}
+	return nil
+}
 
 func (r *RecommendationRepository) CompleteSync(ctx context.Context, serverID, syncToken string) (int, error) {
 	if strings.TrimSpace(serverID) == "" || strings.TrimSpace(syncToken) == "" {
@@ -140,22 +175,7 @@ func (r *RecommendationRepository) CompleteSync(ctx context.Context, serverID, s
 		if err != nil {
 			return err
 		}
-		// Queued before the global event so "no global event yet" still marks the
-		// sync that first sees the title: a destination saved later must not
-		// replay titles that were already available.
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
- SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
- FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1
- JOIN notification_destinations nd ON nd.server_id=mr.server_id AND nd.user_id=mr.user_id AND nd.enabled=1
- WHERE mr.server_id=? AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id)`+parentAvailability+` GROUP BY mr.id`, now, now, serverID)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
- SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
- FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1
- WHERE mr.server_id=? AND mr.cancelled_at IS NULL`+parentAvailability+` GROUP BY mr.id`, now, now, serverID)
-		if err != nil {
+		if err := queueTitleAvailability(ctx, tx, now, "mr.server_id=?", serverID); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO kv(key,value,updated_at) VALUES('jellyfin.catalog:'||?,?,?)

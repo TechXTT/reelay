@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -60,15 +59,10 @@ var requestWaitText = map[string]string{
 	model.WaitSearchRetry:    "Waiting for you to retry the search.",
 }
 
-// serviceWaitKinds wait on the service rather than the viewer.
-var serviceWaitKinds = []string{model.WaitSearchService, model.WaitDownloadClient, model.WaitDownloadFiles,
-	model.WaitStorage, model.WaitMetadata}
-
 // describeRequestWait fills the viewer fields that say what a request waits
 // for, when Reelay checks again and whether the viewer needs to act. Open
-// incidents only choose the copy; their detail is never copied. During a
-// service wait the item's last error is the raw service error, so members
-// get the wait text instead.
+// incidents only choose the copy; their detail is never copied. Members never
+// receive the raw last error.
 func (s *Server) describeRequestWait(request *model.MediaRequest, incidents []store.Incident, member bool, now time.Time) {
 	var searching = request.State == string(model.StateWanted) || request.State == string(model.StateSearching)
 	var due = request.NextSearchAt == nil || !request.NextSearchAt.After(now)
@@ -120,7 +114,9 @@ func (s *Server) describeRequestWait(request *model.MediaRequest, incidents []st
 	case request.WaitingFor != "":
 		request.ActionHint = "Nothing to do; Reelay will retry automatically."
 	}
-	if member && slices.Contains(serviceWaitKinds, request.WaitKind) {
+	// An item's last error is raw text that can name hosts, paths or trackers,
+	// and it can outlive the wait it described; members get the viewer fields.
+	if member {
 		request.LastError = ""
 	}
 }

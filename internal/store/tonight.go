@@ -121,6 +121,10 @@ ON CONFLICT(server_id,user_id) DO UPDATE SET sync_token=excluded.sync_token,sync
 		if err != nil {
 			return fmt.Errorf("discard previous jellyfin user library: %w", err)
 		}
+		// A movie request becomes available once the requester can see the movie.
+		if err := queueTitleAvailability(ctx, tx, now, "mr.server_id=? AND mr.user_id=? AND mr.media_type='movie'", serverID, userID); err != nil {
+			return err
+		}
 		return tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jellyfin_user_items WHERE server_id=? AND user_id=? AND sync_token=?`, serverID, userID, syncToken).Scan(&visible)
 	})
 	return visible, err

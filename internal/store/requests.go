@@ -282,9 +282,9 @@ SELECT
       WHEN sr.status='following' THEN COALESCE(sp.download_wait,0)
       ELSE 0 END,
  CASE WHEN mr.media_type='movie' THEN m.next_search_at ELSE e.next_search_at END,
- EXISTS(SELECT 1 FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1),
+ EXISTS(SELECT 1 FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 AND `+requesterSeesItem+`),
  COALESCE(e.imported,0),COALESCE(e.total,0),mr.cancelled_at,mr.seasons_json,
- COALESCE(rd.item_id,(SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 ORDER BY ji.item_id LIMIT 1),''),
+ COALESCE(rd.item_id,(SELECT ji.item_id FROM jellyfin_items ji WHERE ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1 AND `+requesterSeesItem+` ORDER BY ji.item_id LIMIT 1),''),
  CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
       WHEN mr.media_type='movie' THEN EXISTS(SELECT 1 FROM grabs g WHERE `+recoverableMovieImport+`)
       WHEN sr.status='following' THEN COALESCE(e.can_retry_import,0)

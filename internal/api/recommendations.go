@@ -23,7 +23,10 @@ type jellyfinSyncRequest struct {
 }
 
 type jellyfinEventsRequest struct {
-	Events []model.JellyfinActivity `json:"events"`
+	Events   []model.JellyfinActivity `json:"events"`
+	ServerID string                   `json:"server_id"`
+	UserID   string                   `json:"user_id"`
+	Complete bool                     `json:"complete"`
 }
 
 func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) error {
@@ -72,13 +75,25 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 			}})
 		}
 	}
-	return reply(w, r, http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed})
+	return reply(w, r, http.StatusOK, map[string]any{"users": len(req.Users), "items": len(req.Items), "removed": removed, "activity_completion_supported": true})
 }
 
 func (s *Server) handleJellyfinEvents(w http.ResponseWriter, r *http.Request) error {
 	req, err := decodeJSON[jellyfinEventsRequest](r)
 	if err != nil {
 		return err
+	}
+	if req.Complete {
+		if len(req.Events) != 0 || strings.TrimSpace(req.ServerID) == "" || strings.TrimSpace(req.UserID) == "" {
+			return BadRequest("activity completion requires server_id and user_id with no events")
+		}
+		if err := s.store.Recommendations().CompleteActivitySync(r.Context(), req.ServerID, req.UserID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return NotFound("Jellyfin user not found")
+			}
+			return err
+		}
+		return reply(w, r, http.StatusOK, map[string]any{"completed": true})
 	}
 	if len(req.Events) == 0 || len(req.Events) > 500 {
 		return BadRequest("events must contain between 1 and 500 entries")

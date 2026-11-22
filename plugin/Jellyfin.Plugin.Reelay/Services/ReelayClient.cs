@@ -14,14 +14,23 @@ public sealed class ReelayClient
         _http.Timeout = TimeSpan.FromSeconds(30);
     }
 
-    public Task SyncAsync(SyncRequest request, CancellationToken cancellationToken)
-        => PostAsync("/api/v1/integrations/jellyfin/sync", request, cancellationToken);
+    public async Task<SyncResponse?> SyncAsync(SyncRequest body, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/sync");
+        request.Content = JsonContent.Create(body);
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<SyncResponse>(cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task SendActivitiesAsync(IReadOnlyList<Activity> events, CancellationToken cancellationToken)
     {
         if (events.Count == 0) return;
         await PostAsync("/api/v1/integrations/jellyfin/events", new ActivityRequest(events), cancellationToken).ConfigureAwait(false);
     }
+
+    public Task CompleteActivitiesAsync(string serverId, string userId, CancellationToken cancellationToken)
+        => PostAsync("/api/v1/integrations/jellyfin/events", new { server_id = serverId, user_id = userId, complete = true, events = Array.Empty<Activity>() }, cancellationToken);
 
     public async Task<IReadOnlyList<Recommendation>> GetRecommendationsAsync(string userId, string mediaType, CancellationToken cancellationToken)
     {

@@ -27,7 +27,7 @@ function discoverHead(user: JellyfinUser, users: JellyfinUser[], key: string, me
     <div class="discover-toolbar">${isMember() ? "" : `<label>User<select id="discover-user">${userOptions(users, key)}</select></label>`}
     <div class="segmented"><label><input type="radio" name="discover-type" value="movie" ${mediaType === "movie" ? "checked" : ""}><span>Movies</span></label>
     <label><input type="radio" name="discover-type" value="series" ${mediaType === "series" ? "checked" : ""}><span>Series</span></label></div></div>
-    <p class="discover-freshness">Jellyfin sync: ${user.last_synced_at ? esc(date(user.last_synced_at)) : "Not yet synchronized"}${recommendations[0]?.generated_at ? ` · Recommendations generated ${esc(date(recommendations[0].generated_at))}` : ""}${recommendations[0]?.expires_at ? ` · Expires ${esc(date(recommendations[0].expires_at))}` : ""}</p>`;
+    <p class="discover-freshness">Library sync · ${user.last_catalog_sync_at ? esc(date(user.last_catalog_sync_at)) : "No confirmed sync"} · Watch activity sync · ${user.last_activity_sync_at ? esc(date(user.last_activity_sync_at)) : "No confirmed sync"}${recommendations[0]?.generated_at ? ` · Picks updated ${esc(date(recommendations[0].generated_at))}` : ""}</p>`;
 }
 
 function statsPanelShell() {

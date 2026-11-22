@@ -9,6 +9,9 @@ public sealed record SyncRequest(
     [property: JsonPropertyName("users")] IReadOnlyList<SyncUser> Users,
     [property: JsonPropertyName("items")] IReadOnlyList<SyncItem> Items);
 
+public sealed record SyncResponse(
+    [property: JsonPropertyName("activity_completion_supported")] bool ActivityCompletionSupported);
+
 public sealed record SyncUser(
     [property: JsonPropertyName("server_id")] string ServerId,
     [property: JsonPropertyName("user_id")] string UserId,

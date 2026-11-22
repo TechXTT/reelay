@@ -51,13 +51,20 @@ public sealed class SyncService
             .ToList();
         _logger.LogInformation("Found {ScannedCount} Jellyfin movies and series; synchronizing {ItemCount} real items with TMDB IDs", scanned.Count, items.Count);
 
-        await SyncCatalogAsync(config.ServerId, users, items, now, cancellationToken).ConfigureAwait(false);
+        var activityCompletionSupported = await SyncCatalogAsync(config.ServerId, users, items, now, cancellationToken).ConfigureAwait(false);
         progress?.Report(35);
 
         foreach (var user in users)
         {
             var events = BuildActivities(config.ServerId, user, items, source, now);
             foreach (var chunk in events.Chunk(BatchSize)) await _client.SendActivitiesAsync(chunk, cancellationToken).ConfigureAwait(false);
+            if (activityCompletionSupported)
+            {
+                await _client.CompleteActivitiesAsync(config.ServerId, user.Id.ToString("N"), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        foreach (var user in users)
+        {
             await SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
         }
         progress?.Report(55);
@@ -91,7 +98,7 @@ public sealed class SyncService
         foreach (var chunk in watched.Chunk(BatchSize)) await _client.SendTrialPlaybackAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)
+    private async Task<bool> SyncCatalogAsync(string serverId, IReadOnlyList<JellyfinUser> users, IReadOnlyList<SyncItem> items, DateTime now, CancellationToken cancellationToken)
     {
         var syncToken = Guid.NewGuid().ToString("N");
         var syncUsers = users.Select(user => new SyncUser(serverId, user.Id.ToString("N"), user.Username, true, now)).ToList();
@@ -100,7 +107,8 @@ public sealed class SyncService
         {
             await _client.SyncAsync(new SyncRequest(serverId, syncToken, false, Array.Empty<SyncUser>(), chunk), cancellationToken).ConfigureAwait(false);
         }
-        await _client.SyncAsync(new SyncRequest(serverId, syncToken, true, Array.Empty<SyncUser>(), Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
+        var response = await _client.SyncAsync(new SyncRequest(serverId, syncToken, true, Array.Empty<SyncUser>(), Array.Empty<SyncItem>()), cancellationToken).ConfigureAwait(false);
+        return response?.ActivityCompletionSupported == true;
     }
 
     private async Task RefreshRecommendationsAsync(IReadOnlyList<JellyfinUser> users, IProgress<double>? progress, CancellationToken cancellationToken)

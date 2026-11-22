@@ -40,7 +40,7 @@ function requestControls(record: MediaRequest) {
 function requestRow(record: MediaRequest) {
   return `<article class="request-row">
       <div class="request-title"><strong>${esc(record.title)}</strong><small>${esc(record.media_type)}${record.year ? ` · ${esc(record.year)}` : ""}</small></div>
-      <div class="request-status"><span>Status</span>${state(record.state)}${record.available ? `<span class="state state-available">Available in Jellyfin</span>` : ""}</div>
+      <div class="request-status"><span>Status</span>${state(record.state)}${record.available ? `<span class="state state-available">${record.media_type === "series" ? "Series listed in Jellyfin" : "Available in Jellyfin"}</span>` : ""}</div>
       ${requestProgress(record)}
       <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}

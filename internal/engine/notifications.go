@@ -200,7 +200,8 @@ type notificationMessage struct {
 
 func availabilityMessage(payload, format string) (notificationMessage, error) {
 	var event struct {
-		Title string `json:"title"`
+		Title     string `json:"title"`
+		MediaType string `json:"media_type"`
 	}
 
 	if format != "ntfy" {
@@ -216,6 +217,11 @@ func availabilityMessage(payload, format string) (notificationMessage, error) {
 		title:       "Reelay: ready to watch",
 		body:        event.Title + " is available in Jellyfin.",
 		contentType: "text/plain; charset=utf-8",
+	}
+
+	if event.MediaType == "series" {
+		message.title = "Reelay: series listed in Jellyfin"
+		message.body = event.Title + " is listed in Jellyfin. Episode availability is unconfirmed."
 	}
 	return message, nil
 }

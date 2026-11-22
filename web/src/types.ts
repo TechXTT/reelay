@@ -123,6 +123,8 @@ export interface JellyfinUser {
   display_name: string;
   enabled: boolean;
   last_synced_at?: string;
+  last_catalog_sync_at?: string;
+  last_activity_sync_at?: string;
 }
 
 export interface Recommendation {

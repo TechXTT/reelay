@@ -232,11 +232,13 @@ type Recommendation struct {
 }
 
 type JellyfinUser struct {
-	ServerID    string    `json:"server_id"`
-	UserID      string    `json:"user_id"`
-	DisplayName string    `json:"display_name"`
-	Enabled     bool      `json:"enabled"`
-	LastSynced  time.Time `json:"last_synced_at,omitempty"`
+	ServerID         string     `json:"server_id"`
+	UserID           string     `json:"user_id"`
+	DisplayName      string     `json:"display_name"`
+	Enabled          bool       `json:"enabled"`
+	LastSynced       time.Time  `json:"last_synced_at,omitempty"`
+	LastCatalogSync  *time.Time `json:"last_catalog_sync_at,omitempty"`
+	LastActivitySync *time.Time `json:"last_activity_sync_at,omitempty"`
 }
 
 type JellyfinItem struct {

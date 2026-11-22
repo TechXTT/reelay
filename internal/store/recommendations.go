@@ -37,7 +37,11 @@ VALUES(?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id) DO UPDATE SET display_name=
 }
 
 func (r *RecommendationRepository) Users(ctx context.Context) ([]model.JellyfinUser, error) {
-	rows, err := r.s.ro.QueryContext(ctx, `SELECT server_id,user_id,display_name,enabled,last_synced_at FROM jellyfin_users ORDER BY display_name`)
+	rows, err := r.s.ro.QueryContext(ctx, `SELECT u.server_id,u.user_id,u.display_name,u.enabled,u.last_synced_at,catalog.value,activity.value
+FROM jellyfin_users u
+LEFT JOIN kv catalog ON catalog.key='jellyfin.catalog:'||u.server_id
+LEFT JOIN kv activity ON activity.key='jellyfin.activity:'||hex(u.server_id)||':'||hex(u.user_id)
+ORDER BY u.display_name`)
 	if err != nil {
 		return nil, fmt.Errorf("list jellyfin users: %w", err)
 	}
@@ -45,7 +49,10 @@ func (r *RecommendationRepository) Users(ctx context.Context) ([]model.JellyfinU
 		var value model.JellyfinUser
 		var enabled int
 		var synced sql.NullString
-		if err := row.Scan(&value.ServerID, &value.UserID, &value.DisplayName, &enabled, &synced); err != nil {
+		var catalog sql.NullString
+		var activity sql.NullString
+
+		if err := row.Scan(&value.ServerID, &value.UserID, &value.DisplayName, &enabled, &synced, &catalog, &activity); err != nil {
 			return value, err
 		}
 		value.Enabled = enabled == 1
@@ -54,7 +61,14 @@ func (r *RecommendationRepository) Users(ctx context.Context) ([]model.JellyfinU
 		} else if t != nil {
 			value.LastSynced = *t
 		}
-		return value, nil
+		var err error
+
+		value.LastCatalogSync, err = scanNullTime(catalog)
+		if err != nil {
+			return value, err
+		}
+		value.LastActivitySync, err = scanNullTime(activity)
+		return value, err
 	})
 }
 
@@ -136,9 +150,33 @@ func (r *RecommendationRepository) CompleteSync(ctx context.Context, serverID, s
  SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
  FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1
  WHERE mr.server_id=? AND mr.cancelled_at IS NULL GROUP BY mr.id`, now, now, serverID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO kv(key,value,updated_at) VALUES('jellyfin.catalog:'||?,?,?)
+ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, serverID, now, now)
 		return err
 	})
 	return int(count), err
+}
+
+func (r *RecommendationRepository) CompleteActivitySync(ctx context.Context, serverID, userID string) error {
+	var now = FormatTime(r.s.nowUTC())
+	var result, err = r.s.rw.ExecContext(ctx, `INSERT INTO kv(key,value,updated_at)
+SELECT 'jellyfin.activity:'||hex(server_id)||':'||hex(user_id),?,? FROM jellyfin_users WHERE server_id=? AND user_id=?
+ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, now, now, serverID, userID)
+
+	if err != nil {
+		return fmt.Errorf("complete Jellyfin activity sync: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *RecommendationRepository) AddActivities(ctx context.Context, events []model.JellyfinActivity) (int, error) {
@@ -148,7 +186,7 @@ func (r *RecommendationRepository) AddActivities(ctx context.Context, events []m
 			if event.EventID == "" || event.ServerID == "" || event.UserID == "" || event.ItemID == "" || event.OccurredAt.IsZero() {
 				return errors.New("invalid jellyfin activity")
 			}
-			res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO jellyfin_activity(event_id,server_id,user_id,item_id,event_type,progress,occurred_at) VALUES(?,?,?,?,?,?,?)`, event.EventID, event.ServerID, event.UserID, event.ItemID, event.EventType, event.Progress, FormatTime(event.OccurredAt))
+			res, err := tx.ExecContext(ctx, `INSERT INTO jellyfin_activity(event_id,server_id,user_id,item_id,event_type,progress,occurred_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(event_id) DO NOTHING`, event.EventID, event.ServerID, event.UserID, event.ItemID, event.EventType, event.Progress, FormatTime(event.OccurredAt))
 			if err != nil {
 				return fmt.Errorf("insert jellyfin activity: %w", err)
 			}

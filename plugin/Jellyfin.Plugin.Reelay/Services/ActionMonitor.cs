@@ -50,20 +50,32 @@ public sealed class ActionMonitor : BackgroundService
     {
         var config = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin is not initialized");
         if (!config.Enabled) return;
-        foreach (var action in _outbox.Snapshot()) await SendAsync(action, cancellationToken).ConfigureAwait(false);
+        var attempted = new HashSet<string>();
+        foreach (var action in _outbox.Snapshot())
+        {
+            attempted.Add(action.ActionId);
+            await TrySendAsync(action, cancellationToken).ConfigureAwait(false);
+        }
         var virtualItems = JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Movie, BaseItemKind.Series)
             .Where(item => _virtual.IsManagedPath(item.Path)).ToList();
         foreach (var user in JellyfinIdentity.EnabledUsers(_userManager, config))
         {
-            await _sync.SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
             var userId = user.Id.ToString("N");
-            var userItems = virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)).ToList();
-            await ProcessUserAsync(config, user, userId, "movie", userItems.OfType<MediaBrowser.Controller.Entities.Movies.Movie>(), cancellationToken).ConfigureAwait(false);
-            await ProcessUserAsync(config, user, userId, "series", userItems.OfType<MediaBrowser.Controller.Entities.TV.Series>(), cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _sync.SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
+                var userItems = virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)).ToList();
+                await ProcessUserAsync(config, user, userId, "movie", userItems.OfType<MediaBrowser.Controller.Entities.Movies.Movie>(), attempted, cancellationToken).ConfigureAwait(false);
+                await ProcessUserAsync(config, user, userId, "series", userItems.OfType<MediaBrowser.Controller.Entities.TV.Series>(), attempted, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Could not check Reelay activity for Jellyfin user {UserId}", userId);
+            }
         }
     }
 
-    private async Task ProcessUserAsync(PluginConfiguration config, JellyfinUser user, string userId, string mediaType, IEnumerable<BaseItem> items, CancellationToken cancellationToken)
+    private async Task ProcessUserAsync(PluginConfiguration config, JellyfinUser user, string userId, string mediaType, IEnumerable<BaseItem> items, HashSet<string> attempted, CancellationToken cancellationToken)
     {
         var recommendations = await _client.GetRecommendationsAsync(userId, mediaType, cancellationToken).ConfigureAwait(false);
         var byTmdb = recommendations.ToDictionary(item => item.TmdbId);
@@ -77,9 +89,10 @@ public sealed class ActionMonitor : BackgroundService
             if (ChooseAction(data.IsFavorite, data.Rating, data.Likes) is not { } choice) continue;
             var (action, rating) = choice;
             var actionId = JellyfinIdentity.StableId($"{config.ServerId}:{userId}:{recommendation.Id}:{action}:{rating}");
+            if (!attempted.Add(actionId)) continue;
             var pending = new PendingAction(recommendation.Id, actionId, action, rating);
             _outbox.Enqueue(pending);
-            await SendAsync(pending, cancellationToken).ConfigureAwait(false);
+            if (!await TrySendAsync(pending, cancellationToken).ConfigureAwait(false)) continue;
             changed = true;
             _logger.LogInformation("Sent {Action} for {Title} on behalf of Jellyfin user {User}", action, recommendation.Title, user.Username);
         }
@@ -98,9 +111,19 @@ public sealed class ActionMonitor : BackgroundService
         return null;
     }
 
-    private async Task SendAsync(PendingAction action, CancellationToken cancellationToken)
+    private async Task<bool> TrySendAsync(PendingAction action, CancellationToken cancellationToken)
     {
-        await _client.ActAsync(action.RecommendationId, action.ActionId, action.Action, action.Rating, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            await _client.ActAsync(action.RecommendationId, action.ActionId, action.Action, action.Rating, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Could not send queued Reelay action {ActionId} for recommendation {RecommendationId}; it will be retried", action.ActionId, action.RecommendationId);
+            return false;
+        }
         _outbox.Complete(action.ActionId);
+        return true;
     }
 }

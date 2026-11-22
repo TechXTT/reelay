@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,14 +166,17 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 }
 
 // recheckStorageIncidents measures the free space of every path with an open
-// storage incident against the reserve.
+// storage incident against the reserve. Download-files causes are the status
+// loop's.
 func (e *Engine) recheckStorageIncidents(ctx context.Context) error {
 	paths, err := e.openIncidentKeys(ctx, store.IncidentStorage)
 	if err != nil {
 		return err
 	}
 	for _, path := range paths {
-		e.checkPaths(0, []string{path})
+		if !strings.HasPrefix(path, DownloadFilesKeyPrefix) {
+			e.checkPaths(0, []string{path})
+		}
 	}
 	return nil
 }

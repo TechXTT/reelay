@@ -24,11 +24,29 @@ const (
 
 	downloadClientIncidentKey = "download_client"
 	tvmazeIncidentKey         = "tvmaze"
+
+	// DownloadFilesKeyPrefix leads the key of a storage incident for completed
+	// downloads whose files are not accessible, followed by the local download
+	// path. It keeps that cause apart from free space on the same path.
+	DownloadFilesKeyPrefix = "download_files:"
+
+	// downloadFilesScope selects download-files causes in flushIncidents. The
+	// status loop observes them, so the search loop must not flush them and
+	// the status loop must not flush free-space observations mid-pass.
+	downloadFilesScope = "download_files"
 )
 
 type incidentCause struct {
 	kind string
 	key  string
+}
+
+// scope is the flushIncidents argument that selects the cause.
+func (c incidentCause) scope() string {
+	if c.kind == store.IncidentStorage && strings.HasPrefix(c.key, DownloadFilesKeyPrefix) {
+		return downloadFilesScope
+	}
+	return c.kind
 }
 
 // incidentObservation accumulates what one loop pass saw of a cause. A failure
@@ -54,15 +72,17 @@ type incidentTracker struct {
 	open    map[incidentCause]*openIncident
 }
 
-// IncidentCheckInterval is how often Reelay checks a cause of the given kind
-// again, or 0 when nothing retries it automatically.
-func IncidentCheckInterval(cfg *config.Config, kind string) time.Duration {
-	switch kind {
-	case store.IncidentIndexer, store.IncidentStorage:
-		return cfg.Schedules.SearchInterval.Duration
-	case store.IncidentDownloadClient:
+// IncidentCheckInterval is how often Reelay checks a cause again, or 0 when
+// nothing retries it automatically.
+func IncidentCheckInterval(cfg *config.Config, kind, key string) time.Duration {
+	switch {
+	case kind == store.IncidentStorage && strings.HasPrefix(key, DownloadFilesKeyPrefix):
 		return cfg.Schedules.StatusInterval.Duration
-	case store.IncidentMetadata:
+	case kind == store.IncidentIndexer, kind == store.IncidentStorage:
+		return cfg.Schedules.SearchInterval.Duration
+	case kind == store.IncidentDownloadClient:
+		return cfg.Schedules.StatusInterval.Duration
+	case kind == store.IncidentMetadata:
 		return cfg.Schedules.MetadataInterval.Duration
 	}
 	return 0
@@ -182,6 +202,9 @@ func (e *Engine) incidentCauseConfigured(cause incidentCause) bool {
 	case store.IncidentDownloadClient:
 		return cause.key == downloadClientIncidentKey
 	case store.IncidentStorage:
+		if strings.HasPrefix(cause.key, DownloadFilesKeyPrefix) {
+			return cause.key == e.downloadFilesKey(model.SubjectMovie) || cause.key == e.downloadFilesKey(model.SubjectEpisode)
+		}
 		if cause.key == e.cfg.Library.MovieRoot || cause.key == e.cfg.Library.TVRoot {
 			return true
 		}
@@ -204,11 +227,22 @@ func (e *Engine) incidentCauseConfigured(cause incidentCause) bool {
 	panic(fmt.Sprintf("unknown incident kind %q", cause.kind))
 }
 
-// flushIncidents writes the pending observations of the given kinds: a failing
-// cause opens or refreshes its incident, a cause seen only healthy resolves
-// its open incident, and an unobserved cause is left alone. Without kinds it
-// only loads the open incidents.
-func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
+// downloadFilesKey is the download-files incident key of a subject type: the
+// local view of the save path its downloads complete in.
+func (e *Engine) downloadFilesKey(subject model.SubjectType) string {
+	var savePath = e.cfg.Downloader.SavePathTV
+
+	if subject == model.SubjectMovie {
+		savePath = e.cfg.Downloader.SavePathMovies
+	}
+	return DownloadFilesKeyPrefix + e.pathMapper.Local(savePath)
+}
+
+// flushIncidents writes the pending observations of the given scopes (kinds,
+// or downloadFilesScope): a failing cause opens or refreshes its incident, a
+// cause seen only healthy resolves its open incident, and an unobserved cause
+// is left alone. Without scopes it only loads the open incidents.
+func (e *Engine) flushIncidents(ctx context.Context, scopes ...string) error {
 	var t = &e.incidents
 	var now = e.clock.Now().UTC()
 	var errs []error
@@ -219,7 +253,7 @@ func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
 		return err
 	}
 	for cause, obs := range t.pending {
-		if !slices.Contains(kinds, cause.kind) {
+		if !slices.Contains(scopes, cause.scope()) {
 			continue
 		}
 		delete(t.pending, cause)
@@ -247,7 +281,7 @@ func (e *Engine) flushIncidents(ctx context.Context, kinds ...string) error {
 			continue
 		}
 		incident := store.Incident{Kind: cause.kind, Key: cause.key, Detail: obs.detail, Affected: affected}
-		if interval := IncidentCheckInterval(e.cfg, cause.kind); interval > 0 {
+		if interval := IncidentCheckInterval(e.cfg, cause.kind, cause.key); interval > 0 {
 			next := now.Add(interval)
 			incident.NextCheckAt = &next
 		}

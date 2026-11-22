@@ -55,6 +55,14 @@ var incidentGuidance = map[string]incidentText{
 	},
 }
 
+// downloadFilesGuidance is for the storage incidents of completed downloads
+// whose files are not accessible; cause takes the local download path.
+var downloadFilesGuidance = incidentText{
+	cause:    "Completed downloads in %s are not accessible",
+	nextStep: "Checks the downloads again on the next status poll.",
+	action:   "Check that the download folder is mounted on the Reelay host and that downloader.path_mappings map the client's paths to it.",
+}
+
 type incidentDTO struct {
 	store.Incident
 	Cause          string `json:"cause"`
@@ -78,10 +86,14 @@ func (s *Server) describeIncidents(incidents []store.Incident, now time.Time) []
 	out := make([]incidentDTO, len(incidents))
 	for i, incident := range incidents {
 		guidance := incidentGuidance[incident.Kind]
-		if incident.ResolvedAt == nil {
-			incident.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind), now)
+		subject := incident.Key
+		if path, ok := strings.CutPrefix(incident.Key, engine.DownloadFilesKeyPrefix); ok && incident.Kind == store.IncidentStorage {
+			guidance, subject = downloadFilesGuidance, path
 		}
-		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, incident.Key),
+		if incident.ResolvedAt == nil {
+			incident.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind, incident.Key), now)
+		}
+		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, subject),
 			NextStep: guidance.nextStep, OperatorAction: guidance.action}
 		if incident.ResolvedAt != nil && strings.HasPrefix(incident.Detail, store.IncidentCauseRemoved) {
 			out[i].ResolvedNote = store.IncidentCauseRemoved

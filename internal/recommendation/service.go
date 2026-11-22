@@ -383,8 +383,11 @@ func (g *generation) enrich(pool map[int]*aggregate) []Candidate {
 // outsideGenre fetches up to recommendations.diversity_extra_pages TMDB
 // Discover pages of titles outside genre. Titles already in the pool,
 // excluded titles (owned, watched, rated, dismissed or requested) and titles
-// the preferences reject are skipped. The extra titles are optional, so a
-// provider error ends the fetch without failing the generation.
+// the preferences reject are skipped. Up to result_limit extras, the most that
+// can be shown, get the same details lookup as regular candidates, so they
+// score on keywords, people and runtime too; preferences are checked again on
+// the detailed values. The extra titles are optional, so a provider error ends
+// the fetch without failing the generation.
 func (g *generation) outsideGenre(genre string, pool map[int]*aggregate) []Candidate {
 	var candidates []Candidate
 	var seen = map[int]bool{}
@@ -412,7 +415,18 @@ func (g *generation) outsideGenre(genre string, pool map[int]*aggregate) []Candi
 			break
 		}
 	}
-	return candidates
+	for i := range candidates[:min(len(candidates), g.service.cfg.ResultLimit)] {
+		detail, err := g.detail(candidates[i].Item.TMDBID)
+		if err != nil {
+			continue
+		}
+		sources := candidates[i].Item.Sources
+		candidates[i].Item, candidates[i].VoteAverage, candidates[i].VoteCount = toModel(detail), detail.VoteAverage, detail.VoteCount
+		candidates[i].Item.Sources = sources
+	}
+	return slices.DeleteFunc(candidates, func(candidate Candidate) bool {
+		return !g.filter.allows(candidate.Item.Language, candidate.Item.Genres, true)
+	})
 }
 
 type tasteSignal struct {

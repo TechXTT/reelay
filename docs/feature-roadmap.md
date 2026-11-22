@@ -100,6 +100,13 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
     measures (request rate, and whether requested titles get watched) aren't
     tracked yet. Record them per user and show them in a small stats panel
     before changing scorer weights.
+    **Implemented 2026-10-07:** migration 0010 records each title's first offer
+    (top 40 per user and type, backfilled from current cards);
+    `GET /api/v1/recommendations/stats` and a Discover panel show offered,
+    requested (rate), dismissed, rated, available, watched and completed counts
+    per user over 7-365 days. Verified with go build, vet, staticcheck,
+    `go test ./internal/... ./cmd/...` including new store, migration and API
+    tests, and `npm run build`; the panel was not checked in a browser.
 17. **"Because you watched X" groups (S).** The ranking already stores reasons.
     Group Discover cards by their seed title, so the reason behind each pick is
     visible.

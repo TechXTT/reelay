@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/metadata"
@@ -105,6 +106,37 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 	return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": limit, "offset": offset})
+}
+
+type recommendationStatsResponse struct {
+	model.RecommendationStats
+	Days  int       `json:"days"`
+	Since time.Time `json:"since"`
+}
+
+func (s *Server) handleRecommendationStats(w http.ResponseWriter, r *http.Request) error {
+	var days = 90
+	var since time.Time
+
+	serverID, userID, err := userScope(r)
+	if err != nil {
+		return err
+	}
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		days, err = strconv.Atoi(raw)
+		if err != nil {
+			return BadRequest("days must be a whole number from 7 to 365")
+		}
+	}
+	if days < 7 || days > 365 {
+		return BadRequest("days must be a whole number from 7 to 365")
+	}
+	since = s.clock.Now().AddDate(0, 0, -days)
+	stats, err := s.store.Recommendations().RecommendationStats(r.Context(), serverID, userID, since)
+	if err != nil {
+		return err
+	}
+	return reply(w, r, http.StatusOK, recommendationStatsResponse{RecommendationStats: stats, Days: days, Since: since.UTC()})
 }
 
 type recommendationPreviewResponse struct {

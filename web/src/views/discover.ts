@@ -2,7 +2,7 @@ import { api, esc } from "../api.ts";
 import { discoverTypeKey, discoverUserKey, hooks, session } from "../session.ts";
 import type {
   ItemList, JellyfinUser, MediaType, Recommendation, RecommendationAction, RecommendationHistoryResponse,
-  RecommendationPreferences, RecommendationPreview, RequestMonitorMode, Trial, TrialDecision, TrialScope
+  RecommendationPreferences, RecommendationPreview, RecommendationStats, RequestMonitorMode, Trial, TrialDecision, TrialScope
 } from "../types.ts";
 import {
   bindAll, bindRequest, content, date, jsonRequest, openDialog, option, pick, runControl, showError, showToast,
@@ -27,6 +27,38 @@ function discoverHead(user: JellyfinUser, users: JellyfinUser[], key: string, me
     <div class="segmented"><label><input type="radio" name="discover-type" value="movie" ${mediaType === "movie" ? "checked" : ""}><span>Movies</span></label>
     <label><input type="radio" name="discover-type" value="series" ${mediaType === "series" ? "checked" : ""}><span>Series</span></label></div></div>
     <p class="discover-freshness">Jellyfin sync: ${user.last_synced_at ? esc(date(user.last_synced_at)) : "Not yet synchronized"}${recommendations[0]?.generated_at ? ` · Recommendations generated ${esc(date(recommendations[0].generated_at))}` : ""}${recommendations[0]?.expires_at ? ` · Expires ${esc(date(recommendations[0].expires_at))}` : ""}</p>`;
+}
+
+function statsPanelShell() {
+  return `<section class="rec-stats" aria-labelledby="rec-stats-heading" aria-live="polite"><h2 id="rec-stats-heading">Recommendation outcomes</h2><p class="rec-stats-note">Loading…</p></section>`;
+}
+
+function statsMarkup(stats: RecommendationStats) {
+  if (!stats.measuring_since) return `<p class="rec-stats-note">Nothing has been offered to this user yet. Outcomes appear after the first refresh.</p>`;
+  const percent = `${Math.round(stats.request_rate * 100)}%`;
+  const figures: [string, string][] = [
+    ["Offered", String(stats.offered)], ["Requested", `${stats.requested} (${percent})`], ["Watched", String(stats.watched)],
+    ["Completed", String(stats.completed)], ["Available", String(stats.available)], ["Dismissed", String(stats.dismissed)],
+    ["Average rating", stats.rated ? `${stats.average_rating.toFixed(1)} / 5 (${stats.rated})` : "No ratings"]
+  ];
+  return `<dl class="rec-stats-grid">${figures.map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join("")}</dl>
+    <p class="rec-stats-note">Titles first offered in the last ${stats.days} days. Measuring since ${esc(date(stats.measuring_since))}.</p>`;
+}
+
+// Never blocks Discover: a failure leaves a small message in the panel only.
+async function loadRecommendationStats(node: HTMLElement, user: JellyfinUser, key: string) {
+  const panel = pick<HTMLElement>(node, ".rec-stats");
+  const query = new URLSearchParams({ server_id: user.server_id, user_id: user.user_id });
+  let markup: string;
+  try {
+    markup = statsMarkup(await api<RecommendationStats>(`/api/v1/recommendations/stats?${query}`));
+  } catch (error) {
+    markup = `<p class="rec-stats-note rec-stats-error" role="alert">Outcome statistics are unavailable: ${esc(error instanceof Error ? error.message : String(error))}</p>`;
+  }
+  if (session.current === "discover" && session.discoverUser === key && panel.isConnected) {
+    panel.querySelectorAll(":scope > :not(h2)").forEach(element => element.remove());
+    panel.insertAdjacentHTML("beforeend", markup);
+  }
 }
 
 function trialCard(trial: Trial) {
@@ -88,7 +120,9 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
   if (session.current !== "discover" || session.discoverUser !== key || session.discoverType !== mediaType) return;
   const node = content(`${discoverHead(user, users, key, mediaType, recommendations)}
     ${trialsSection(trialPage.items)}
-    <div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div>`);
+    <div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div>
+    ${statsPanelShell()}`);
+  void loadRecommendationStats(node, user, key);
   bindDiscoverToolbar(node, user, key, mediaType);
   bindTrialControls(node, key, mediaType);
   bindRecommendationCards(node, recommendations);

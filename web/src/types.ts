@@ -118,6 +118,21 @@ export interface Recommendation {
   expires_at: string;
 }
 
+export interface RecommendationStats {
+  measuring_since: string | null;
+  offered: number;
+  requested: number;
+  request_rate: number;
+  dismissed: number;
+  rated: number;
+  average_rating: number;
+  available: number;
+  watched: number;
+  completed: number;
+  days: number;
+  since: string;
+}
+
 export interface RecommendationRating {
   tmdb_id: number;
   rating: number;

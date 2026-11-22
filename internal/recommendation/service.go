@@ -101,7 +101,7 @@ func (s *Service) Generate(ctx context.Context, serverID, userID, mediaType stri
 		values[i].GeneratedAt = now
 		values[i].ExpiresAt = now.Add(s.cfg.Expiry.Duration)
 	}
-	if err := repo.Replace(ctx, serverID, userID, mediaType, values); err != nil {
+	if err := repo.ReplaceOffered(ctx, serverID, userID, mediaType, values); err != nil {
 		return err
 	}
 	s.log.Info("recommendations generated", "server", serverID, "user", userID, "type", mediaType, "seeds", len(searchSeeds), "ratings", len(ratings), "candidates", len(candidates), "results", len(values))

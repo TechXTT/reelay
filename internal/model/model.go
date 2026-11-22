@@ -267,6 +267,19 @@ type JellyfinActivity struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
+type RecommendationStats struct {
+	MeasuringSince *time.Time `json:"measuring_since"`
+	Offered        int        `json:"offered"`
+	Requested      int        `json:"requested"`
+	RequestRate    float64    `json:"request_rate"`
+	Dismissed      int        `json:"dismissed"`
+	Rated          int        `json:"rated"`
+	AverageRating  float64    `json:"average_rating"`
+	Available      int        `json:"available"`
+	Watched        int        `json:"watched"`
+	Completed      int        `json:"completed"`
+}
+
 type RecommendationRating struct {
 	ServerID  string    `json:"server_id"`
 	UserID    string    `json:"user_id"`

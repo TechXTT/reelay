@@ -208,6 +208,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"GET /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
 		{"PUT /api/v1/recommendations/preferences", s.handleRecommendationPreferences},
 		{"GET /api/v1/recommendations/history", s.handleRecommendationHistory},
+		{"GET /api/v1/recommendations/stats", s.handleRecommendationStats},
 		{"GET /api/v1/recommendations/{id}/preview", withID(s.handleRecommendationPreview)},
 		{"POST /api/v1/recommendations/generate", s.handleRecommendationGenerate},
 		{"POST /api/v1/recommendations/{id}/actions", withID(s.handleRecommendationAction)},

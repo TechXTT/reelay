@@ -342,6 +342,8 @@ dismissal. Rated titles remain excluded from suggestions.
 audience rating is out of 10; your personal rating is out of 5; the match score
 measures recommendation fit. YouTube loads only when you choose playback.
 
+The **Recommendation outcomes** panel on Discover shows, for the selected user, how many titles first offered in the last 90 days were requested, watched, completed, dismissed, rated, or became available.
+
 The Jellyfin targets are pinned in `plugin/Directory.Build.props`. The Jellyfin
 12 artifact is built against Jellyfin 12.1.0; use it with a 12.1 server.
 

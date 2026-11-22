@@ -1,10 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,6 +14,11 @@ import (
 )
 
 type RecommendationRepository struct{ s *Store }
+
+// MaterializedRecommendationLimit is how many recommendations per user and
+// media type the Jellyfin plugin shows (its RecommendationLimit default). Only
+// these are recorded as impressions.
+const MaterializedRecommendationLimit = 40
 
 func (s *Store) Recommendations() *RecommendationRepository { return &RecommendationRepository{s: s} }
 
@@ -195,29 +202,71 @@ func (r *RecommendationRepository) OwnedTMDBIDs(ctx context.Context, serverID, m
 
 func (r *RecommendationRepository) Replace(ctx context.Context, serverID, userID, mediaType string, values []model.Recommendation) error {
 	return r.s.InTx(ctx, func(tx *sql.Tx) error {
-		for _, value := range values {
-			reasons, _ := encodeJSON(value.Reasons)
-			features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount})
-			_, err := tx.ExecContext(ctx, `INSERT INTO recommendations(server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET title=excluded.title,year=excluded.year,overview=excluded.overview,poster_url=excluded.poster_url,score=excluded.score,reasons_json=excluded.reasons_json,features_json=excluded.features_json,generated_at=excluded.generated_at,expires_at=excluded.expires_at,status=CASE WHEN recommendations.status IN ('dismissed','requested','available') THEN recommendations.status ELSE 'active' END`,
-				serverID, userID, mediaType, value.TMDBID, value.Title, value.Year, value.Overview, value.PosterURL, value.Score, reasons, features, "active", FormatTime(value.GeneratedAt), FormatTime(value.ExpiresAt))
-			if err != nil {
-				return fmt.Errorf("store recommendation %d: %w", value.TMDBID, err)
-			}
-		}
-		query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`
-		args := []any{serverID, userID, mediaType}
-		if len(values) > 0 {
-			query += ` AND tmdb_id NOT IN (` + placeholders(len(values)) + `)`
-			for _, value := range values {
-				args = append(args, value.TMDBID)
-			}
-		}
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("prune stale recommendations: %w", err)
-		}
-		return nil
+		return replaceRecommendations(ctx, tx, serverID, userID, mediaType, values)
 	})
+}
+
+// ReplaceOffered replaces the recommendations like Replace and, in the same
+// transaction, records the best of them as offered to the user.
+func (r *RecommendationRepository) ReplaceOffered(ctx context.Context, serverID, userID, mediaType string, values []model.Recommendation) error {
+	return r.s.InTx(ctx, func(tx *sql.Tx) error {
+		if err := replaceRecommendations(ctx, tx, serverID, userID, mediaType, values); err != nil {
+			return err
+		}
+		return recordImpressions(ctx, tx, serverID, userID, mediaType, values)
+	})
+}
+
+func replaceRecommendations(ctx context.Context, tx *sql.Tx, serverID, userID, mediaType string, values []model.Recommendation) error {
+	for _, value := range values {
+		reasons, _ := encodeJSON(value.Reasons)
+		features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount})
+		_, err := tx.ExecContext(ctx, `INSERT INTO recommendations(server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET title=excluded.title,year=excluded.year,overview=excluded.overview,poster_url=excluded.poster_url,score=excluded.score,reasons_json=excluded.reasons_json,features_json=excluded.features_json,generated_at=excluded.generated_at,expires_at=excluded.expires_at,status=CASE WHEN recommendations.status IN ('dismissed','requested','available') THEN recommendations.status ELSE 'active' END`,
+			serverID, userID, mediaType, value.TMDBID, value.Title, value.Year, value.Overview, value.PosterURL, value.Score, reasons, features, "active", FormatTime(value.GeneratedAt), FormatTime(value.ExpiresAt))
+		if err != nil {
+			return fmt.Errorf("store recommendation %d: %w", value.TMDBID, err)
+		}
+	}
+	query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`
+	args := []any{serverID, userID, mediaType}
+	if len(values) > 0 {
+		query += ` AND tmdb_id NOT IN (` + placeholders(len(values)) + `)`
+		for _, value := range values {
+			args = append(args, value.TMDBID)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("prune stale recommendations: %w", err)
+	}
+	return nil
+}
+
+// recordImpressions notes the best MaterializedRecommendationLimit titles by
+// score as offered. A repeat offer keeps first_offered_at and first_score and
+// only improves best_rank.
+func recordImpressions(ctx context.Context, tx *sql.Tx, serverID, userID, mediaType string, values []model.Recommendation) error {
+	var ranked = slices.Clone(values)
+
+	slices.SortStableFunc(ranked, func(a, b model.Recommendation) int {
+		if a.Score != b.Score {
+			return cmp.Compare(b.Score, a.Score)
+		}
+		return cmp.Compare(a.TMDBID, b.TMDBID)
+	})
+	if len(ranked) > MaterializedRecommendationLimit {
+		ranked = ranked[:MaterializedRecommendationLimit]
+	}
+	for i, value := range ranked {
+		var at = FormatTime(value.GeneratedAt)
+
+		if _, err := tx.ExecContext(ctx, `INSERT INTO recommendation_impressions(server_id,user_id,media_type,tmdb_id,first_offered_at,last_offered_at,best_rank,first_score)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET last_offered_at=excluded.last_offered_at,best_rank=MIN(best_rank,excluded.best_rank)`,
+			serverID, userID, mediaType, value.TMDBID, at, at, i+1, value.Score); err != nil {
+			return fmt.Errorf("record impression %d: %w", value.TMDBID, err)
+		}
+	}
+	return nil
 }
 
 func (r *RecommendationRepository) List(ctx context.Context, serverID, userID, mediaType, status string, limit, offset int) ([]model.Recommendation, error) {

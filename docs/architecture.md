@@ -116,6 +116,11 @@ falls back to a verified copy.
     widens monitoring to all episodes; Stop withdraws only that request. Request
     summaries and recovery controls stay limited to the trial's selected episodes
     until continuation. The operator bearer token remains the authorization boundary.
+13. Each stored refresh records the best 40 titles (what the plugin shows) as
+    impressions, keeping the first offer time and score and the best rank.
+    `GET /api/v1/recommendations/stats` aggregates, per user and window, how many
+    offered titles were requested, dismissed, rated, watched, completed, and
+    confirmed available. This measures outcomes before any scorer change.
 
 ## Request recovery and availability
 

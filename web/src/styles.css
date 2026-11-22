@@ -67,3 +67,12 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; } th { color: #
 .trial-card h3 { margin: 0 0 .35rem; }
 .trial-card .row-actions { flex-wrap: wrap; }
 .trial-card select { max-width: 100%; }
+.rec-stats { margin: 0 0 20px; padding: 12px 14px; border: 1px solid #34362f; border-radius: 8px; }
+.rec-stats > h2 { margin-bottom: 10px; }
+.rec-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px 14px; margin: 0; }
+.rec-stats-grid div { min-width: 0; }
+.rec-stats-grid dt { color: #8f9388; font-size: 11px; }
+.rec-stats-grid dd { margin: 3px 0 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.rec-stats-note { margin: 10px 0 0; font-size: 12px; }
+.rec-stats h2 + .rec-stats-note { margin-top: 0; }
+.rec-stats-error { color: #ff8f83; }

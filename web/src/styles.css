@@ -101,3 +101,17 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; } th { color: #
 .notify-form .row-actions { justify-content: flex-start; flex-wrap: wrap; }
 .notify-result { min-height: 1.2em; margin: 0; font-size: 12px; color: #a4a79c; }
 @media (max-width: 720px) { nav { grid-template-columns: repeat(var(--nav-count, 8), 1fr); }.identity-name { max-width: 110px; }.topbar-status { gap: 8px; } }
+.incidents { display: grid; gap: 8px; }
+.incident { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid #5a4528; border-radius: 6px; background: #24221c; }
+.incident-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.incident-head strong { overflow-wrap: anywhere; }
+.incident small { color: #8f9388; font-size: 11px; }
+.incident p { margin: 0; font-size: 12px; color: #c4c8bb; }
+.incident p span { display: inline-block; min-width: 54px; color: #8f9388; font-size: 11px; }
+.incident details summary { color: #8f9388; font-size: 11px; cursor: pointer; }
+.incident code { display: block; margin-top: 4px; color: #e8ba70; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.incidents-resolved { margin: 14px 0 8px; font-size: 13px; color: #a4a79c; }
+.request-wait { grid-column: 1 / -1; display: grid; gap: 3px; padding: 8px 10px; border-left: 3px solid #6d7464; background: #262722; }
+.request-wait strong { font-size: 12px; font-weight: 600; color: #e1e3dc; }
+.request-wait small { color: #a4a79c; font-size: 11px; }
+.request-wait-action { border-left-color: #e8ba70; }

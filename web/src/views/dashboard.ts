@@ -1,6 +1,6 @@
 import { api, esc } from "../api.ts";
 import { session } from "../session.ts";
-import type { Grab, HealthComponent, HealthResponse, HistoryResponse, ItemList, Movie, QueueResponse } from "../types.ts";
+import type { Grab, HealthComponent, HealthResponse, HistoryResponse, Incident, IncidentsResponse, ItemList, Movie, QueueResponse } from "../types.ts";
 import { bindAll, bindRequest, content, date, isEditing, percent, pick, setConnection, showError, showToast, state, table } from "../ui.ts";
 import { cancelGrab, deleteCollection } from "./collection.ts";
 
@@ -33,6 +33,21 @@ function healthRow(component: HealthComponent) {
       <span class="health-dot ${esc(component.status)}"></span><div><strong>${esc(component.name)}</strong><small>${esc(component.detail || component.kind)}</small></div>${state(component.status)}</div>`;
 }
 
+function incidentCard(incident: Incident) {
+  return `<article class="incident"><div class="incident-head"><strong>${esc(incident.cause)}</strong>${state(incident.kind)}</div>
+      <small>Since ${esc(date(incident.first_seen_at))} · last seen ${esc(date(incident.last_seen_at))} · ${incident.affected} affected ${incident.affected === 1 ? "item" : "items"}</small>
+      <p><span>Next</span>${esc(incident.next_step)}${incident.next_check_at ? ` Next check ${esc(date(incident.next_check_at))}.` : ""}</p>
+      <p><span>Action</span>${esc(incident.operator_action)}</p>
+      <details><summary>Error detail</summary><code>${esc(incident.detail)}</code></details></article>`;
+}
+
+function incidentsSection(incidents: IncidentsResponse) {
+  if (!incidents.open.length && !incidents.resolved.length) return "";
+  return `<section><h2>Incidents</h2><div class="incidents">${incidents.open.length ? incidents.open.map(incidentCard).join("") : `<div class="empty">No open incidents</div>`}</div>
+    ${incidents.resolved.length ? `<h3 class="incidents-resolved">Recently resolved</h3>${table(["Cause", "Since", "Resolved", "Affected"], incidents.resolved.map(incident =>
+      [esc(incident.cause), date(incident.first_seen_at), date(incident.resolved_at ?? ""), String(incident.affected)]))}` : ""}</section>`;
+}
+
 function recentActivityRow(grab: Grab) {
   return [`${grab.subject_type} #${grab.subject_id}`, state(grab.state), `${(grab.progress * 100).toFixed(0)}%`, date(grab.updated_at)];
 }
@@ -51,9 +66,10 @@ async function setDownloadsPaused(paused: boolean) {
 }
 
 export async function dashboard() {
-  const [health, queue, history, movies] = await Promise.all([
+  const [health, queue, history, movies, incidents] = await Promise.all([
     api<HealthResponse>("/api/v1/health", {}, [503]), api<QueueResponse>("/api/v1/queue"),
-    api<HistoryResponse>("/api/v1/history?page=1"), api<ItemList<Movie>>("/api/v1/movies")
+    api<HistoryResponse>("/api/v1/history?page=1"), api<ItemList<Movie>>("/api/v1/movies"),
+    api<IncidentsResponse>("/api/v1/incidents")
   ]);
   if (session.current !== "dashboard" || (session.refreshing && isEditing())) return;
   const active = queue.items ?? [];
@@ -64,6 +80,7 @@ export async function dashboard() {
   const recent = (history.items ?? []).filter(grab => grab.state !== "removed" &&
     (grab.subject_type !== "movie" || movieByID.has(grab.subject_id))).slice(0, 8);
   content(`${dashboardHead(active.length, downloadsPaused)}
+    ${incidentsSection(incidents)}
     <section><h2>Active downloads</h2><div class="downloads">${active.length ? active.map(grab => downloadCard(grab, movieNames, movieByID)).join("") : `<div class="empty">No active downloads</div>`}</div></section>
     <section><h2>System health</h2><div class="health-grid">${components.map(healthRow).join("")}</div></section>
     <section><h2>Recent activity</h2>${table(["Subject", "State", "Progress", "Updated"], recent.map(recentActivityRow))}</section>`);

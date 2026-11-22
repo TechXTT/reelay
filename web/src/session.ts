@@ -2,6 +2,7 @@ import type { MediaType, Principal, View } from "./types.ts";
 
 export const discoverUserKey = "reelay.discover-user";
 export const discoverTypeKey = "reelay.discover-type";
+export const subtitleLanguageKey = "reelay.subtitle-language";
 
 export const session = {
   principal: null as Principal | null,
@@ -13,6 +14,12 @@ export const session = {
   discoverType: (localStorage.getItem(discoverTypeKey) === "series" ? "series" : "movie") as MediaType,
   requestsOffset: 0,
   upgradesOffset: 0,
+  subtitleServer: "",
+  subtitleTab: "missing" as "missing" | "unknown" | "present" | "jobs",
+  subtitleMediaType: "" as "" | "movie" | "episode",
+  subtitleLanguage: localStorage.getItem(subtitleLanguageKey) ?? "eng",
+  subtitleOffset: 0,
+  subtitleLibrary: "",
   attentionOnly: false,
   // Tonight's constraints last for this page load only; never persist them.
   tonightType: "" as MediaType | "",
@@ -23,6 +30,9 @@ export const session = {
 
 export const requestsPageSize = 100;
 export const upgradesPageSize = 100;
+export const subtitlesPageSize = 100;
+// Matches the server's bound on one operator-triggered batch.
+export const subtitleBatchLimit = 25;
 
 const unregistered = (name: string) => () => {
   throw new Error(`session hook ${name} is not registered`);

@@ -1,4 +1,4 @@
-export type View = "dashboard" | "discover" | "tonight" | "requests" | "series" | "movies" | "upgrades" | "add" | "settings";
+export type View = "dashboard" | "discover" | "tonight" | "requests" | "series" | "movies" | "upgrades" | "subtitles" | "add" | "settings";
 export type MediaType = "movie" | "series";
 export type SubjectType = "episode" | "movie" | "grab";
 export type SeriesMonitorMode = "future_only" | "all" | "latest_season" | "none";
@@ -265,6 +265,7 @@ export interface MediaRequest {
   cancelled_at: string | null;
   seasons: number[] | null;
   jellyfin_url: string;
+  subtitle_coverage?: "present" | "missing" | "unknown";
   ready_season?: number;
   ready_episode?: number;
   trial?: Trial;
@@ -441,4 +442,102 @@ export interface Incident {
 export interface IncidentsResponse {
   open: Incident[];
   resolved: Incident[];
+}
+
+export type SubtitleStatus = "present" | "missing" | "unknown";
+export type SubtitleJobStateName = "queued" | "running" | "waiting" | "confirmed" | "no_match" | "needs_review" | "failed" | "covered" | "stale" | "cancelled";
+
+export interface SubtitleCount {
+  media_type?: "movie" | "episode";
+  status: string;
+  count: number;
+}
+
+export interface SubtitleLibrary {
+  name: string;
+  download_languages: string[];
+  save_with_media: boolean;
+  require_perfect_match: boolean;
+}
+
+export interface SubtitleOverview {
+  server_id: string;
+  servers: string[];
+  audit: { completed_at: string; audit_library?: string; last_full_audit_at?: string; providers: string[]; libraries: SubtitleLibrary[] } | null;
+  audit_requested: boolean;
+  audit_library?: string;
+  audit_error?: string;
+  paused_until: string | null;
+  follow_language: string;
+  coverage: SubtitleCount[];
+  jobs: SubtitleCount[];
+}
+
+export interface SubtitleJobState {
+  blocks_batch: boolean;
+  id: number;
+  language: string;
+  state: SubtitleJobStateName;
+  outcome: string;
+}
+
+export interface SubtitleCoverageRow {
+  server_id: string;
+  media_source_id: string;
+  item_id: string;
+  media_type: "movie" | "episode";
+  library: string;
+  title: string;
+  series_title: string;
+  season: number | null;
+  episode: number | null;
+  year: number;
+  edition: string;
+  status: SubtitleStatus;
+  subtitle_languages: string[];
+  checked_at: string;
+  jobs: SubtitleJobState[];
+  jellyfin_url?: string;
+}
+
+export interface SubtitleCandidate {
+  id: string;
+  provider: string;
+  name: string;
+  language: string;
+  format: string;
+  hash_match: boolean;
+  forced: boolean;
+  hearing_impaired: boolean;
+  machine_translated: boolean;
+  downloads: number;
+}
+
+export interface SubtitleJob {
+  id: number;
+  media_source_id: string;
+  language: string;
+  origin: "backfill" | "import";
+  state: SubtitleJobStateName;
+  outcome: string;
+  detail: string;
+  provider: string;
+  attempts: number;
+  candidates: SubtitleCandidate[];
+  next_attempt_at: string | null;
+  updated_at: string;
+  media_type: "movie" | "episode" | "";
+  title: string;
+  series_title: string;
+  season: number | null;
+  episode: number | null;
+  edition: string;
+}
+
+export interface SubtitlePage<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 }

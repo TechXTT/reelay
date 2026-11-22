@@ -11,6 +11,7 @@ import { requestsView } from "./views/requests.ts";
 import { seriesDetail, seriesView } from "./views/series.ts";
 import { settingsView } from "./views/settings.ts";
 import { tonightView } from "./views/tonight.ts";
+import { subtitlesView } from "./views/subtitles.ts";
 import { upgradesView } from "./views/upgrades.ts";
 
 const app = pick<HTMLDivElement>(document, "#app");
@@ -26,6 +27,7 @@ const nav: { id: View; label: string; icon: string }[] = [
   { id: "series", label: "Series", icon: "▤" },
   { id: "movies", label: "Movies", icon: "▶" },
   { id: "upgrades", label: "Upgrades", icon: "↑" },
+  { id: "subtitles", label: "Subtitles", icon: "≡" },
   { id: "add", label: "Add", icon: "+" },
   { id: "settings", label: "Settings", icon: "⚙" }
 ];
@@ -41,6 +43,7 @@ const viewLoaders: Record<View, () => Promise<void>> = {
   series: seriesView,
   movies: moviesView,
   upgrades: () => upgradesView(),
+  subtitles: () => subtitlesView(),
   add: addView,
   settings: () => settingsView(connect)
 };

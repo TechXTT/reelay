@@ -47,6 +47,10 @@ controls, and backup/restore are implemented. Follow the
 16. Per-viewer readiness: requested episodes and movies count as ready once the
     plugin confirms the viewer can see them, and service-wide problems appear as
     one operator incident and as plain waiting messages on each request.
+17. A Subtitles view that audits which movies and episodes have no subtitle
+    track and downloads a chosen language in small batches through the
+    providers configured in Jellyfin, optionally following new media. It
+    requires Jellyfin plugin v0.1.7 or later.
 
 In Discover, select a Jellyfin user, switch to Series, and choose **Try 1 episode**,
 **Try 3 episodes**, or **Try first season** before requesting a title. Trials start

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/TechXTT/reelay/internal/engine"
 	"github.com/TechXTT/reelay/internal/model"
 	"github.com/TechXTT/reelay/internal/store"
 )
@@ -31,12 +34,95 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	incidents, err := s.store.Incidents().Open(r.Context())
+	if err != nil {
+		return err
+	}
+	now := s.clock.Now().UTC()
+	member := principalFrom(r).Role != roleOperator
 	for i := range values {
+		s.describeRequestWait(&values[i], incidents, member, now)
 		if base := s.cfg.Availability.JellyfinServers[values[i].ServerID]; base != "" && values[i].JellyfinItemID != "" {
 			values[i].JellyfinURL = strings.TrimRight(base, "/") + "/web/index.html#!/details?id=" + url.QueryEscape(values[i].JellyfinItemID)
 		}
 	}
 	return reply(w, r, http.StatusOK, map[string]any{"items": values, "limit": model.MediaRequestListLimit, "offset": offset, "has_more": len(values) == model.MediaRequestListLimit})
+}
+
+// requestWaitText is the viewer-safe copy for each wait kind. It never names
+// hosts, paths, trackers or raw errors; incident detail stays operator-only.
+var requestWaitText = map[string]string{
+	model.WaitSearchService:  "Waiting for the search service to respond.",
+	model.WaitDownloadClient: "Waiting for the download service to respond.",
+	model.WaitStorage:        "Waiting for free storage space on the server.",
+	model.WaitMetadata:       "Waiting for the TV listings service to respond.",
+	model.WaitImportRetry:    "Waiting for you to retry the import.",
+	model.WaitSearchRetry:    "Waiting for you to retry the search.",
+}
+
+// serviceWaitKinds wait on the service rather than the viewer.
+var serviceWaitKinds = []string{model.WaitSearchService, model.WaitDownloadClient, model.WaitDownloadFiles,
+	model.WaitStorage, model.WaitMetadata}
+
+// describeRequestWait fills the viewer fields that say what a request waits
+// for, when Reelay checks again and whether the viewer needs to act. Open
+// incidents only choose the copy; their detail is never copied. During a
+// service wait the item's last error is the raw service error, so members
+// get the wait text instead.
+func (s *Server) describeRequestWait(request *model.MediaRequest, incidents []store.Incident, member bool, now time.Time) {
+	var searching = request.State == string(model.StateWanted) || request.State == string(model.StateSearching)
+	var due = request.NextSearchAt == nil || !request.NextSearchAt.After(now)
+
+	if request.CancelledAt != nil {
+		return
+	}
+	switch {
+	case request.DownloadWait != "":
+		observed := request.WaitObservedAt.Add(s.cfg.Schedules.StatusInterval.Duration)
+		request.WaitingFor = request.DownloadWait
+		request.NextCheckAt = nextCheck(&observed, s.cfg.Schedules.StatusInterval.Duration, now)
+	case request.WaitKind != "":
+		request.WaitingFor = requestWaitText[request.WaitKind]
+		request.NextCheckAt = nextCheck(request.NextSearchAt, s.cfg.Schedules.SearchInterval.Duration, now)
+	default:
+		// A storage incident skips whole search passes without holding each
+		// item, and a metadata outage leaves a series without episodes.
+		for _, incident := range incidents {
+			kind := ""
+			if incident.Kind == store.IncidentStorage && searching && due {
+				kind = model.WaitStorage
+			} else if incident.Kind == store.IncidentMetadata && request.State == "waiting_metadata" {
+				kind = model.WaitMetadata
+			}
+			if kind != "" {
+				request.WaitKind, request.WaitingFor = kind, requestWaitText[kind]
+				request.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind), now)
+				break
+			}
+		}
+	}
+	switch request.State {
+	case string(model.StateFailed), string(model.StateImportFailed), "attention_needed":
+		request.NeedsAction = true
+	}
+	switch {
+	case request.CanRetryImport:
+		request.NeedsAction = true
+		request.ActionHint = "Use Retry import to add the finished download to the library."
+		if request.WaitKind == "" {
+			request.WaitKind, request.WaitingFor = model.WaitImportRetry, requestWaitText[model.WaitImportRetry]
+		}
+	case request.NeedsAction:
+		request.ActionHint = "Use Retry to search for another release."
+		if request.WaitKind == "" {
+			request.WaitKind, request.WaitingFor = model.WaitSearchRetry, requestWaitText[model.WaitSearchRetry]
+		}
+	case request.WaitingFor != "":
+		request.ActionHint = "Nothing to do; Reelay will retry automatically."
+	}
+	if member && slices.Contains(serviceWaitKinds, request.WaitKind) {
+		request.LastError = ""
+	}
 }
 
 type requestActionRequest struct {

@@ -29,6 +29,12 @@ function requestTrialLine(record: MediaRequest) {
   return `<small class="request-next">${esc(trialLabel(record.trial.scope))} · ${record.trial.watched_episodes} of ${record.trial.episode_limit || "?"} watched · ${esc(record.trial.state.replaceAll("_"," "))}</small>${record.trial.state==="awaiting_vote" ? `<button class="command trial-review">Rate and choose Continue / Stop in Discover</button>` : ""}`;
 }
 
+function requestWait(record: MediaRequest) {
+  if (!record.waiting_for) return record.download_wait ? `<p class="request-next">${esc(record.download_wait)}</p>` : "";
+  return `<div class="request-wait${record.needs_action ? " request-wait-action" : ""}"><strong>${esc(record.waiting_for)}</strong>
+      <small>${record.next_check_at ? `Next check ${esc(date(record.next_check_at))} · ` : ""}${esc(record.action_hint ?? "")}</small></div>`;
+}
+
 function requestControls(record: MediaRequest) {
   const retryable = (record.media_type === "series" || !record.available) && retryableStates.includes(record.state);
   return `<div class="row-actions request-controls">${record.jellyfin_url ? `<a class="preview-external" href="${esc(record.jellyfin_url)}" target="_blank" rel="noopener noreferrer">${record.ready_episode ? `Play ${esc(episodeCode(record.ready_season ?? 0, record.ready_episode))}` : "Open in Jellyfin"}</a>` : ""}
@@ -56,8 +62,8 @@ function requestRow(record: MediaRequest) {
       <div class="request-detail"><span>Requested</span><strong>${date(record.requested_at)}</strong></div>
       ${record.media_type === "series" && record.monitor_mode ? `<div class="request-detail"><span>Requested scope</span><strong>${esc(monitorLabel(record.monitor_mode))}</strong></div>` : ""}
       ${record.last_error ? `<p class="request-error">${esc(record.last_error)}</p>` : ""}
-      ${record.download_wait ? `<p class="request-next">${esc(record.download_wait)}</p>` : ""}
-      ${record.next_search_at ? `<small class="request-next">Next search ${esc(date(record.next_search_at))}</small>` : ""}
+      ${requestWait(record)}
+      ${record.next_search_at && !record.next_check_at ? `<small class="request-next">Next search ${esc(date(record.next_search_at))}</small>` : ""}
       ${record.seasons?.length ? `<small class="request-next">Requested seasons: ${esc(record.seasons.join(", "))}</small>` : ""}
       ${requestTrialLine(record)}
       ${requestControls(record)}

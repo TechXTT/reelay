@@ -4,19 +4,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/TechXTT/reelay/internal/downloader"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/store"
 )
 
 const downloadClientUnavailable = "download client unavailable: "
 
-func (e *Engine) StatusOnce(ctx context.Context) error {
+func (e *Engine) StatusOnce(ctx context.Context) (err error) {
+	defer func() {
+		err = errors.Join(err, e.flushIncidents(context.WithoutCancel(ctx),
+			store.IncidentDownloadClient, store.IncidentLibrary))
+	}()
 	grabs, err := e.store.Grabs().Active(ctx)
-	if err != nil || len(grabs) == 0 {
+	if err != nil {
 		return err
+	}
+	if len(grabs) == 0 {
+		// Without grabs to poll, an open outage resolves on a direct check.
+		if e.incidentOpen(store.IncidentDownloadClient, downloadClientIncidentKey) && e.downloader.Healthy(ctx) == nil {
+			e.incidentHealthy(store.IncidentDownloadClient, downloadClientIncidentKey)
+		}
+		return nil
 	}
 	var pending []model.Grab
 	var hashes []string
@@ -39,12 +52,16 @@ func (e *Engine) StatusOnce(ctx context.Context) error {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("poll downloader: %w", err))
 		if ctx.Err() == nil {
-			for _, grab := range pending {
+			items := make([]string, len(pending))
+			for i, grab := range pending {
+				items[i] = itemKey(grab.SubjectType, grab.SubjectID)
 				errs = append(errs, e.recordDownloadWait(ctx, grab, downloadClientUnavailable+err.Error()))
 			}
+			e.incidentFailed(store.IncidentDownloadClient, downloadClientIncidentKey, err.Error(), items...)
 		}
 		return errors.Join(errs...)
 	}
+	e.incidentHealthy(store.IncidentDownloadClient, downloadClientIncidentKey)
 	downloadsPaused, err := e.DownloadsPaused(ctx)
 	if err != nil {
 		return errors.Join(append(errs, fmt.Errorf("read download pause state: %w", err))...)
@@ -256,6 +273,11 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			e.metrics.imports.Inc("failed")
 			cleanup := context.WithoutCancel(ctx)
 
+			root := e.libraryRoot(grab.SubjectType)
+			if probeErr := probeLibraryRoot(root); probeErr != nil {
+				e.incidentFailed(store.IncidentLibrary, root, probeErr.Error()+"; import failed: "+err.Error(),
+					itemKey(grab.SubjectType, grab.SubjectID))
+			}
 			if failErr := e.store.Grabs().FailImport(cleanup, grab, subjectIDs, err.Error()); failErr != nil {
 				return errors.Join(err, fmt.Errorf("record import failure: %w", failErr))
 			}
@@ -263,6 +285,7 @@ func (e *Engine) completeGrab(ctx context.Context, grab model.Grab) error {
 			return err
 		}
 		e.metrics.imports.Inc("ok")
+		e.incidentHealthy(store.IncidentLibrary, e.libraryRoot(grab.SubjectType))
 	}
 	grab.State, grab.Progress, grab.LastError = model.GrabImported, 1, ""
 	if grab.SubjectType == model.SubjectEpisode {
@@ -423,4 +446,23 @@ func (e *Engine) itemState(ctx context.Context, subject model.SubjectType, id in
 	}
 	item, err := e.store.Episodes().Get(ctx, id)
 	return item.State, err
+}
+
+// probeLibraryRoot reports whether the library root exists and accepts a new
+// file, so an import failure caused by the library itself is told apart from
+// one caused by the release.
+func probeLibraryRoot(root string) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("library root is unavailable: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("library root %s is not a directory", root)
+	}
+	probe, err := os.CreateTemp(root, ".reelay-probe-*")
+	if err != nil {
+		return fmt.Errorf("library root is not writable: %w", err)
+	}
+	_ = probe.Close()
+	return os.Remove(probe.Name())
 }

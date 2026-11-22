@@ -221,6 +221,11 @@ export interface MediaRequest {
   last_error: string | null;
   can_retry_import: boolean;
   download_wait?: string;
+  wait_kind?: RequestWaitKind;
+  waiting_for?: string;
+  next_check_at?: string;
+  needs_action: boolean;
+  action_hint?: string;
   next_search_at: string | null;
   available: boolean;
   imported_episodes: number;
@@ -379,4 +384,28 @@ export interface SavedForLaterResponse {
   supported: boolean;
   items: TonightItem[] | null;
   limit: number;
+}
+
+export type RequestWaitKind = "search_service" | "download_client" | "download_files" | "storage" | "metadata" | "import_retry" | "search_retry";
+
+export type IncidentKind = "indexer" | "download_client" | "storage" | "library" | "metadata" | "notifications";
+
+export interface Incident {
+  id: number;
+  kind: IncidentKind;
+  cause_key: string;
+  detail: string;
+  affected: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  next_check_at: string | null;
+  resolved_at: string | null;
+  cause: string;
+  next_step: string;
+  operator_action: string;
+}
+
+export interface IncidentsResponse {
+  open: Incident[];
+  resolved: Incident[];
 }

@@ -20,7 +20,11 @@ import (
 func (e *Engine) SearchOnce(ctx context.Context) error { return e.search(ctx, false) }
 func (e *Engine) RecentOnce(ctx context.Context) error { return e.search(ctx, true) }
 
-func (e *Engine) search(ctx context.Context, recent bool) error {
+func (e *Engine) search(ctx context.Context, recent bool) (err error) {
+	defer func() {
+		err = errors.Join(err, e.flushIncidents(context.WithoutCancel(ctx),
+			store.IncidentIndexer, store.IncidentStorage, store.IncidentDownloadClient))
+	}()
 	targets, err := e.dueTargets(ctx)
 	if err != nil || len(targets) == 0 {
 		return err
@@ -29,6 +33,11 @@ func (e *Engine) search(ctx context.Context, recent bool) error {
 	// a zero reserve only an unreadable volume skips the cycle.
 	if lowDisk := e.cycleSpaceCheck(); lowDisk != nil {
 		e.log.Warn("search cycle skipped: disk space", "reason", lowDisk.Reason, "detail", lowDisk.Detail)
+		items := make([]string, len(targets))
+		for i, target := range targets {
+			items[i] = itemKey(target.subject, target.id)
+		}
+		e.incidentFailed(store.IncidentStorage, lowDisk.Path, lowDisk.Detail, items...)
 		return nil
 	}
 	groups := make(map[string][]searchTarget)
@@ -111,7 +120,9 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 	unsupported := 0
 	for _, client := range e.indexers {
 		if err := client.Healthy(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("%s unhealthy: %w", client.Name(), err))
+			err = fmt.Errorf("%s unhealthy: %w", client.Name(), err)
+			errs = append(errs, err)
+			e.incidentFailed(store.IncidentIndexer, client.Name(), err.Error())
 			continue
 		}
 		values, err := client.Search(ctx, query)
@@ -120,9 +131,14 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 			continue
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s search: %w", client.Name(), err))
+			err = fmt.Errorf("%s search: %w", client.Name(), err)
+			errs = append(errs, err)
+			if ctx.Err() == nil {
+				e.incidentFailed(store.IncidentIndexer, client.Name(), err.Error())
+			}
 			continue
 		}
+		e.incidentHealthy(store.IncidentIndexer, client.Name())
 		out = append(out, values...)
 	}
 	if unsupported == len(e.indexers) {
@@ -224,6 +240,7 @@ func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, r
 		}
 		return e.retrySearch(ctx, lock, target, "grab_failed", err.Error())
 	}
+	e.incidentHealthy(store.IncidentDownloadClient, downloadClientIncidentKey)
 	grab, err := e.store.Grabs().CreateGrabbedFor(ctx, locks, model.Grab{SubjectType: target.subject,
 		SubjectID: target.id, ReleaseID: stored.ID, TorrentHash: hash, Category: target.category},
 		fmt.Sprintf("selected %s with score %d", best.Release.Title, best.Score))
@@ -322,6 +339,12 @@ func (e *Engine) retrySearch(ctx context.Context, lock *store.ItemLock, target s
 		e.metrics.searchOutcomes.Inc("no_match")
 	} else {
 		e.metrics.searchOutcomes.Inc("error")
+	}
+	switch reason {
+	case "indexer_unavailable":
+		e.incidentAffects(store.IncidentIndexer, itemKey(target.subject, target.id))
+	case "download_client_unavailable":
+		e.incidentFailed(store.IncidentDownloadClient, downloadClientIncidentKey, detail, itemKey(target.subject, target.id))
 	}
 	if reason == "indexer_unavailable" || reason == "download_client_unavailable" {
 		delay := e.cfg.Schedules.SearchInterval.Duration

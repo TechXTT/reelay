@@ -355,6 +355,10 @@ func (c *Config) validateDownloader(ck *checker) {
 	ck.notEmpty("downloader.save_path_movies", d.SavePathMovies)
 	ck.positive("downloader.stall_timeout", d.StallTimeout)
 	ck.notNegative("downloader.min_free_space_mb", d.MinFreeSpaceMB)
+	ck.notNegative("downloader.max_upgrade_grabs", d.MaxUpgradeGrabs)
+	if c.Schedules.UpgradeInterval.Duration > 0 && d.MaxUpgradeGrabs >= 0 {
+		ck.atLeast("downloader.max_upgrade_grabs", d.MaxUpgradeGrabs, 1)
+	}
 	for i, m := range d.PathMappings {
 		ck.notEmpty(index("downloader.path_mappings", i)+".downloader_prefix", m.DownloaderPrefix)
 		ck.notEmpty(index("downloader.path_mappings", i)+".local_prefix", m.LocalPrefix)
@@ -441,6 +445,12 @@ func (c *Config) validateSchedules(ck *checker) {
 		}
 	}
 	ck.positive("schedules.search_give_up_after", s.SearchGiveUpAfter)
+	if s.UpgradeInterval.Duration < 0 {
+		ck.bad("schedules.upgrade_interval", "must not be negative; use 0 to disable upgrades")
+	}
+	if s.UpgradeInterval.Duration > 0 && s.UpgradeInterval.Duration < time.Hour {
+		ck.bad("schedules.upgrade_interval", "must be 0 (disabled) or at least 1h, got %s", s.UpgradeInterval)
+	}
 }
 
 func (c *Config) validateProfiles(ck *checker) {

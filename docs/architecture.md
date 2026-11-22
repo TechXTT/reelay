@@ -51,6 +51,14 @@ leases, so duplicate manual and ticker invocations remain idempotent.
 Transitions older than `runtime.audit_retention` are pruned daily, keeping each
 item's latest transition.
 
+Automatic upgrades add no state. When `schedules.upgrade_interval` is above 0, an
+hourly loop re-wants imported items whose imported resolution ranks below their
+profile's `upgrade_until`, checking each item at most once per interval and
+keeping at most `downloader.max_upgrade_grabs` such items in flight. The normal
+search loop then looks for a better release; if none is found the item returns
+to `imported` with its file untouched, and a successful grab replaces the file
+through the recycle directory.
+
 ## Storage and memory
 
 SQLite runs in WAL mode with one writer connection, a small configurable page

@@ -36,6 +36,8 @@ controls, and backup/restore are implemented. Follow the
     visibility, and consistent SQLite backups with validated restore.
 12. Series trials: one episode, three episodes, or the first season, followed by
     a required Continue/Stop vote and a personal rating from 1 to 5.
+13. Optional automatic quality upgrades up to each profile's `upgrade_until`
+    cutoff, capped by `downloader.max_upgrade_grabs`, with an Upgrades view.
 
 In Discover, select a Jellyfin user, switch to Series, and choose **Try 1 episode**,
 **Try 3 episodes**, or **Try first season** before requesting a title. Trials start

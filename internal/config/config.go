@@ -116,18 +116,19 @@ type PathMapping struct {
 }
 
 type Downloader struct {
-	Type           string        `yaml:"type"`
-	URL            string        `yaml:"url"`
-	Username       string        `yaml:"username"`
-	Password       string        `yaml:"password"`
-	CategoryTV     string        `yaml:"category_tv"`
-	CategoryMovies string        `yaml:"category_movies"`
-	SavePathTV     string        `yaml:"save_path_tv"`
-	SavePathMovies string        `yaml:"save_path_movies"`
-	AddPaused      bool          `yaml:"add_paused"`
-	StallTimeout   Duration      `yaml:"stall_timeout"`
-	PathMappings   []PathMapping `yaml:"path_mappings"`
-	MinFreeSpaceMB int           `yaml:"min_free_space_mb"` // MiB to keep free after a grab; 0 = release must only fit
+	Type            string        `yaml:"type"`
+	URL             string        `yaml:"url"`
+	Username        string        `yaml:"username"`
+	Password        string        `yaml:"password"`
+	CategoryTV      string        `yaml:"category_tv"`
+	CategoryMovies  string        `yaml:"category_movies"`
+	SavePathTV      string        `yaml:"save_path_tv"`
+	SavePathMovies  string        `yaml:"save_path_movies"`
+	AddPaused       bool          `yaml:"add_paused"`
+	StallTimeout    Duration      `yaml:"stall_timeout"`
+	PathMappings    []PathMapping `yaml:"path_mappings"`
+	MinFreeSpaceMB  int           `yaml:"min_free_space_mb"` // MiB to keep free after a grab; 0 = release must only fit
+	MaxUpgradeGrabs int           `yaml:"max_upgrade_grabs"` // concurrent upgrade downloads; used only when schedules.upgrade_interval > 0
 }
 
 type Metadata struct {
@@ -174,6 +175,7 @@ type Schedules struct {
 	AirGrace          Duration   `yaml:"air_grace"`
 	SearchBackoff     []Duration `yaml:"search_backoff"`
 	SearchGiveUpAfter Duration   `yaml:"search_give_up_after"`
+	UpgradeInterval   Duration   `yaml:"upgrade_interval"` // 0 disables automatic quality upgrades
 }
 
 type Profile struct {

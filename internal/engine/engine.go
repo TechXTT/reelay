@@ -66,6 +66,10 @@ type Engine struct {
 	recommendationTrigger chan struct{}
 	recommendations       *recommendation.Service
 	metrics               *Metrics
+
+	// upgradeMu serializes upgrade starts so the in-flight cap holds between
+	// the hourly pass and manual starts.
+	upgradeMu sync.Mutex
 }
 
 func New(opt Options) (*Engine, error) {
@@ -147,6 +151,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	if interval := e.cfg.Database.BackupInterval.Duration; interval > 0 {
 		// Tick at most hourly so a restart never waits a full interval for the first check.
 		loops = append(loops, loopSpec{"backup", min(time.Hour, interval), nil, e.BackupOnce, false})
+	}
+	if e.cfg.Schedules.UpgradeInterval.Duration > 0 {
+		// The interval spaces each item's checks; the loop only ticks hourly.
+		loops = append(loops, loopSpec{"upgrade", time.Hour, nil, e.UpgradeOnce, false})
 	}
 	if e.cfg.Runtime.AuditRetention.Duration > 0 {
 		loops = append(loops, loopSpec{"audit", 24 * time.Hour, nil, e.PruneAuditOnce, true})

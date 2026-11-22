@@ -186,15 +186,16 @@ func (r *EpisodeRepository) UpsertMetadata(ctx context.Context, in model.Episode
 
 const selectEpisodeSQL = `SELECT id, series_id, season, number, absolute_number,
  title, air_date, state, COALESCE(chosen_release_id, 0), imported_path,
- imported_quality, search_attempts, next_search_at, first_wanted_at, last_error
+ imported_quality, search_attempts, next_search_at, first_wanted_at, last_error,
+ upgrade_checked_at
  FROM episodes`
 
 func scanEpisode(row scanner) (model.Episode, error) {
 	var e model.Episode
-	var air, next, first sql.NullString
+	var air, next, first, upgradeChecked sql.NullString
 	err := row.Scan(&e.ID, &e.SeriesID, &e.Season, &e.Number, &e.AbsoluteNumber,
 		&e.Title, &air, &e.State, &e.ChosenReleaseID, &e.ImportedPath,
-		&e.ImportedQuality, &e.SearchAttempts, &next, &first, &e.LastError)
+		&e.ImportedQuality, &e.SearchAttempts, &next, &first, &e.LastError, &upgradeChecked)
 	if err != nil {
 		return e, err
 	}
@@ -206,6 +207,9 @@ func scanEpisode(row scanner) (model.Episode, error) {
 		return e, parseErr
 	}
 	if e.FirstWantedAt, parseErr = scanNullTime(first); parseErr != nil {
+		return e, parseErr
+	}
+	if e.UpgradeCheckedAt, parseErr = scanNullTime(upgradeChecked); parseErr != nil {
 		return e, parseErr
 	}
 	return e, nil

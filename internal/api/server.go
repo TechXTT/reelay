@@ -182,6 +182,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"GET /api/v1/episodes/{id}/candidates", withID(s.handleCandidates)},
 		{"POST /api/v1/episodes/{id}/grab", withID(s.handleEpisodeGrab)},
 
+		{"GET /api/v1/upgrades", s.handleUpgrades},
+		{"POST /api/v1/upgrades/{subject}/{id}/search", s.handleUpgradeSearch},
+
 		{"GET /api/v1/queue", s.handleQueue},
 		{"POST /api/v1/queue/pause", s.setQueuePaused(true)},
 		{"POST /api/v1/queue/resume", s.setQueuePaused(false)},

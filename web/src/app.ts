@@ -10,6 +10,7 @@ import { moviesView } from "./views/movies.ts";
 import { requestsView } from "./views/requests.ts";
 import { seriesDetail, seriesView } from "./views/series.ts";
 import { settingsView } from "./views/settings.ts";
+import { upgradesView } from "./views/upgrades.ts";
 
 const app = pick<HTMLDivElement>(document, "#app");
 let eventSource: EventSource | null = null;
@@ -22,6 +23,7 @@ const nav: { id: View; label: string; icon: string }[] = [
   { id: "requests", label: "Requests", icon: "↧" },
   { id: "series", label: "Series", icon: "▤" },
   { id: "movies", label: "Movies", icon: "▶" },
+  { id: "upgrades", label: "Upgrades", icon: "↑" },
   { id: "add", label: "Add", icon: "+" },
   { id: "settings", label: "Settings", icon: "⚙" }
 ];
@@ -32,6 +34,7 @@ const viewLoaders: Record<View, () => Promise<void>> = {
   requests: () => requestsView(),
   series: seriesView,
   movies: moviesView,
+  upgrades: () => upgradesView(),
   add: addView,
   settings: () => settingsView(connect)
 };
@@ -81,7 +84,7 @@ function authGate(message: string) {
 }
 
 async function refreshLiveView() {
-  if (!["dashboard", "requests", "series", "movies"].includes(session.current) || isEditing()) return;
+  if (!["dashboard", "requests", "series", "movies", "upgrades"].includes(session.current) || isEditing()) return;
   if (session.refreshing) {
     refreshPending = true;
     return;

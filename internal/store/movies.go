@@ -118,17 +118,17 @@ func (r *MovieRepository) Delete(ctx context.Context, id int64) error {
 const selectMovieSQL = `SELECT id, title, sort_title, year, tmdb_id, imdb_id,
  runtime_minutes, quality_profile_id, root_folder, state,
  COALESCE(chosen_release_id, 0), imported_path, imported_quality,
- search_attempts, next_search_at, first_wanted_at, last_error, added_at
+ search_attempts, next_search_at, first_wanted_at, last_error, upgrade_checked_at, added_at
  FROM movies`
 
 func scanMovie(row scanner) (model.Movie, error) {
 	var m model.Movie
-	var next, first sql.NullString
+	var next, first, upgradeChecked sql.NullString
 	var added string
 	err := row.Scan(&m.ID, &m.Title, &m.SortTitle, &m.Year, &m.TMDBID, &m.IMDBID,
 		&m.RuntimeMinutes, &m.ProfileID, &m.RootFolder, &m.State,
 		&m.ChosenReleaseID, &m.ImportedPath, &m.ImportedQuality, &m.SearchAttempts,
-		&next, &first, &m.LastError, &added)
+		&next, &first, &m.LastError, &upgradeChecked, &added)
 	if err != nil {
 		return m, err
 	}
@@ -137,6 +137,9 @@ func scanMovie(row scanner) (model.Movie, error) {
 		return m, parseErr
 	}
 	if m.FirstWantedAt, parseErr = scanNullTime(first); parseErr != nil {
+		return m, parseErr
+	}
+	if m.UpgradeCheckedAt, parseErr = scanNullTime(upgradeChecked); parseErr != nil {
 		return m, parseErr
 	}
 	m.AddedAt, parseErr = ParseTime(added)

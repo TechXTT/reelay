@@ -78,6 +78,17 @@ still need the checks below.
    held, not grabbed). Indexer health here
    reports circuit-breaker state; use an actual search to check connectivity.
 
+## Enable automatic upgrades (optional)
+
+1. [ ] **Give profiles a cutoff.** Only profiles with `upgrade_until` are
+   upgraded, and only items whose imported resolution is below it.
+2. [ ] **Turn the loop on** in `config.yaml`, for example
+   `schedules.upgrade_interval: 168h` (0 disables; otherwise at least `1h`) and
+   `downloader.max_upgrade_grabs: 2` (the most upgrade downloads at once; at
+   least 1 when upgrades are on). Restart Reelay.
+3. [ ] **Watch the Upgrades view** in the dashboard. It lists items below their
+   cutoff and has a **Search now** button per item, subject to the same cap.
+
 ## Configure Prowlarr
 
 1. [x] **Replace the existing direct Pirate Bay indexer entry** with this Torznab

@@ -67,6 +67,14 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
    "Wanted upgrades" view and a periodic background search that replaces
    already-imported files below the cutoff, with a cap on how many upgrade
    downloads run at once.
+   **Implemented 2026-10-07:** migration 0011 adds `upgrade_checked_at`;
+   `schedules.upgrade_interval` (off by default) drives an hourly pass that
+   moves imported items below their profile's `upgrade_until` back to wanted
+   through the existing upgrade path, capped by `downloader.max_upgrade_grabs`;
+   an Upgrades view and API list them and start a check on demand. Verified with
+   go build, vet, staticcheck, `go test ./internal/... ./cmd/...` including new
+   config, store, engine and API tests, and `npm run build`; the view was not
+   checked in a browser.
 8. **Anime episode-number mapping (M).** Metadata comes from TVmaze only. Map
    absolute episode numbers to season/episode numbers (the way XEM or AniDB do
    it) so anime packs match and import correctly.

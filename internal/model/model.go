@@ -290,21 +290,22 @@ type RecommendationRating struct {
 }
 
 type Episode struct {
-	ID              int64      `json:"id"`
-	SeriesID        int64      `json:"series_id"`
-	Season          int        `json:"season"`
-	Number          int        `json:"number"`
-	AbsoluteNumber  int        `json:"absolute_number,omitempty"`
-	Title           string     `json:"title,omitempty"`
-	AirDate         *time.Time `json:"air_date,omitempty"`
-	State           ItemState  `json:"state"`
-	ChosenReleaseID int64      `json:"chosen_release_id,omitempty"`
-	ImportedPath    string     `json:"imported_path,omitempty"`
-	ImportedQuality string     `json:"imported_quality,omitempty"`
-	SearchAttempts  int        `json:"search_attempts"`
-	NextSearchAt    *time.Time `json:"next_search_at,omitempty"`
-	FirstWantedAt   *time.Time `json:"first_wanted_at,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
+	ID               int64      `json:"id"`
+	SeriesID         int64      `json:"series_id"`
+	Season           int        `json:"season"`
+	Number           int        `json:"number"`
+	AbsoluteNumber   int        `json:"absolute_number,omitempty"`
+	Title            string     `json:"title,omitempty"`
+	AirDate          *time.Time `json:"air_date,omitempty"`
+	State            ItemState  `json:"state"`
+	ChosenReleaseID  int64      `json:"chosen_release_id,omitempty"`
+	ImportedPath     string     `json:"imported_path,omitempty"`
+	ImportedQuality  string     `json:"imported_quality,omitempty"`
+	SearchAttempts   int        `json:"search_attempts"`
+	NextSearchAt     *time.Time `json:"next_search_at,omitempty"`
+	FirstWantedAt    *time.Time `json:"first_wanted_at,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
+	UpgradeCheckedAt *time.Time `json:"upgrade_checked_at,omitempty"`
 }
 
 // Aired reports whether the episode's air time plus grace has passed. An
@@ -323,24 +324,25 @@ func (e Episode) String() string {
 }
 
 type Movie struct {
-	ID              int64      `json:"id"`
-	Title           string     `json:"title"`
-	SortTitle       string     `json:"sort_title"`
-	Year            int        `json:"year"`
-	TMDBID          int        `json:"tmdb_id,omitempty"`
-	IMDBID          string     `json:"imdb_id,omitempty"`
-	RuntimeMinutes  int        `json:"runtime_minutes,omitempty"`
-	ProfileID       int64      `json:"quality_profile_id"`
-	RootFolder      string     `json:"root_folder"`
-	State           ItemState  `json:"state"`
-	ChosenReleaseID int64      `json:"chosen_release_id,omitempty"`
-	ImportedPath    string     `json:"imported_path,omitempty"`
-	ImportedQuality string     `json:"imported_quality,omitempty"`
-	SearchAttempts  int        `json:"search_attempts"`
-	NextSearchAt    *time.Time `json:"next_search_at,omitempty"`
-	FirstWantedAt   *time.Time `json:"first_wanted_at,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
-	AddedAt         time.Time  `json:"added_at"`
+	ID               int64      `json:"id"`
+	Title            string     `json:"title"`
+	SortTitle        string     `json:"sort_title"`
+	Year             int        `json:"year"`
+	TMDBID           int        `json:"tmdb_id,omitempty"`
+	IMDBID           string     `json:"imdb_id,omitempty"`
+	RuntimeMinutes   int        `json:"runtime_minutes,omitempty"`
+	ProfileID        int64      `json:"quality_profile_id"`
+	RootFolder       string     `json:"root_folder"`
+	State            ItemState  `json:"state"`
+	ChosenReleaseID  int64      `json:"chosen_release_id,omitempty"`
+	ImportedPath     string     `json:"imported_path,omitempty"`
+	ImportedQuality  string     `json:"imported_quality,omitempty"`
+	SearchAttempts   int        `json:"search_attempts"`
+	NextSearchAt     *time.Time `json:"next_search_at,omitempty"`
+	FirstWantedAt    *time.Time `json:"first_wanted_at,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
+	UpgradeCheckedAt *time.Time `json:"upgrade_checked_at,omitempty"`
+	AddedAt          time.Time  `json:"added_at"`
 }
 
 // StoredRelease is a release we persisted because we scored or grabbed it.

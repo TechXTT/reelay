@@ -11,10 +11,12 @@ export const session = {
   discoverUser: localStorage.getItem(discoverUserKey) ?? "",
   discoverType: (localStorage.getItem(discoverTypeKey) === "series" ? "series" : "movie") as MediaType,
   requestsOffset: 0,
+  upgradesOffset: 0,
   attentionOnly: false
 };
 
 export const requestsPageSize = 100;
+export const upgradesPageSize = 100;
 
 const unregistered = (name: string) => () => {
   throw new Error(`session hook ${name} is not registered`);

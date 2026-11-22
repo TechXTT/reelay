@@ -1,4 +1,4 @@
-export type View = "dashboard" | "discover" | "requests" | "series" | "movies" | "add" | "settings";
+export type View = "dashboard" | "discover" | "requests" | "series" | "movies" | "upgrades" | "add" | "settings";
 export type MediaType = "movie" | "series";
 export type SubjectType = "episode" | "movie" | "grab";
 export type SeriesMonitorMode = "future_only" | "all" | "latest_season" | "none";
@@ -52,6 +52,29 @@ export interface Movie {
   quality_profile_id: number;
   imported_path?: string;
   imported_quality?: string;
+}
+
+export interface UpgradeItem {
+  subject_type: "movie" | "episode";
+  id: number;
+  title: string;
+  quality: string;
+  cutoff: string;
+  profile: string;
+  upgrade_checked_at?: string;
+  state: string;
+  upgrading: boolean;
+}
+
+export interface UpgradeListResponse extends ItemList<UpgradeItem> {
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+  truncated: boolean;
+  enabled: boolean;
+  max_upgrade_grabs: number;
+  inflight: number;
 }
 
 export interface QualityProfile {

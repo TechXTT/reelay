@@ -39,6 +39,14 @@ controls, and backup/restore are implemented. Follow the
     a required Continue/Stop vote and a personal rating from 1 to 5.
 13. Optional automatic quality upgrades up to each profile's `upgrade_until`
     cutoff, capped by `downloader.max_upgrade_grabs`, with an Upgrades view.
+14. A Tonight view of titles already playable in each viewer's own Jellyfin
+    libraries, with session-only time and type filters and Save for later.
+15. Everyday recommendations that name their source, keep one seed or genre from
+    dominating (`recommendations.diversity_*`), report top-ten concentration,
+    and accept session-only steering in Discover.
+16. Per-viewer readiness: requested episodes and movies count as ready once the
+    plugin confirms the viewer can see them, and service-wide problems appear as
+    one operator incident and as plain waiting messages on each request.
 
 In Discover, select a Jellyfin user, switch to Series, and choose **Try 1 episode**,
 **Try 3 episodes**, or **Try first season** before requesting a title. Trials start

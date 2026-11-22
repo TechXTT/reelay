@@ -130,6 +130,33 @@ falls back to a verified copy.
     `GET /api/v1/recommendations/stats` aggregates, per user and window, how many
     offered titles were requested, dismissed, rated, watched, completed, and
     confirmed available. This measures outcomes before any scorer change.
+14. Each candidate keeps up to five sources, strongest first: a seed title and
+    the TMDB listing that offered it (`recommendations` or `similar`), or a
+    catalog listing (`discover`, `discover_outside_genre`). They are stored in
+    `features_json.sources`, returned as `sources`, and name the first reason
+    ("Because you liked A and B").
+15. Ranking keeps the relevance components and then places titles greedily by
+    relevance plus novelty in blocks of `recommendations.diversity_window`. In a
+    block, at most `diversity_seed_cap` titles share a strongest seed and at
+    most `diversity_genre_cap` share a genre while other candidates remain; a
+    demoted title carries a negative `diversity` component so stored scores stay
+    ordered and still sum. This runs before storage, so the plugin's top 40 and
+    Discover agree. 0 or an absent key uses the defaults 10, 3 and 5; a cap equal
+    to the window turns that cap off.
+16. Every generation writes one `recommendation_concentration` row (migration
+    0016) for the top ten: dominant genre and its share, dominant source and its
+    share, distinct sources and distinct genres. Stats return per-media-type
+    averages with the earliest and latest snapshot in the window as
+    `concentration`. Rows older than 400 days are pruned.
+17. Session steering rides on `GET /api/v1/recommendations` as repeated
+    `more_like`, `less_like`, `boost_genre`, `mute_genre`, `boost_seed` and
+    `mute_seed` parameters (at most 20 each, `media_type` required). The server
+    re-ranks the stored active list (up to 100 rows) with a `steering` component
+    scaled by `recommendations.steering_weight`, applies the same diversity
+    rules, hides less-like titles, and writes nothing. The browser keeps
+    steering in `sessionStorage` per user and media type; saved preferences stay
+    the only lasting channel, and a muted genre can be saved as an exclusion
+    only through an explicit action.
 
 ## Request recovery and availability
 
@@ -172,8 +199,31 @@ falls back to a verified copy.
    episode; both outboxes stay unique per request, so repeated syncs never
    notify again. Requests reports the lowest confirmed episode as
    `ready_season`/`ready_episode`. Older plugins send no header and keep the
-   series-level "listed in Jellyfin" signal. Confirmations are not revoked if
-   the episode later disappears from Jellyfin.
+   series-level "listed in Jellyfin" signal. A confirmation older than six
+   hours returns to the plugin as a `recheck` candidate; the plugin re-reports
+   episodes it still finds and lists the rest under `missing`, and Reelay
+   withdraws those confirmations. Re-confirmation never notifies again.
+8. Per-user movie readiness. When the plugin reports a user's library through
+   `POST /api/v1/integrations/jellyfin/user-items` (staged under a sync token and
+   made current atomically on `complete`, migration 0015), a movie request is
+   available, notified and linked only once the movie is in that user's last
+   completed pass; completing a pass queues the event. Users without per-user
+   data keep the server-catalog signal.
+9. Incidents (migration 0017). Loops record failures and recoveries per cause
+   in memory and write once per pass: one open incident per (`kind`,
+   `cause_key`) for indexers (by name), the download client, storage (by
+   path), library roots, the TVmaze provider, and the shared notification
+   receivers. Unchanged incidents are rewritten at most every five minutes; a
+   cause seen healthy resolves its incident; open incidents reload after a
+   restart; resolved ones are pruned with `runtime.audit_retention` and capped
+   at 200. `GET /api/v1/incidents` (operator) and the dashboard show the cause,
+   affected count, next step and check time, operator action and raw detail;
+   metrics export `reelay_incidents_open{kind}`.
+10. Each listed request carries viewer-safe `wait_kind`, `waiting_for`,
+    `next_check_at`, `needs_action` and `action_hint`, derived from the latest
+    transition reason, download waits and open incidents. The copy never names
+    hosts, paths, trackers or raw errors, and members never receive an item's
+    raw `last_error`; operators still do.
 
 ## Source and maintenance boundaries
 
@@ -215,10 +265,10 @@ falls back to a verified copy.
    `X-Forwarded-For`; behind a reverse proxy all users share the proxy's
    address).
 5. Every route declares a level: public (ping, `auth/config`, `auth/login`),
-   member, or operator. Members may use only the recommendation, request and
-   trial endpoints of their own Jellyfin user plus `auth/me` and `auth/logout`;
-   everything else, including the event stream, metrics, settings, queue and
-   upgrades, answers 403. A member's scope comes from the session: omitted
+   member, or operator. Members may use only the recommendation, request,
+   trial, notification-destination and Tonight endpoints of their own Jellyfin
+   user plus `auth/me` and `auth/logout`; everything else, including the event
+   stream, metrics, incidents, settings, queue and upgrades, answers 403. A member's scope comes from the session: omitted
    `server_id`/`user_id` are filled in, naming another user is 403, and another
    member's recommendation, request or trial id is 404. Operators still name the
    user and may act for anyone.
@@ -231,6 +281,15 @@ falls back to a verified copy.
    bearer token). Engine counters are in-process and reset on restart; gauges are read
    from SQLite, the indexer breakers and the runtime at scrape time. Label sets
    are fixed, so metric memory does not grow with data.
+8. Tonight (`GET /api/v1/tonight`, `GET|POST /api/v1/tonight/saved`,
+   `DELETE /api/v1/tonight/saved/{item_id}`) lists only titles in the viewer's
+   last completed library pass that are present in the catalog, with
+   per-request filters for media type, maximum runtime and unfinished titles
+   that the browser keeps in memory only. Without per-user data it returns
+   `supported: false` and no items, so the server catalog never leaks. Save for
+   later keeps up to 200 titles per user (`saved_for_later`); saved titles the
+   viewer can no longer access come back with `playable: false` and no links.
+   The page plays existing titles only; acquiring stays in Discover.
 
 The plugin has one shared source tree with exact build targets for Jellyfin
 10.11.11 (`net9.0`) and Jellyfin 12.1.0 (`net10.0`). ABI-specific package

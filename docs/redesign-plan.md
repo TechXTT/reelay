@@ -11,38 +11,41 @@ These changes are committed (`27a2062`..`83c7537`). Verification uses isolated s
 
 ## Second delivery: episode readiness
 
-Implemented in the working tree; see request recovery item 7 in [architecture](architecture.md).
+Committed (`038f8e7`, `0476364`, `d6cfe02`, `ca87151`); see request recovery items 7 and 8 in [architecture](architecture.md).
 
 1. **Confirm the requested episode for the requester.** The plugin announces `episode-confirmation` in a sync header, leaving the strictly decoded sync body unchanged for older Reelay servers. Reelay lists the requested-scope episodes it imported that Jellyfin has not confirmed for that user, honoring selected seasons and trials. The plugin resolves each one under the series with the user's access, excluding virtual missing-episode placeholders, during each scheduled sync and every minute in its action monitor. Reelay accepts only confirmations that match a current candidate (migration 0014).
-2. **Use one piece of evidence everywhere.** While the plugin confirms episodes, a series parent no longer queues a series request's event. The first confirmation queues one global and one per-user event carrying the season, episode and episode item. The ntfy message names the episode (`Show S02E01 is ready to watch in Jellyfin.`) and its Click link opens that episode, now on the global ntfy path too. Requests shows `S02E01 ready in Jellyfin` with a **Play S02E01** link. Older plugins keep the series-level "Series listed in Jellyfin" behavior.
+2. **Use one piece of evidence everywhere.** While the plugin confirms episodes, a series parent no longer queues a series request's event. The first confirmation queues one global and one per-user event carrying the season, episode and episode item. The ntfy message names the episode (`Show S02E01 is ready to watch in Jellyfin.`) and its Click link opens that episode, on the global ntfy path too. Requests shows `S02E01 ready in Jellyfin` with a **Play S02E01** link. Older plugins keep the series-level "Series listed in Jellyfin" behavior.
+3. **Keep confirmations current.** A confirmation older than six hours returns to the plugin as a recheck; episodes the plugin no longer finds for the viewer are withdrawn, and a later confirmation never notifies again.
+4. **Confirm movies per requester.** With per-user library data (third delivery), a movie request is available, notified and linked only once the movie is in the requester's own library.
+5. **Robust plugin sync.** Trial-progress and confirmation failures are logged per user instead of stopping the recommendation refresh, and both share one lazy series scan per pass.
 
-**Verified:**
+## Third delivery
 
-1. go build, vet and `go test ./...`. The store schema test now expects version 14, changed with approval.
-2. gofmt, `npm run build`, and `.\make.ps1 plugin-test` on Jellyfin 10.11.11 and 12.1.0.
-3. Temporary fixtures in a scratch copy, outside the repository, exercised the HTTP API and the notification loop:
-   1. Season one is in the library and the viewer requests season two. Repeated syncs of the series parent queue nothing.
-   2. The season-two episode becomes a candidate only after import. A season-one confirmation is rejected as out of scope.
-   3. The first confirmation queues exactly one global and one per-user event. Global and per-user ntfy each deliver one message that opens the episode.
-   4. Repeated confirmations, syncs and delivery passes send nothing more.
-   5. A sync without the capability header keeps the series-level event.
+Committed through merges `efaf85a`, `63196de` and `3a0dd06`, implemented in parallel worktrees and verified together after merging.
 
-**Not verified:** a live Jellyfin server with the plugin installed, including the user-access filter and placeholder exclusion against real libraries.
+1. **Choose something for tonight.** The plugin reports which catalog items each user can access, replaced atomically per pass (migration 0015). A Tonight view lists only those titles with Play in Jellyfin, session-only filters for media type, time available and unfinished titles, and Save for later (up to 200 titles). Older plugins show an update prompt instead of the server catalog. Nothing on the page requests or downloads; acquiring stays in Discover.
+2. **Broaden everyday recommendations.** Each pick keeps its seed or catalog source and names it in the first reason. A diversity re-rank (blocks of 10, at most 3 per seed and 5 per genre by default, configurable) runs before storage so Discover and the plugin agree. Top-ten concentration is recorded per generation (migration 0016) and shown next to requests, watching and completion in Recommendation outcomes. Discover offers session-only steering (more or less like a title, genre or seed) that re-ranks immediately without writing anything; saved preferences remain the only lasting channel. In the animation-heavy fixture the top-ten Animation share fell from 100% to 50% and distinct interests rose from 5 to 7.
+3. **Make service-wide problems visible on individual requests.** Failures with one cause become one operator incident (migration 0017) for indexers, the download client, storage paths, library roots, TVmaze and shared notification receivers, resolved automatically on recovery and kept across restarts. The dashboard and `GET /api/v1/incidents` show them, and metrics export open counts. Each request tells the viewer what Reelay waits for, when it checks again and whether they need to act, without hosts, paths, trackers or raw errors; members never receive raw error text.
+
+**Verified** (on the merged tree):
+
+1. go build, vet, `go test ./...` (store schema test at 17, changed under the approval given for 0014), gofmt, TypeScript, `npm run build`, and `.\make.ps1 plugin-test` on Jellyfin 10.11.11 and 12.1.0.
+2. Temporary fixtures in scratch copies outside the repository:
+   1. Episode acceptance case, recheck withdrawal without renotifying, and per-user movie readiness, with a second user on the server-level path.
+   2. Tonight visibility, atomic replacement, filters, scoping, Save for later, cascade and the old-plugin fallback.
+   3. Diversity, provenance, concentration trends, steering without persistence, and household isolation.
+   4. Incidents for indexer, storage, library and download client outages, across two members and a restart, with viewer-safe waits.
+
+**Not verified:** a live Jellyfin server and plugin install (user-access filtering, placeholder exclusion, poster loading), a live qBittorrent or indexer outage, and the new views in a browser.
 
 **Remaining:**
 
-1. Revoke or recheck a confirmation when the episode leaves Jellyfin or the viewer loses access.
-2. When two real series share a TMDB id, only the first is checked. This can miss a confirmation but never invents one.
-3. Movies still rely on parent presence; per-user movie visibility is not confirmed.
-4. Notifications stay once per request, for the first confirmed episode. Later episodes of a followed series do not notify.
-
-Follow-up done: trial-progress and confirmation failures in the scheduled plugin sync are now logged per user instead of stopping the recommendation refresh, and both share one lazy series scan per pass across all users.
-
-## Next deliveries
-
-1. **Choose something for tonight.** Add a view for playable items from the viewer's Jellyfin libraries, session-only runtime constraints, and Save for later. Keep acquiring a new title and playing an existing one distinct at the point of action.
-2. **Broaden everyday recommendations.** Retain the seed or catalog source behind each candidate. Give distinct interests room in the regular pool and measure top-ten concentration per profile alongside requests and subsequent viewing. Use session steering to guide the next set immediately. Treat an explicit lasting preference separately.
-3. **Make service-wide problems visible on individual requests.** Group related storage or provider errors into one operator incident. Each affected viewer should see what the service is waiting for, when it will check again, and whether the viewer needs to act.
+1. When two real series share a TMDB id, only the first is checked for trials and confirmations. This can miss a confirmation but never invents one.
+2. Notifications stay once per request, for the first confirmed episode; later episodes of a followed series do not notify.
+3. Tonight's "unfinished" filter uses append-only activity, so a title marked unplayed later still counts as finished. Posters load directly from the Jellyfin base URL.
+4. Steering re-ranks at most the top 100 stored rows, and `boost_seed` has no control in the UI yet. Diversity reorders the existing candidates; it does not fetch new ones.
+5. Indexer and storage incidents resolve only on a search pass with due items; an incident for an indexer removed from config stays open until resolved another way. A completed download whose source path is unavailable shows a viewer wait but no incident, and TMDB failures are not tracked.
+6. The concentration snapshot is written after the recommendations, not in the same transaction.
 
 ## Acceptance journeys
 

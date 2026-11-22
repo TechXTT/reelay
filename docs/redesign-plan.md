@@ -50,14 +50,17 @@ Closes the remaining items of the third delivery; committed as `f0d47dc`, `30a35
 
 **Verified** on the merged tree: go build, vet, `go test ./...` (store schema test at 18), gofmt, TypeScript, `npm run build`, `.\make.ps1 plugin-test` on both Jellyfin targets, and scratch fixtures for batches, played state, the 0018 upgrade on existing data, steering depth, transactional snapshots, extra candidates, indexer probes, removed causes across a restart, download-file and TMDB incidents, and viewer-safe waits.
 
-**Not verified:** a live Jellyfin server and plugin install, live qBittorrent and indexer outages, and the views in a browser.
+**Closed afterwards** (`0fdec65`, `d0ed7b6` and the Tonight poster fallback):
 
-**Remaining:**
+1. Extra catalog titles get the same cached TMDB details as regular candidates, so they score on keywords, people and runtime.
+2. Indexers without a capabilities request are probed through their feed with a backoff that doubles from the search interval to an hour.
+3. A storage incident recorded against the parent of a download path that has since been created follows the measured path beneath it and resolves once it has room. Removed causes close at startup, which is correct because configuration has no live reload.
+4. A download-files incident that nothing waits on any more closes with a "nothing waits" note instead of looking recovered; an import that reads the files still counts as recovery.
+5. Tonight shows the title's initial when a Jellyfin poster cannot load (for example when the image endpoint needs a signed-in browser), instead of a broken image.
 
-1. Extra catalog candidates skip TMDB details, so they carry no keywords, people or runtime; narrow profiles will see a visible shift toward them in later blocks.
-2. The probe fallback for indexers without a capabilities request is one recent-feed query per search interval while an incident is open.
-3. A storage incident keyed by an ancestor path still counts as configured and can stay open while that path stays low on space. Removed causes close only at startup, since configuration has no live reload.
-4. Download-file incidents also resolve when the waiting grab is cancelled or fails, not only when the files return.
+**Browser smoke:** Reelay built from this tree ran locally against a scratch database, with the indexer, download client, TVmaze, TMDB and Jellyfin pointed at closed localhost ports, and headless Chrome walked the views. The dashboard showed the real indexer incident; Requests showed the viewer wait with its next check and a confirmed `S02E01` with Play; Discover's session steering added a chip stored only in `sessionStorage`; Tonight showed Saved for later, Play links, the Watched label from reported played state and the poster fallback. No page errors; the only failed request was the health check answering 503 for the unreachable download client, as intended.
+
+**Not verified:** a live Jellyfin server with the plugin installed (user-access filtering, placeholder exclusion, poster access), real qBittorrent and indexer outages, and member sign-in in the browser. These need the deployed services and are the remaining acceptance step before relying on the new behavior.
 
 ## Acceptance journeys
 

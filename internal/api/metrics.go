@@ -12,6 +12,7 @@ import (
 	"github.com/TechXTT/reelay/internal/indexer"
 	"github.com/TechXTT/reelay/internal/metrics"
 	"github.com/TechXTT/reelay/internal/model"
+	"github.com/TechXTT/reelay/internal/store"
 )
 
 // grabStates lists every value of the grabs.state CHECK constraint, so a state
@@ -70,6 +71,10 @@ func (s *Server) writeStoreMetrics(ctx context.Context, out *metrics.Writer) err
 	if err != nil {
 		return err
 	}
+	incidents, err := s.store.Incidents().Open(ctx)
+	if err != nil {
+		return err
+	}
 	out.Family("reelay_items", "Episodes and movies by state.", "gauge")
 	for _, state := range model.AllItemStates {
 		out.Sample("reelay_items", float64(episodes[state]), "subject", string(model.SubjectEpisode), "state", string(state))
@@ -81,6 +86,17 @@ func (s *Server) writeStoreMetrics(ctx context.Context, out *metrics.Writer) err
 	}
 	out.Gauge("reelay_notifications_pending", "Availability notifications waiting for delivery.", float64(pending))
 	out.Gauge("reelay_user_notifications_pending", "Per-user availability notifications waiting for delivery.", float64(userPending))
+	out.Family("reelay_incidents_open", "Open operator incidents by kind.", "gauge")
+	for _, kind := range store.IncidentKinds {
+		var count = 0
+
+		for _, incident := range incidents {
+			if incident.Kind == kind {
+				count++
+			}
+		}
+		out.Sample("reelay_incidents_open", float64(count), "kind", kind)
+	}
 	return nil
 }
 

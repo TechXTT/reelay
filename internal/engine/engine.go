@@ -66,6 +66,7 @@ type Engine struct {
 	recommendationTrigger chan struct{}
 	recommendations       *recommendation.Service
 	metrics               *Metrics
+	incidents             incidentTracker
 
 	// upgradeMu serializes upgrade starts so the in-flight cap holds between
 	// the hourly pass and manual starts.

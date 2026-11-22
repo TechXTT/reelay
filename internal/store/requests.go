@@ -197,6 +197,15 @@ const requestDownloadWait = `CASE WHEN g.last_error='' THEN 0
  WHEN g.state IN ('completed','importing') THEN 2
  ELSE 1 END`
 
+// searchHoldCode is the hold kind of an item's latest transition: 1 for an
+// indexer outage, 2 for a download client outage, 3 for disk space. It never
+// carries the hold detail, which may name hosts or paths.
+func searchHoldCode(subject, id string) string {
+	return `COALESCE((SELECT CASE t.reason WHEN 'indexer_unavailable' THEN 1 WHEN 'download_client_unavailable' THEN 2
+ WHEN 'low_disk_space' THEN 3 WHEN 'disk_space_unknown' THEN 3 ELSE 0 END FROM state_transitions t
+ WHERE t.subject_type='` + subject + `' AND t.subject_id=` + id + ` ORDER BY t.transitioned_at DESC, t.id DESC LIMIT 1),0)`
+}
+
 func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID string, offset int, attention bool) ([]model.MediaRequest, error) {
 	if offset < 0 || offset > 1000000 {
 		return nil, errors.New("request offset is out of bounds")
@@ -231,14 +240,17 @@ func (r *RequestRepository) ListPage(ctx context.Context, serverID, userID strin
         SUM(CASE WHEN ep.state<>'unmonitored' THEN 1 ELSE 0 END) AS monitored,
         SUM(CASE WHEN ep.air_date>? THEN 1 ELSE 0 END) AS upcoming,
         MAX(NULLIF(ep.last_error,'')) AS last_error,
+        MAX(CASE WHEN ep.state='wanted' AND ep.last_error<>'' THEN `+searchHoldCode("episode", "ep.id")+` ELSE 0 END) AS search_hold,
         MIN(ep.next_search_at) AS next_search_at
  FROM selected_episodes ep GROUP BY ep.request_id
 ), movie_progress AS (
- SELECT subject_id,MAX(progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait FROM grabs g
+ SELECT subject_id,MAX(progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait,
+        MAX(CASE WHEN g.last_error<>'' THEN g.updated_at END) AS waited_at FROM grabs g
  WHERE subject_type='movie' AND subject_id IN (SELECT subject_id FROM selected_movies)
    AND state IN ('pending','downloading','completed','importing') GROUP BY subject_id
 ), series_progress AS (
- SELECT ep.request_id,MAX(g.progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait
+ SELECT ep.request_id,MAX(g.progress) AS progress,MAX(`+requestDownloadWait+`) AS download_wait,
+        MAX(CASE WHEN g.last_error<>'' THEN g.updated_at END) AS waited_at
  FROM grabs g JOIN episodes anchor ON g.subject_type='episode' AND anchor.id=g.subject_id
  JOIN selected_episodes ep ON ep.series_id=anchor.series_id AND ep.chosen_release_id=g.release_id
  WHERE g.state IN ('pending','downloading','completed','importing')
@@ -272,7 +284,12 @@ SELECT
  CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
       WHEN mr.media_type='movie' THEN EXISTS(SELECT 1 FROM grabs g WHERE `+recoverableMovieImport+`)
       WHEN sr.status='following' THEN COALESCE(e.can_retry_import,0)
-      ELSE 0 END
+      ELSE 0 END,
+ CASE WHEN mr.cancelled_at IS NOT NULL THEN 0
+      WHEN mr.media_type='movie' THEN CASE WHEN m.state='wanted' AND m.last_error<>'' THEN `+searchHoldCode("movie", "m.id")+` ELSE 0 END
+      WHEN sr.status='following' THEN COALESCE(e.search_hold,0)
+      ELSE 0 END,
+ CASE WHEN mr.media_type='movie' THEN mp.waited_at ELSE sp.waited_at END
 FROM selected_requests mr
 LEFT JOIN movies m ON mr.subject_type='movie' AND m.id=mr.subject_id AND m.tmdb_id=mr.tmdb_id
 LEFT JOIN series sr ON mr.subject_type='series' AND sr.id=mr.subject_id AND sr.tmdb_id=mr.tmdb_id
@@ -307,9 +324,12 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	var next, cancelled sql.NullString
 	var available int
 	var downloadWait int
+	var searchHold int
+	var waitedAt sql.NullString
 
 	if err := row.Scan(append(requestIdentityTargets(&value, &requested), &value.State, &value.Progress, &value.LastError,
-		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport)...); err != nil {
+		&downloadWait, &next, &available, &value.ImportedEpisodes, &value.TotalEpisodes, &cancelled, &seasons, &value.JellyfinItemID, &value.CanRetryImport,
+		&searchHold, &waitedAt)...); err != nil {
 		return value, err
 	}
 	if err := finishRequest(&value, requested, cancelled, seasons); err != nil {
@@ -317,14 +337,31 @@ func scanListedRequest(row scanner) (model.MediaRequest, error) {
 	}
 	var err error
 	value.NextSearchAt, err = scanNullTime(next)
+	if err != nil {
+		return value, err
+	}
 	value.Available = available == 1
 	switch downloadWait {
 	case 1:
 		value.DownloadWait = "Waiting for the download client to confirm progress."
+		value.WaitKind = model.WaitDownloadClient
 	case 2:
 		value.DownloadWait = "Waiting for the completed download to become accessible."
+		value.WaitKind = model.WaitDownloadFiles
 	}
-	return value, err
+	if downloadWait > 0 {
+		value.WaitObservedAt, err = scanNullTime(waitedAt)
+		return value, err
+	}
+	switch searchHold {
+	case 1:
+		value.WaitKind = model.WaitSearchService
+	case 2:
+		value.WaitKind = model.WaitDownloadClient
+	case 3:
+		value.WaitKind = model.WaitStorage
+	}
+	return value, nil
 }
 
 // SelectedSeasonsBySeries returns the selected seasons of every listed series keyed by series ID.

@@ -12,10 +12,24 @@ import (
 	"github.com/TechXTT/reelay/internal/store"
 )
 
-func (e *Engine) MetadataOnce(ctx context.Context) error {
+func (e *Engine) MetadataOnce(ctx context.Context) (err error) {
+	var refreshed int
+	var failedSeries []string
+	var firstFailure error
+
 	if e.tvmaze == nil {
 		return nil
 	}
+	defer func() {
+		// One failing series is a series problem; every refresh failing is a
+		// provider outage.
+		if refreshed > 0 {
+			e.incidentHealthy(store.IncidentMetadata, tvmazeIncidentKey)
+		} else if firstFailure != nil {
+			e.incidentFailed(store.IncidentMetadata, tvmazeIncidentKey, firstFailure.Error(), failedSeries...)
+		}
+		err = errors.Join(err, e.flushIncidents(context.WithoutCancel(ctx), store.IncidentMetadata))
+	}()
 	series, err := e.store.Series().ListFollowing(ctx, 500)
 	if err != nil {
 		return err
@@ -41,9 +55,17 @@ func (e *Engine) MetadataOnce(ctx context.Context) error {
 		}
 		episodes, err := e.tvmaze.SeriesEpisodes(ctx, item.TVmazeID)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("refresh %s: %w", item.Title, err))
+			err = fmt.Errorf("refresh %s: %w", item.Title, err)
+			errs = append(errs, err)
+			if ctx.Err() == nil {
+				if firstFailure == nil {
+					firstFailure = err
+				}
+				failedSeries = append(failedSeries, itemKey("series", item.ID))
+			}
 			continue
 		}
+		refreshed++
 		var trialEpisodes []int64
 		if trialLimit > 0 {
 			trialEpisodes, err = e.prepareTrialEpisodes(ctx, item.ID, episodes)

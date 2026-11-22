@@ -20,6 +20,9 @@ const (
 	// ntfyUnconfiguredDelay keeps events for destinations that cannot be
 	// delivered yet from being retried every minute.
 	ntfyUnconfiguredDelay = 6 * time.Hour
+
+	webhookIncidentKey  = "availability_webhook"
+	userNtfyIncidentKey = "user_ntfy"
 )
 
 // NewNotificationClient is the HTTP client for every notification delivery: a
@@ -31,9 +34,12 @@ func NewNotificationClient() *http.Client {
 
 // NotificationsOnce drains the global outbox (only while the global webhook is
 // configured) and, independently, the per-user outbox.
-func (e *Engine) NotificationsOnce(ctx context.Context) error {
+func (e *Engine) NotificationsOnce(ctx context.Context) (err error) {
 	var client = NewNotificationClient()
 
+	defer func() {
+		err = errors.Join(err, e.flushIncidents(context.WithoutCancel(ctx), store.IncidentNotifications))
+	}()
 	if e.cfg.Availability.WebhookURL != "" {
 		if err := e.globalNotifications(ctx, client); err != nil {
 			return err
@@ -71,6 +77,9 @@ func (e *Engine) globalNotifications(ctx context.Context, client *http.Client) e
 		failure := ""
 		if err := deliverWebhook(client, req); err != nil {
 			failure = err.Error()
+			e.incidentFailed(store.IncidentNotifications, webhookIncidentKey, failure, "notification:"+strconv.FormatInt(notification.ID, 10))
+		} else {
+			e.incidentHealthy(store.IncidentNotifications, webhookIncidentKey)
 		}
 		delay := min(time.Minute*time.Duration(1<<min(notification.Attempts, 10)), 24*time.Hour)
 		if err := e.store.Requests().FinishNotification(ctx, notification.ID, failure, delay); err != nil {
@@ -110,6 +119,13 @@ func (e *Engine) userNotifications(ctx context.Context, client *http.Client) err
 			failure, delay = "per-user ntfy is not configured", ntfyUnconfiguredDelay
 		} else if err := deliverToDestination(ctx, client, e.cfg.Availability.UserNtfyBaseURL, notification.Destination, notification.ID, notification.Payload, message, e.playableURL(notification.Payload)); err != nil {
 			failure = err.Error()
+		}
+		// Per-user webhooks are each member's own receiver; only the shared
+		// ntfy server is a service-wide cause.
+		if notification.Destination.Kind == "ntfy" && failure != "" {
+			e.incidentFailed(store.IncidentNotifications, userNtfyIncidentKey, failure, "user_notification:"+strconv.FormatInt(notification.ID, 10))
+		} else if notification.Destination.Kind == "ntfy" {
+			e.incidentHealthy(store.IncidentNotifications, userNtfyIncidentKey)
 		}
 		if err := e.store.Requests().FinishUserNotification(ctx, notification.ID, failure, delay); err != nil {
 			return err

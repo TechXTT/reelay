@@ -13,9 +13,10 @@ import (
 
 const bytesPerMiB = 1 << 20
 
-// LowDiskError reports that a grab was held because a volume lacks space for
-// the release plus the configured reserve, or because free space is unknown.
-type LowDiskError struct{ Reason, Detail string }
+// LowDiskError reports that a grab was held because the volume at Path lacks
+// space for the release plus the configured reserve, or because its free space
+// is unknown.
+type LowDiskError struct{ Reason, Detail, Path string }
 
 func (e *LowDiskError) Error() string { return e.Detail }
 
@@ -88,13 +89,18 @@ func (e *Engine) checkPaths(sizeBytes int64, paths []string) *LowDiskError {
 	for _, path := range paths {
 		free, err := e.freeSpace(path)
 		if err != nil {
-			return &LowDiskError{Reason: "disk_space_unknown",
+			lowDisk := &LowDiskError{Reason: "disk_space_unknown", Path: path,
 				Detail: fmt.Sprintf("cannot read free space on %s: %v", path, err)}
+			e.incidentFailed(store.IncidentStorage, path, lowDisk.Detail)
+			return lowDisk
 		}
 		if free < size+reserve {
-			return &LowDiskError{Reason: "low_disk_space",
+			lowDisk := &LowDiskError{Reason: "low_disk_space", Path: path,
 				Detail: fmt.Sprintf("need %s + %s reserve on %s, %s free", gib(size), gib(reserve), path, gib(free))}
+			e.incidentFailed(store.IncidentStorage, path, lowDisk.Detail)
+			return lowDisk
 		}
+		e.incidentHealthy(store.IncidentStorage, path)
 	}
 	return nil
 }
@@ -110,6 +116,7 @@ func (e *Engine) holdForSpace(ctx context.Context, lock *store.ItemLock, subject
 	if err != nil {
 		return err
 	}
+	e.incidentFailed(store.IncidentStorage, lowDisk.Path, lowDisk.Detail, itemKey(subject, id))
 	e.log.Warn("grab held: disk space", "subject", subject, "id", id,
 		"reason", lowDisk.Reason, "detail", lowDisk.Detail, "retry_at", next.Format(time.RFC3339))
 	e.publish("state_transition", subject, id, map[string]any{"state": transition.To, "reason": lowDisk.Reason})

@@ -15,6 +15,9 @@ Completed steps below reflect that installation; unchecked steps still need veri
 
 4. [x] Reelay is running on schema 8 with Prowlarr enabled. Both NAS roots and
    their free-space checks pass; qBittorrent authentication/health passes.
+   On 2026-11-22 the local service was upgraded to v0.1.6 (schema 18) after a
+   backup under `data/backups/pre-v0.1.6-*`; `--check` and both hardlink probes
+   passed, and qBittorrent was not running at the time.
 5. [x] The updated Jellyfin plugin loaded and synchronized 19 real library items
    for both enabled users. A live TMDB preview returned a description, rating,
    and two videos.
@@ -153,8 +156,9 @@ still need the checks below.
    TMDB; a Prowlarr key cannot supply this metadata.
 2. [x] **Install a compatible Reelay Jellyfin plugin.** Use the catalog for your
    server line described in the [README](../README.md#recommendation-plugin).
-   For the changed plugin setup page from this working tree, build and install a
-   matching plugin artifact; an older published artifact will retain its older UI.
+   Use plugin v0.1.6 or later with a v0.1.6 server: episode confirmation,
+   per-user library visibility and played state need both; older plugins keep
+   the series-level behavior.
    The plugin is separate from the Go executable.
    The previous installed plugin and its configuration are preserved under
    `F:\New folder\plugin-backups\activation-20261004-130359` on this PC.
@@ -198,10 +202,10 @@ still need the checks below.
    Continue automatically follows the full series, including future episodes.
    Stop ends your request without stopping other users' shared monitoring.
    The rating records your taste; the explicit vote controls continuation.
-5. [ ] On another installation, install both the Go build and matching updated
-   Jellyfin plugin from this working tree. Published v0.1.5 artifacts predate
-   trial support. Preserve the database before the schema 8 migration; a schema 7
-   binary cannot operate on the migrated database.
+5. [ ] On another installation, install the v0.1.6 release: the Go binary and
+   the matching Jellyfin plugin from its catalog. v0.1.5 artifacts predate trial
+   support. Preserve the database before upgrading; v0.1.6 migrates it to
+   schema 18, and older binaries cannot open the migrated database.
 
 ## Configure availability
 

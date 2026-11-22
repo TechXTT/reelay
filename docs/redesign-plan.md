@@ -60,6 +60,8 @@ Closes the remaining items of the third delivery; committed as `f0d47dc`, `30a35
 
 **Browser smoke:** Reelay built from this tree ran locally against a scratch database, with the indexer, download client, TVmaze, TMDB and Jellyfin pointed at closed localhost ports, and headless Chrome walked the views. The dashboard showed the real indexer incident; Requests showed the viewer wait with its next check and a confirmed `S02E01` with Play; Discover's session steering added a chip stored only in `sessionStorage`; Tonight showed Saved for later, Play links, the Watched label from reported played state and the poster fallback. No page errors; the only failed request was the health check answering 503 for the unreachable download client, as intended.
 
+**Released:** all deliveries above ship in v0.1.6 (server binaries, both plugin builds and the Jellyfin catalogs, 2026-11-22). The local service runs it against the existing database at schema 18.
+
 **Not verified:** a live Jellyfin server with the plugin installed (user-access filtering, placeholder exclusion, poster access), real qBittorrent and indexer outages, and member sign-in in the browser. These need the deployed services and are the remaining acceptance step before relying on the new behavior.
 
 ## Acceptance journeys

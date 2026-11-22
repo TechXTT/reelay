@@ -185,7 +185,8 @@ Follow the [activation checklist](setup-checklist.md). It is the operator guide
 for Windows builds, Prowlarr credentials, TMDB and Jellyfin Discover setup,
 availability links/webhooks, end-to-end verification, and backup/restore.
 
-The local service and plugin are now running the updated working-tree builds.
-For another installation, preserve the old database with Reelay stopped before opening it with the new
+The local service runs the v0.1.6 release (schema 18) since 2026-11-22. The
+installed Jellyfin plugin is the 2026-10-04 trial build until it is updated from
+the v0.1.6 catalog. For another installation, preserve the old database with Reelay stopped before opening it with the new
 binary: startup, `--check`, and `--backup` apply pending migrations. Separate
 household authentication, permissions, and quotas remain conditional future work.

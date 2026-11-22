@@ -17,7 +17,7 @@ public sealed class ReelayClient
     public async Task<SyncResponse?> SyncAsync(SyncRequest body, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/sync");
-        request.Headers.Add("X-Reelay-Plugin-Capabilities", "episode-confirmation");
+        request.Headers.Add("X-Reelay-Plugin-Capabilities", "episode-confirmation, subtitle-coverage");
         request.Content = JsonContent.Create(body);
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
@@ -77,6 +77,31 @@ public sealed class ReelayClient
         if (episodes.Count == 0 && missing.Count == 0) return;
         await PostAsync("/api/v1/integrations/jellyfin/episode-confirmations", new EpisodeConfirmationRequest(RequiredConfiguration().ServerId, userId, episodes, missing), cancellationToken).ConfigureAwait(false);
     }
+
+    // Returns false when this Reelay predates subtitle coverage (404).
+    public async Task<bool> SendSubtitleCoverageAsync(SubtitleCoverageRequest body, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/subtitle-coverage");
+        request.Content = JsonContent.Create(body);
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    // Returns null when this Reelay predates subtitle jobs (404).
+    public async Task<SubtitleLease?> LeaseSubtitleJobsAsync(string serverId, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Post, "/api/v1/integrations/jellyfin/subtitle-jobs/lease");
+        request.Content = JsonContent.Create(new { server_id = serverId });
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<SubtitleLease>(cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task SendSubtitleResultsAsync(SubtitleResultsRequest body, CancellationToken cancellationToken)
+        => PostAsync("/api/v1/integrations/jellyfin/subtitle-jobs/results", body, cancellationToken);
 
     public Task ActAsync(long recommendationId, string actionId, string action, int? rating, CancellationToken cancellationToken)
         => PostAsync($"/api/v1/recommendations/{recommendationId}/actions", new RecommendationAction(actionId, action, rating), cancellationToken);

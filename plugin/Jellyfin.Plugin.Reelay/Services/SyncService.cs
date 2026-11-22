@@ -20,15 +20,17 @@ public sealed class SyncService
     private readonly IUserDataManager _userDataManager;
     private readonly ReelayClient _client;
     private readonly VirtualLibraryManager _virtual;
+    private readonly SubtitleService _subtitles;
     private readonly ILogger<SyncService> _logger;
 
-    public SyncService(ILibraryManager libraryManager, IUserManager userManager, IUserDataManager userDataManager, ReelayClient client, VirtualLibraryManager virtualLibrary, ILogger<SyncService> logger)
+    public SyncService(ILibraryManager libraryManager, IUserManager userManager, IUserDataManager userDataManager, ReelayClient client, VirtualLibraryManager virtualLibrary, SubtitleService subtitles, ILogger<SyncService> logger)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
         _userDataManager = userDataManager;
         _client = client;
         _virtual = virtualLibrary;
+        _subtitles = subtitles;
         _logger = logger;
     }
 
@@ -90,6 +92,7 @@ public sealed class SyncService
                 _logger.LogWarning(ex, "Could not sync Reelay trials or episode confirmations for Jellyfin user {UserId}", user.Id.ToString("N"));
             }
         }
+        _subtitles.RequestAudit();
         progress?.Report(55);
 
         await RefreshRecommendationsAsync(users, progress, cancellationToken).ConfigureAwait(false);

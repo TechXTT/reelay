@@ -12,6 +12,8 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHttpClient<ReelayClient>();
         serviceCollection.AddSingleton<VirtualLibraryManager>();
         serviceCollection.AddSingleton<SyncService>();
+        serviceCollection.AddSingleton<SubtitleService>();
+        serviceCollection.AddHostedService(services => services.GetRequiredService<SubtitleService>());
         serviceCollection.AddSingleton<ActionOutbox>();
         serviceCollection.AddHostedService<ActionMonitor>();
         serviceCollection.AddHostedService<PlaybackGuard>();

@@ -132,6 +132,87 @@ public sealed record EpisodeConfirmation(
     [property: JsonPropertyName("number")] int Number,
     [property: JsonPropertyName("item_id")] string ItemId);
 
+public sealed record SubtitleCoverage(
+    [property: JsonPropertyName("media_source_id")] string MediaSourceId,
+    [property: JsonPropertyName("item_id")] string ItemId,
+    [property: JsonPropertyName("media_type")] string MediaType,
+    [property: JsonPropertyName("library")] string Library,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("series_title")] string SeriesTitle,
+    [property: JsonPropertyName("season")] int? Season,
+    [property: JsonPropertyName("episode")] int? Episode,
+    [property: JsonPropertyName("year")] int Year,
+    [property: JsonPropertyName("edition")] string Edition,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("subtitle_languages")] IReadOnlyList<string> SubtitleLanguages,
+    [property: JsonPropertyName("fingerprint")] string Fingerprint);
+
+public sealed record SubtitleLibraryInfo(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("download_languages")] IReadOnlyList<string> DownloadLanguages,
+    [property: JsonPropertyName("save_with_media")] bool SaveWithMedia,
+    [property: JsonPropertyName("require_perfect_match")] bool RequirePerfectMatch);
+
+// Providers and libraries are sent only with the completing batch.
+public sealed record SubtitleCoverageRequest(
+    [property: JsonPropertyName("audit_library")] string AuditLibrary,
+    [property: JsonPropertyName("server_id")] string ServerId,
+    [property: JsonPropertyName("sync_token")] string SyncToken,
+    [property: JsonPropertyName("complete")] bool Complete,
+    [property: JsonPropertyName("items")] IReadOnlyList<SubtitleCoverage> Items,
+    [property: JsonPropertyName("providers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Providers,
+    [property: JsonPropertyName("libraries"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<SubtitleLibraryInfo>? Libraries,
+    // Set only on a completing request for a pass that could not finish.
+    [property: JsonPropertyName("audit_error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AuditError = null);
+
+public sealed class SubtitleLease
+{
+    [JsonPropertyName("jobs")]
+    public List<SubtitleJob> Jobs { get; init; } = new();
+
+    [JsonPropertyName("audit_requested")]
+    public bool AuditRequested { get; init; }
+
+    [JsonPropertyName("audit_library")]
+    public string AuditLibrary { get; init; } = string.Empty;
+}
+
+public sealed record SubtitleJob(
+    [property: JsonPropertyName("lease_token")] string LeaseToken,
+    [property: JsonPropertyName("id")] long Id,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("media_source_id")] string MediaSourceId,
+    [property: JsonPropertyName("item_id")] string ItemId,
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("fingerprint")] string Fingerprint,
+    [property: JsonPropertyName("subtitle_id")] string SubtitleId);
+
+public sealed record SubtitleCandidate(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("provider")] string Provider,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("hash_match")] bool HashMatch,
+    [property: JsonPropertyName("forced")] bool Forced,
+    [property: JsonPropertyName("hearing_impaired")] bool HearingImpaired,
+    [property: JsonPropertyName("machine_translated")] bool MachineTranslated,
+    [property: JsonPropertyName("downloads")] int Downloads);
+
+public sealed record SubtitleJobResult(
+    [property: JsonPropertyName("lease_token")] string LeaseToken,
+    [property: JsonPropertyName("job_id")] long JobId,
+    [property: JsonPropertyName("outcome")] string Outcome,
+    [property: JsonPropertyName("detail")] string Detail,
+    [property: JsonPropertyName("provider")] string Provider,
+    [property: JsonPropertyName("candidates")] IReadOnlyList<SubtitleCandidate>? Candidates,
+    [property: JsonPropertyName("coverage")] SubtitleCoverage? Coverage);
+
+public sealed record SubtitleResultsRequest(
+    [property: JsonPropertyName("server_id")] string ServerId,
+    [property: JsonPropertyName("results")] IReadOnlyList<SubtitleJobResult> Results,
+    [property: JsonPropertyName("pause_seconds")] int PauseSeconds);
+
 public sealed record EpisodeConfirmationRequest(
     [property: JsonPropertyName("server_id")] string ServerId,
     [property: JsonPropertyName("user_id")] string UserId,

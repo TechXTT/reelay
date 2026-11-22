@@ -58,13 +58,14 @@ public sealed class ActionMonitor : BackgroundService
         }
         var virtualItems = JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Movie, BaseItemKind.Series)
             .Where(item => _virtual.IsManagedPath(item.Path)).ToList();
+        var seriesByTmdb = _sync.RealSeriesByTmdb();
         foreach (var user in JellyfinIdentity.EnabledUsers(_userManager, config))
         {
             var userId = user.Id.ToString("N");
             try
             {
-                await _sync.SyncTrialProgressAsync(user, cancellationToken).ConfigureAwait(false);
-                await _sync.ConfirmEpisodesAsync(user, cancellationToken).ConfigureAwait(false);
+                await _sync.SyncTrialProgressAsync(user, seriesByTmdb, cancellationToken).ConfigureAwait(false);
+                await _sync.ConfirmEpisodesAsync(user, seriesByTmdb, cancellationToken).ConfigureAwait(false);
                 var userItems = virtualItems.Where(item => _virtual.IsUserPath(item.Path, userId)).ToList();
                 await ProcessUserAsync(config, user, userId, "movie", userItems.OfType<MediaBrowser.Controller.Entities.Movies.Movie>(), attempted, cancellationToken).ConfigureAwait(false);
                 await ProcessUserAsync(config, user, userId, "series", userItems.OfType<MediaBrowser.Controller.Entities.TV.Series>(), attempted, cancellationToken).ConfigureAwait(false);

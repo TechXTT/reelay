@@ -32,11 +32,11 @@ Implemented in the working tree; see request recovery item 7 in [architecture](a
 **Remaining:**
 
 1. Revoke or recheck a confirmation when the episode leaves Jellyfin or the viewer loses access.
-2. A confirmation failure during the scheduled plugin sync aborts the rest of that sync, as trial progress already does. Consider making both best-effort.
-3. The plugin scans all series once for trials and once for confirmations per user per minute while work is pending. One shared scan would be cheaper.
-4. When two real series share a TMDB id, only the first is checked. This can miss a confirmation but never invents one.
-5. Movies still rely on parent presence; per-user movie visibility is not confirmed.
-6. Notifications stay once per request, for the first confirmed episode. Later episodes of a followed series do not notify.
+2. When two real series share a TMDB id, only the first is checked. This can miss a confirmation but never invents one.
+3. Movies still rely on parent presence; per-user movie visibility is not confirmed.
+4. Notifications stay once per request, for the first confirmed episode. Later episodes of a followed series do not notify.
+
+Follow-up done: trial-progress and confirmation failures in the scheduled plugin sync are now logged per user instead of stopping the recommendation refresh, and both share one lazy series scan per pass across all users.
 
 ## Next deliveries
 

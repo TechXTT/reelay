@@ -244,6 +244,15 @@ still need the checks below.
    credential variables again. Verify the webhook configuration in Setup checks.
    Imported files and Jellyfin-confirmed availability are separate states.
    A present series title does not prove every episode is available.
+5. [ ] **Optional: per-user ntfy notifications.** Set
+   `availability.user_ntfy_base_url` to an ntfy server (for example
+   `https://ntfy.sh`; a self-hosted server is more private) and restart.
+   Each signed-in member then opens the notification settings and enters their
+   own topic (1-64 letters, digits, `-` or `_`; treat it as a secret), subscribes
+   to it in the ntfy app, and presses the test button. Reelay sends one message
+   per request when a sync first finds the title in Jellyfin; saving a topic
+   later does not replay titles already available. Webhook destinations can be
+   set only by an operator. The global `availability.webhook_url` is independent.
 
 ## Verify the complete live journey
 

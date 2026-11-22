@@ -121,6 +121,17 @@ func (r *RecommendationRepository) CompleteSync(ctx context.Context, serverID, s
 		if err != nil {
 			return err
 		}
+		// Queued before the global event so "no global event yet" still marks the
+		// sync that first sees the title: a destination saved later must not
+		// replay titles that were already available.
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
+ SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
+ FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1
+ JOIN notification_destinations nd ON nd.server_id=mr.server_id AND nd.user_id=mr.user_id AND nd.enabled=1
+ WHERE mr.server_id=? AND mr.cancelled_at IS NULL AND NOT EXISTS(SELECT 1 FROM availability_outbox ao WHERE ao.request_id=mr.id) GROUP BY mr.id`, now, now, serverID)
+		if err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO availability_outbox(request_id,item_id,payload,created_at,next_attempt_at)
  SELECT mr.id,MIN(ji.item_id),json_object('event','title_available','request_id',mr.id,'server_id',mr.server_id,'user_id',mr.user_id,'media_type',mr.media_type,'tmdb_id',mr.tmdb_id,'title',mr.title,'jellyfin_item_id',MIN(ji.item_id)),?,?
  FROM media_requests mr JOIN jellyfin_items ji ON ji.server_id=mr.server_id AND ji.media_type=mr.media_type AND ji.tmdb_id=mr.tmdb_id AND ji.present=1

@@ -72,6 +72,9 @@ type Availability struct {
 	WebhookURL      string            `yaml:"webhook_url"`
 	WebhookFormat   string            `yaml:"webhook_format"`
 	JellyfinServers map[string]string `yaml:"jellyfin_servers"`
+	// UserNtfyBaseURL is the ntfy server members' own topics are published to;
+	// empty disables per-user ntfy destinations.
+	UserNtfyBaseURL string `yaml:"user_ntfy_base_url"`
 }
 
 type Server struct {

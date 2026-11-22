@@ -8,6 +8,7 @@ import {
   bindAll, bindRequest, content, date, jsonRequest, openDialog, option, pick, runControl, showError, showToast,
   userKey, userOptions
 } from "../ui.ts";
+import { loadNotificationsPanel, notificationsPanelShell } from "./notifications.ts";
 
 const trialScopes: string[] = ["one_episode", "three_episodes", "first_season"];
 
@@ -121,8 +122,9 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
   const node = content(`${discoverHead(user, users, key, mediaType, recommendations)}
     ${trialsSection(trialPage.items)}
     <div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div>
-    ${statsPanelShell()}`);
+    ${statsPanelShell()}${notificationsPanelShell()}`);
   void loadRecommendationStats(node, user, key);
+  void loadNotificationsPanel(node, user);
   bindDiscoverToolbar(node, user, key, mediaType);
   bindTrialControls(node, key, mediaType);
   bindRecommendationCards(node, recommendations);

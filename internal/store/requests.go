@@ -125,6 +125,10 @@ func (r *RequestRepository) Cancel(ctx context.Context, id int64) error {
 			return ErrNotFound
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM availability_outbox WHERE request_id=? AND delivered_at IS NULL`, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM user_availability_outbox WHERE request_id=? AND delivered_at IS NULL`, id)
 		return err
 	})
 }

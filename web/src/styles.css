@@ -86,4 +86,17 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; } th { color: #
 .auth-gate select { width: 100%; height: 40px; border: 1px solid #45483f; border-radius: 5px; background: #20211e; color: #f1f2ed; padding: 0 11px; }
 .auth-error { color: #ff8f83; font-size: 12px; margin: 0; }
 .link-button { justify-self: start; background: none; border: 0; padding: 0; color: #b8e986; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.notify-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid #34362f; border-radius: 8px; }
+.notify-panel > h2 { margin-bottom: 10px; }
+.notify-note { margin: 6px 0; font-size: 12px; color: #a4a79c; }
+.notify-current { margin: 0 0 4px; overflow-wrap: anywhere; }
+.notify-error { color: #ff8f83; }
+.notify-form { display: grid; gap: 10px; max-width: 520px; margin-top: 10px; }
+.notify-form label { display: grid; gap: 5px; color: #8f9388; font-size: 11px; }
+.notify-form label[hidden] { display: none; }
+.notify-form input:not([type=checkbox]), .notify-form select { width: 100%; height: 36px; border: 1px solid #45483f; border-radius: 5px; background: #20211e; color: #f1f2ed; padding: 0 10px; }
+.notify-form small { color: #8f9388; font-size: 11px; }
+.notify-form label.notify-switch { display: flex; align-items: center; gap: 8px; color: #c4c8bb; font-size: 13px; }
+.notify-form .row-actions { justify-content: flex-start; flex-wrap: wrap; }
+.notify-result { min-height: 1.2em; margin: 0; font-size: 12px; color: #a4a79c; }
 @media (max-width: 720px) { nav { grid-template-columns: repeat(var(--nav-count, 8), 1fr); }.identity-name { max-width: 110px; }.topbar-status { gap: 8px; } }

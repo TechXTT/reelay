@@ -20,6 +20,7 @@ const (
 	CodeQuotaExceeded       = "quota_exceeded"
 	CodeInsufficientStorage = "insufficient_storage"
 	CodeUnavailable         = "unavailable"
+	CodeBadGateway          = "bad_gateway"
 	CodeInternal            = "internal"
 )
 
@@ -93,6 +94,11 @@ func InsufficientStorage(format string, args ...any) *Error {
 
 func Unavailable(format string, args ...any) *Error {
 	return &Error{Code: CodeUnavailable, Message: fmt.Sprintf(format, args...), status: http.StatusServiceUnavailable}
+}
+
+// BadGateway is a 502: Reelay worked, the notification receiver did not.
+func BadGateway(message string) *Error {
+	return &Error{Code: CodeBadGateway, Message: message, status: http.StatusBadGateway}
 }
 
 // Internal deliberately does not accept a message: the client is told nothing

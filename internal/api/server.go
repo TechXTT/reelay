@@ -54,6 +54,7 @@ type Server struct {
 	discovery       metadata.RecommendationProvider
 	loginVerifier   LoginVerifier
 	logins          *loginLimiter
+	notifyTests     *testNotificationLimiter
 	publicPaths     map[string]bool
 	static          fs.FS
 
@@ -101,6 +102,7 @@ func New(opt Options) *Server {
 		discovery:       opt.Discovery,
 		loginVerifier:   opt.LoginVerifier,
 		logins:          newLoginLimiter(),
+		notifyTests:     newTestNotificationLimiter(),
 		publicPaths:     make(map[string]bool),
 	}
 	if s.loginVerifier == nil {
@@ -237,6 +239,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"POST /api/v1/requests/{id}/actions", accessMember, withID(s.handleRequestAction)},
 		{"GET /api/v1/requests/{id}/diagnostics", accessMember, withID(s.handleRequestDiagnostics)},
 		{"POST /api/v1/requests/{id}/grab", accessOperator, withID(s.handleRequestGrab)},
+
+		{"GET /api/v1/notifications/destination", accessMember, s.handleNotificationDestination},
+		{"PUT /api/v1/notifications/destination", accessMember, s.handleNotificationDestinationPut},
+		{"DELETE /api/v1/notifications/destination", accessMember, s.handleNotificationDestinationDelete},
+		{"POST /api/v1/notifications/destination/test", accessMember, s.handleNotificationTest},
 
 		{"GET /api/v1/trials", accessMember, s.handleTrials},
 		{"POST /api/v1/trials/{id}/vote", accessMember, withID(s.handleTrialVote)},

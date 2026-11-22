@@ -342,6 +342,9 @@ For phone/browser notifications through ntfy, set `availability.webhook_format:
 ntfy` and use your topic URL as `webhook_url`. Reelay sends a readable title
 availability message directly, retaining the outbox retries. The default format
 is JSON for other receivers.
+With `availability.user_ntfy_base_url` set, each member can also choose their
+own ntfy topic for personal "ready to watch" notifications.
+Set it, test it, or remove it in the Notifications panel on the Discover view; the dashboard sign-in screen also keeps an "operator token" option.
 
 Use the 1-5 selector on Reelay's Discover view to rate a suggestion without
 requesting it. The suggestion is removed, high ratings become recommendation

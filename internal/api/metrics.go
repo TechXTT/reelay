@@ -66,6 +66,10 @@ func (s *Server) writeStoreMetrics(ctx context.Context, out *metrics.Writer) err
 	if err != nil {
 		return err
 	}
+	userPending, err := s.store.Requests().PendingUserNotifications(ctx)
+	if err != nil {
+		return err
+	}
 	out.Family("reelay_items", "Episodes and movies by state.", "gauge")
 	for _, state := range model.AllItemStates {
 		out.Sample("reelay_items", float64(episodes[state]), "subject", string(model.SubjectEpisode), "state", string(state))
@@ -76,6 +80,7 @@ func (s *Server) writeStoreMetrics(ctx context.Context, out *metrics.Writer) err
 		out.Sample("reelay_grabs", float64(grabs[state]), "state", string(state))
 	}
 	out.Gauge("reelay_notifications_pending", "Availability notifications waiting for delivery.", float64(pending))
+	out.Gauge("reelay_user_notifications_pending", "Per-user availability notifications waiting for delivery.", float64(userPending))
 	return nil
 }
 

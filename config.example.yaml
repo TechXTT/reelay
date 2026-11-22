@@ -331,6 +331,7 @@ availability:
   webhook_url: "" # Optional JSON title_available webhook; retries use X-Reelay-Event-ID for deduplication.
   webhook_format: json # json (default) or ntfy; ntfy posts a readable message directly to a topic URL.
   jellyfin_servers: {} # Jellyfin server ID: browser-accessible base URL, for playable title links.
+  user_ntfy_base_url: "" # Optional ntfy server (for example https://ntfy.sh) members publish their own availability topic to; empty disables per-user ntfy.
 
 recommendations:
   # Enable after setting metadata.tmdb_api_key and installing the Jellyfin plugin.

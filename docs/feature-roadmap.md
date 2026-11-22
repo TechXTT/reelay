@@ -105,6 +105,12 @@ Effort is a rough guess: **S** about a day, **M** a few days, **L** a week or mo
     their title is available, through their own ntfy topic or webhook.
     Availability messages already go through a retrying queue (the outbox), but
     each install has one destination.
+    **Implemented 2026-10-07:** migration 0013 adds per-user destinations and a
+    separate retrying outbox. Members choose an ntfy topic on
+    `availability.user_ntfy_base_url`; operators may set webhook URLs. A Discover
+    panel saves, removes and tests the destination. Verified with go build, vet,
+    staticcheck, `go test ./internal/... ./cmd/...` including new store, engine and
+    API tests, and `npm run build`; no live ntfy delivery or browser check.
 14. **Calendar of upcoming episodes and releases (M).** Show upcoming air dates
     and when Reelay will start searching (air date plus grace). The metadata is
     already stored.

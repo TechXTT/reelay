@@ -38,6 +38,19 @@ func (r *RequestRepository) PendingNotifications(ctx context.Context) (int, erro
 	return count, nil
 }
 
+// PendingUserNotifications counts per-user availability events still waiting
+// for delivery, using the same filter as ClaimUserNotification but ignoring the
+// retry time.
+func (r *RequestRepository) PendingUserNotifications(ctx context.Context) (int, error) {
+	var count int
+	var err = r.s.ro.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_availability_outbox o JOIN media_requests mr ON mr.id=o.request_id WHERE o.delivered_at IS NULL AND mr.cancelled_at IS NULL`).Scan(&count)
+
+	if err != nil {
+		return 0, fmt.Errorf("count pending user notifications: %w", err)
+	}
+	return count, nil
+}
+
 // countByState runs a GROUP BY over a state column. table is always a
 // package-internal constant, never caller input.
 func countByState[S ~string](ctx context.Context, db *sql.DB, table string) (map[S]int, error) {

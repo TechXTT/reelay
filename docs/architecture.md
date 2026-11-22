@@ -150,6 +150,14 @@ falls back to a verified copy.
 5. Playable links use the synchronized item ID and a configured Jellyfin base
    URL keyed by the plugin's server ID. Series title presence and episode import
    counts are shown separately. Availability is not inferred from import success.
+6. Per-user availability notifications use `notification_destinations` (one per
+   Jellyfin user) and a separate `user_availability_outbox`, drained on its own
+   even when no global webhook is configured. The same sync that first queues a
+   title also queues a user event for requesters with an enabled destination;
+   withdrawal removes undelivered rows from both outboxes. Members choose only
+   an ntfy topic on the operator-configured `availability.user_ntfy_base_url`;
+   arbitrary webhook URLs are operator-only. Disabled or deleted destinations
+   close queued events as "destination removed" instead of retrying.
 
 ## Source and maintenance boundaries
 

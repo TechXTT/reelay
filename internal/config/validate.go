@@ -130,6 +130,12 @@ func (c *Config) validateAvailability(ck *checker) {
 	if c.Availability.WebhookURL != "" {
 		validateHTTPURL(ck, "availability.webhook_url", c.Availability.WebhookURL)
 	}
+	if base := c.Availability.UserNtfyBaseURL; base != "" {
+		validateHTTPURL(ck, "availability.user_ntfy_base_url", base)
+		if parsed, err := url.Parse(base); err == nil && parsed.RawQuery != "" {
+			ck.bad("availability.user_ntfy_base_url", "must be a server base URL without a query")
+		}
+	}
 	if format := c.Availability.WebhookFormat; format != "" && format != "json" && format != "ntfy" {
 		ck.bad("availability.webhook_format", "must be json or ntfy")
 	}

@@ -326,3 +326,20 @@ export interface AuthConfig {
   logins_enabled: boolean;
   servers: string[];
 }
+
+export interface NotificationDestination {
+  server_id: string;
+  user_id: string;
+  kind: "ntfy" | "webhook";
+  topic?: string;
+  url?: string;
+  format?: "json" | "ntfy";
+  enabled: boolean;
+}
+
+export interface NotificationDestinationResponse {
+  destination: NotificationDestination | null;
+  ntfy_available: boolean;
+  ntfy_base_url: string;
+  last_delivery: { at: string | null; error: string; attempts: number } | null;
+}

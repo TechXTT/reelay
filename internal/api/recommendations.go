@@ -67,6 +67,11 @@ func (s *Server) handleJellyfinSync(w http.ResponseWriter, r *http.Request) erro
 		if err := s.store.Recommendations().SetEpisodeConfirmationSupport(r.Context(), req.ServerID, pluginSupports(r, "episode-confirmation")); err != nil {
 			return err
 		}
+		if !pluginSupports(r, "subtitle-coverage") {
+			if err := s.store.Subtitles().InvalidateCoverage(r.Context(), req.ServerID); err != nil {
+				return err
+			}
+		}
 		removed, err = s.store.Recommendations().CompleteSync(r.Context(), req.ServerID, req.SyncToken)
 		if err != nil {
 			return BadRequest("invalid sync completion").WithCause(err)

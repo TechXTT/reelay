@@ -229,6 +229,17 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"GET /api/v1/integrations/jellyfin/episode-confirmations", accessOperator, s.handleEpisodeConfirmationCandidates},
 		{"POST /api/v1/integrations/jellyfin/episode-confirmations", accessOperator, s.handleEpisodeConfirmations},
 		{"POST /api/v1/integrations/jellyfin/user-items", accessOperator, s.handleJellyfinUserItems},
+		{"POST /api/v1/integrations/jellyfin/subtitle-coverage", accessOperator, s.handleSubtitleCoverage},
+		{"POST /api/v1/integrations/jellyfin/subtitle-jobs/lease", accessOperator, s.handleSubtitleLease},
+		{"POST /api/v1/integrations/jellyfin/subtitle-jobs/results", accessOperator, s.handleSubtitleResults},
+
+		{"GET /api/v1/subtitles", accessOperator, s.handleSubtitles},
+		{"GET /api/v1/subtitles/coverage", accessOperator, s.handleSubtitleCoverageList},
+		{"GET /api/v1/subtitles/jobs", accessOperator, s.handleSubtitleJobs},
+		{"POST /api/v1/subtitles/audit", accessOperator, s.handleSubtitleAudit},
+		{"PUT /api/v1/subtitles/follow", accessOperator, s.handleSubtitleFollow},
+		{"POST /api/v1/subtitles/batches", accessOperator, s.handleSubtitleBatch},
+		{"POST /api/v1/subtitles/jobs/{id}/actions", accessOperator, withID(s.handleSubtitleJobAction)},
 
 		{"GET /api/v1/recommendations", accessMember, s.handleRecommendations},
 		{"GET /api/v1/recommendations/preferences", accessMember, s.handleRecommendationPreferences},

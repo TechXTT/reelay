@@ -19,7 +19,7 @@ function playLink(item: TonightItem) {
 }
 
 function poster(item: TonightItem) {
-  if (item.poster_url) return `<img src="${esc(item.poster_url)}" alt="" loading="lazy">`;
+  if (item.poster_url) return `<img src="${esc(item.poster_url)}" alt="" loading="lazy" data-initial="${esc(item.title.charAt(0))}">`;
   return `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`;
 }
 
@@ -103,6 +103,18 @@ export async function tonightView(selectedUser = session.discoverUser) {
 }
 
 function bindTonightView(node: HTMLElement, user: JellyfinUser, key: string, page: TonightResponse) {
+  // Posters load straight from Jellyfin, which may require a signed-in browser; show the initial instead of a broken image.
+  bindAll<HTMLImageElement>(node, ".tonight-card > img", image => {
+    const useInitial = () => {
+      const fallback = document.createElement("div");
+      fallback.className = "recommendation-poster";
+      fallback.textContent = image.dataset.initial ?? "";
+      image.replaceWith(fallback);
+    };
+    image.onerror = useInitial;
+    // An image can fail before this handler is attached.
+    if (image.complete && image.naturalWidth === 0) useInitial();
+  });
   const reload = () => void tonightView(key).catch(showError);
   const userSelect = node.querySelector<HTMLSelectElement>("#tonight-user");
   if (userSelect) userSelect.onchange = event => {

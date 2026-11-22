@@ -10,6 +10,7 @@ import { moviesView } from "./views/movies.ts";
 import { requestsView } from "./views/requests.ts";
 import { seriesDetail, seriesView } from "./views/series.ts";
 import { settingsView } from "./views/settings.ts";
+import { tonightView } from "./views/tonight.ts";
 import { upgradesView } from "./views/upgrades.ts";
 
 const app = pick<HTMLDivElement>(document, "#app");
@@ -20,6 +21,7 @@ let refreshPending = false;
 const nav: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◫" },
   { id: "discover", label: "Discover", icon: "*" },
+  { id: "tonight", label: "Tonight", icon: "☾" },
   { id: "requests", label: "Requests", icon: "↧" },
   { id: "series", label: "Series", icon: "▤" },
   { id: "movies", label: "Movies", icon: "▶" },
@@ -28,12 +30,13 @@ const nav: { id: View; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: "⚙" }
 ];
 
-const memberViews: View[] = ["discover", "requests"];
+const memberViews: View[] = ["discover", "tonight", "requests"];
 const visibleNav = () => !session.principal ? [] : isMember() ? nav.filter(n => memberViews.includes(n.id)) : nav;
 
 const viewLoaders: Record<View, () => Promise<void>> = {
   dashboard,
   discover: () => discoverView(),
+  tonight: () => tonightView(),
   requests: () => requestsView(),
   series: seriesView,
   movies: moviesView,

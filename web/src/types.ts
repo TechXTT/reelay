@@ -1,4 +1,4 @@
-export type View = "dashboard" | "discover" | "requests" | "series" | "movies" | "upgrades" | "add" | "settings";
+export type View = "dashboard" | "discover" | "tonight" | "requests" | "series" | "movies" | "upgrades" | "add" | "settings";
 export type MediaType = "movie" | "series";
 export type SubjectType = "episode" | "movie" | "grab";
 export type SeriesMonitorMode = "future_only" | "all" | "latest_season" | "none";
@@ -347,4 +347,34 @@ export interface NotificationDestinationResponse {
   ntfy_available: boolean;
   ntfy_base_url: string;
   last_delivery: { at: string | null; error: string; attempts: number } | null;
+}
+
+export interface TonightItem {
+  server_id: string;
+  item_id: string;
+  media_type: MediaType;
+  title: string;
+  year?: number;
+  genres: string[] | null;
+  runtime_minutes?: number;
+  completed: boolean;
+  saved_at?: string;
+  playable: boolean;
+  poster_url?: string;
+  jellyfin_url?: string;
+}
+
+export interface TonightResponse {
+  supported: boolean;
+  library_synced_at?: string;
+  items: TonightItem[] | null;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export interface SavedForLaterResponse {
+  supported: boolean;
+  items: TonightItem[] | null;
+  limit: number;
 }

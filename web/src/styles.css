@@ -101,3 +101,28 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; } th { color: #
 .notify-form .row-actions { justify-content: flex-start; flex-wrap: wrap; }
 .notify-result { min-height: 1.2em; margin: 0; font-size: 12px; color: #a4a79c; }
 @media (max-width: 720px) { nav { grid-template-columns: repeat(var(--nav-count, 8), 1fr); }.identity-name { max-width: 110px; }.topbar-status { gap: 8px; } }
+.tonight-intro { margin: -6px 0 18px; color: #c4c8bb; font-size: 13px; }
+.tonight-intro .link-button { font-size: 13px; }
+.tonight-note { display: block; margin: 0 0 12px; color: #8f9388; font-size: 11px; }
+.tonight-toolbar { margin-bottom: 6px; }
+.tonight-switch { display: flex; align-items: center; gap: 8px; height: 36px; color: #c4c8bb; font-size: 13px; }
+.tonight-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.tonight-card { display: grid; grid-template-columns: 110px 1fr; border: 1px solid #373930; border-radius: 6px; background: #20211e; overflow: hidden; }
+.tonight-card > img, .tonight-card > .recommendation-poster { width: 110px; height: 165px; object-fit: cover; }
+.tonight-body { padding: 12px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.tonight-body h2 { font-size: 15px; overflow-wrap: anywhere; }
+.tonight-body small { color: #94988d; }
+.tonight-actions { margin-top: auto; flex-wrap: wrap; justify-content: flex-start; }
+.tonight-play { display: inline-flex; align-items: center; height: 30px; padding: 0 10px; font-size: 12px; border-color: #b8e986; background: #b8e986; color: #17200f; text-decoration: none; font-weight: 600; }
+.tonight-play:hover { background: #c9f49d; color: #17200f; }
+.tonight-saved { margin: 0 0 20px; padding: 12px 14px; border: 1px solid #34362f; border-radius: 8px; }
+.tonight-saved > h2 { margin-bottom: 8px; }
+.tonight-saved ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.tonight-saved-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid #2d2f29; }
+.tonight-saved-row:first-child { border-top: 0; }
+.tonight-saved-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.tonight-saved-row small { color: #94988d; }
+.tonight-saved-row .tonight-note { margin: 0; color: #f2ca7e; }
+.tonight-pager { justify-content: center; margin-top: 16px; }
+.tonight-unsupported p { text-align: center; line-height: 1.6; max-width: 520px; }
+@media (max-width: 720px) { .tonight-card { grid-template-columns: 86px 1fr; }.tonight-card > img, .tonight-card > .recommendation-poster { width: 86px; height: 129px; }.tonight-saved-row { flex-direction: column; align-items: flex-start; } }

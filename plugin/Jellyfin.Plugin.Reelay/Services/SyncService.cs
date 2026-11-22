@@ -96,19 +96,34 @@ public sealed class SyncService
         _logger.LogInformation("Synchronized {ItemCount} Jellyfin items for {UserCount} users", items.Count, users.Count);
     }
 
-    // Real (non-virtual) series by TMDB id. The scan is not user-specific, so one lazy map
-    // serves every user in a pass and is built only when some user has pending work.
-    public Lazy<Dictionary<int, BaseItem>> RealSeriesByTmdb() => new(() =>
-    {
-        var seriesByTmdb = new Dictionary<int, BaseItem>();
-        foreach (var series in JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Series).Where(item => !_virtual.IsManagedPath(item.Path)))
-        {
-            seriesByTmdb.TryAdd(JellyfinIdentity.ProviderId(series, MetadataProvider.Tmdb), series);
-        }
-        return seriesByTmdb;
-    });
+    // Every real (non-virtual) series by TMDB id; a library can hold several copies of one
+    // series. The scan is not user-specific, so one lazy lookup serves every user in a pass
+    // and is built only when some user has pending work.
+    public Lazy<ILookup<int, BaseItem>> RealSeriesByTmdb() => new(() =>
+        JellyfinIdentity.Scan(_libraryManager, BaseItemKind.Series)
+            .Where(item => !_virtual.IsManagedPath(item.Path))
+            .ToLookup(series => JellyfinIdentity.ProviderId(series, MetadataProvider.Tmdb)));
 
-    public async Task SyncTrialProgressAsync(JellyfinUser user, Lazy<Dictionary<int, BaseItem>> seriesByTmdb, CancellationToken cancellationToken)
+    // The first real episode under any copy of the series; with a user, only episodes that
+    // user can access, excluding virtual missing-episode placeholders.
+    private BaseItem? FindEpisode(IEnumerable<BaseItem> copies, int season, int number, JellyfinUser? user)
+    {
+        foreach (var parent in copies)
+        {
+            var query = user is null ? new InternalItemsQuery() : new InternalItemsQuery(user) { IsVirtualItem = false };
+            query.ParentId = parent.Id;
+            query.IncludeItemTypes = new[] { BaseItemKind.Episode };
+            query.Recursive = true;
+            query.ParentIndexNumber = season;
+            query.IndexNumber = number;
+            query.Limit = 1;
+            var episode = _libraryManager.GetItemList(query).FirstOrDefault();
+            if (episode is not null && !_virtual.IsManagedPath(episode.Path)) return episode;
+        }
+        return null;
+    }
+
+    public async Task SyncTrialProgressAsync(JellyfinUser user, Lazy<ILookup<int, BaseItem>> seriesByTmdb, CancellationToken cancellationToken)
     {
         var userId = user.Id.ToString("N");
         var trials = await _client.GetTrialsAsync(userId, cancellationToken).ConfigureAwait(false);
@@ -116,11 +131,12 @@ public sealed class SyncService
         var watched = new List<TrialPlayback>();
         foreach (var trial in trials)
         {
-            if (!seriesByTmdb.Value.TryGetValue(trial.TmdbId, out var parent)) continue;
+            var copies = seriesByTmdb.Value[trial.TmdbId].ToList();
+            if (copies.Count == 0) continue;
             foreach (var selected in trial.Episodes.Where(episode => !episode.Watched))
             {
-                var episode = _libraryManager.GetItemList(new InternalItemsQuery { ParentId = parent.Id, IncludeItemTypes = new[] { BaseItemKind.Episode }, Recursive = true, ParentIndexNumber = selected.Season, IndexNumber = selected.Number, Limit = 1 }).FirstOrDefault();
-                if (episode is null || _virtual.IsManagedPath(episode.Path)) continue;
+                var episode = FindEpisode(copies, selected.Season, selected.Number, null);
+                if (episode is null) continue;
                 if (_userDataManager.GetUserData(user, episode)?.Played != true) continue;
                 watched.Add(new TrialPlayback(trial.RequestId, selected.Season, selected.Number));
             }
@@ -128,7 +144,7 @@ public sealed class SyncService
         foreach (var chunk in watched.Chunk(BatchSize)) await _client.SendTrialPlaybackAsync(userId, chunk, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task ConfirmEpisodesAsync(JellyfinUser user, Lazy<Dictionary<int, BaseItem>> seriesByTmdb, CancellationToken cancellationToken)
+    public async Task ConfirmEpisodesAsync(JellyfinUser user, Lazy<ILookup<int, BaseItem>> seriesByTmdb, CancellationToken cancellationToken)
     {
         var userId = user.Id.ToString("N");
         var pending = await _client.GetEpisodeConfirmationsAsync(userId, cancellationToken).ConfigureAwait(false);
@@ -137,10 +153,8 @@ public sealed class SyncService
         var missing = new List<EpisodeKey>();
         foreach (var item in pending)
         {
-            var episode = seriesByTmdb.Value.TryGetValue(item.TmdbId, out var parent)
-                ? _libraryManager.GetItemList(new InternalItemsQuery(user) { ParentId = parent.Id, IncludeItemTypes = new[] { BaseItemKind.Episode }, Recursive = true, ParentIndexNumber = item.Season, IndexNumber = item.Number, IsVirtualItem = false, Limit = 1 }).FirstOrDefault()
-                : null;
-            if (episode is not null && !_virtual.IsManagedPath(episode.Path))
+            var episode = FindEpisode(seriesByTmdb.Value[item.TmdbId], item.Season, item.Number, user);
+            if (episode is not null)
             {
                 confirmed.Add(new EpisodeConfirmation(item.RequestId, item.Season, item.Number, episode.Id.ToString("N")));
             }

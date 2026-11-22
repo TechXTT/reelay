@@ -229,6 +229,18 @@ type Recommendation struct {
 	Status         string             `json:"status"`
 	GeneratedAt    time.Time          `json:"generated_at"`
 	ExpiresAt      time.Time          `json:"expires_at"`
+	// Sources lists where the candidate came from, strongest first.
+	Sources []RecommendationSource `json:"sources,omitempty"`
+}
+
+// RecommendationSource is one origin of a recommendation candidate: a seed
+// title whose TMDB recommendations or similar titles listed it, or a catalog
+// listing used without seeds.
+type RecommendationSource struct {
+	Kind    string `json:"kind"`              // "seed" or "catalog"
+	Listing string `json:"listing"`           // "recommendations", "similar", "discover" or "discover_outside_genre"
+	TMDBID  int    `json:"tmdb_id,omitempty"` // the seed title, for kind "seed"
+	Title   string `json:"title,omitempty"`
 }
 
 type JellyfinUser struct {
@@ -280,6 +292,33 @@ type RecommendationStats struct {
 	Available      int        `json:"available"`
 	Watched        int        `json:"watched"`
 	Completed      int        `json:"completed"`
+}
+
+// RecommendationConcentration measures how narrow the top of one generated
+// list is: the share of its titles held by the most common genre and by the
+// most common source (seed title or catalog listing).
+type RecommendationConcentration struct {
+	MediaType          string    `json:"media_type"`
+	GeneratedAt        time.Time `json:"generated_at"`
+	SampleSize         int       `json:"sample_size"`
+	DominantGenre      string    `json:"dominant_genre"`
+	DominantGenreShare float64   `json:"dominant_genre_share"`
+	DominantSeed       string    `json:"dominant_seed"`
+	DominantSeedShare  float64   `json:"dominant_seed_share"`
+	DistinctInterests  int       `json:"distinct_interests"`
+	DistinctGenres     int       `json:"distinct_genres"`
+}
+
+// RecommendationConcentrationTrend compares the earliest and latest snapshot
+// in a stats window and averages every generation in it.
+type RecommendationConcentrationTrend struct {
+	MediaType                string                      `json:"media_type"`
+	Generations              int                         `json:"generations"`
+	AverageGenreShare        float64                     `json:"average_dominant_genre_share"`
+	AverageSeedShare         float64                     `json:"average_dominant_seed_share"`
+	AverageDistinctInterests float64                     `json:"average_distinct_interests"`
+	Earliest                 RecommendationConcentration `json:"earliest"`
+	Latest                   RecommendationConcentration `json:"latest"`
 }
 
 type RecommendationRating struct {

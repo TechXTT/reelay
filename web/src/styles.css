@@ -140,3 +140,21 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; } th { color: #
 .request-wait strong { font-size: 12px; font-weight: 600; color: #e1e3dc; }
 .request-wait small { color: #a4a79c; font-size: 11px; }
 .request-wait-action { border-left-color: #e8ba70; }
+.steer-panel { margin: 0 0 18px; padding: 12px 14px; border: 1px dashed #4a4d43; border-radius: 8px; }
+.steer-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.steer-scope { padding: 2px 8px; border-radius: 10px; background: #263d49; color: #9fd9f1; font-size: 11px; }
+.steer-note { margin: 6px 0 10px; font-size: 12px; }
+.steer-controls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.steer-controls label { display: grid; gap: 5px; color: #8f9388; font-size: 11px; }
+.steer-controls select { min-width: 170px; height: 30px; }
+.steer-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.steer-chips:empty { display: none; }
+.steer-chips li { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; border: 1px solid #45483f; border-radius: 14px; font-size: 12px; color: #d6d9cf; }
+.steer-remove { width: 22px; height: 22px; border: 0; border-radius: 11px; background: #34352e; color: #c4c8bb; cursor: pointer; }
+.steer-remove:hover { background: #452925; color: #ffb4aa; }
+.steer-status { margin: 8px 0 0; font-size: 12px; min-height: 1.2em; }
+.steer-actions { justify-content: flex-start; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.steer-actions small { color: #8f9388; font-size: 11px; }
+.rec-stats-subhead { margin: 16px 0 8px; font-size: 13px; color: #cdd0c6; }
+.rec-concentration + .rec-concentration { margin-top: 10px; padding-top: 10px; border-top: 1px solid #30322c; }
+.rec-concentration small { display: block; color: #8f9388; font-size: 11px; margin-top: 2px; }

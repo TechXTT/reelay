@@ -45,7 +45,7 @@ function incidentsSection(incidents: IncidentsResponse) {
   if (!incidents.open.length && !incidents.resolved.length) return "";
   return `<section><h2>Incidents</h2><div class="incidents">${incidents.open.length ? incidents.open.map(incidentCard).join("") : `<div class="empty">No open incidents</div>`}</div>
     ${incidents.resolved.length ? `<h3 class="incidents-resolved">Recently resolved</h3>${table(["Cause", "Since", "Resolved", "Affected"], incidents.resolved.map(incident =>
-      [esc(incident.cause), date(incident.first_seen_at), date(incident.resolved_at ?? ""), String(incident.affected)]))}` : ""}</section>`;
+      [esc(incident.cause), date(incident.first_seen_at), `${date(incident.resolved_at ?? "")}${incident.resolved_note ? ` · ${esc(incident.resolved_note)}` : ""}`, String(incident.affected)]))}` : ""}</section>`;
 }
 
 function recentActivityRow(grab: Grab) {

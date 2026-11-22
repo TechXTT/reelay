@@ -147,7 +147,12 @@ func (e *Engine) Run(ctx context.Context) error {
 		{"notifications", time.Minute, nil, e.NotificationsOnce, false},
 	}
 	if e.cfg.Recommendations.Enabled && e.recommendations != nil {
-		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.recommendations.GenerateAll, false})
+		loops = append(loops, loopSpec{"recommendations", e.cfg.Recommendations.RefreshInterval.Duration, e.recommendationTrigger, e.RecommendationsOnce, false})
+	}
+	// Loading the open incidents at startup resolves those whose cause was
+	// removed from the configuration before any loop runs.
+	if err := e.flushIncidents(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		e.log.Error("load open incidents failed", "error", err)
 	}
 	if interval := e.cfg.Database.BackupInterval.Duration; interval > 0 {
 		// Tick at most hourly so a restart never waits a full interval for the first check.

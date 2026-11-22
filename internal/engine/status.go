@@ -16,14 +16,23 @@ import (
 const downloadClientUnavailable = "download client unavailable: "
 
 func (e *Engine) StatusOnce(ctx context.Context) (err error) {
+	var filesChecked bool
+
 	defer func() {
+		// Once every grab was checked, a download-files cause that no grab
+		// waited on in this pass has recovered; a wait observed in the same
+		// pass wins.
+		if filesChecked && ctx.Err() == nil {
+			err = errors.Join(err, e.downloadFilesChecked(context.WithoutCancel(ctx)))
+		}
 		err = errors.Join(err, e.flushIncidents(context.WithoutCancel(ctx),
-			store.IncidentDownloadClient, store.IncidentLibrary))
+			store.IncidentDownloadClient, store.IncidentLibrary, downloadFilesScope))
 	}()
 	grabs, err := e.store.Grabs().Active(ctx)
 	if err != nil {
 		return err
 	}
+	filesChecked = true
 	if len(grabs) == 0 {
 		// Without grabs to poll, an open outage resolves on a direct check.
 		if e.incidentOpen(store.IncidentDownloadClient, downloadClientIncidentKey) && e.downloader.Healthy(ctx) == nil {
@@ -50,6 +59,7 @@ func (e *Engine) StatusOnce(ctx context.Context) (err error) {
 	}
 	statuses, err := e.downloader.Status(ctx, hashes)
 	if err != nil {
+		filesChecked = false
 		errs = append(errs, fmt.Errorf("poll downloader: %w", err))
 		if ctx.Err() == nil {
 			items := make([]string, len(pending))
@@ -135,11 +145,32 @@ func (e *Engine) handleMissingTorrent(ctx context.Context, grab model.Grab, down
 }
 
 func (e *Engine) recordDownloadWait(ctx context.Context, grab model.Grab, reason string) error {
+	// A completed download whose files cannot be reached waits on storage,
+	// not on the client, unless the client itself is unavailable.
+	if (grab.State == model.GrabCompleted || grab.State == model.GrabImporting) &&
+		!strings.HasPrefix(reason, downloadClientUnavailable) {
+		e.incidentFailed(store.IncidentStorage, e.downloadFilesKey(grab.SubjectType), reason,
+			itemKey(grab.SubjectType, grab.SubjectID))
+	}
 	if err := e.store.Grabs().RecordDownloadWait(ctx, grab.ID, reason); err != nil {
 		return err
 	}
 	if grab.LastError != reason {
 		e.publishProgress(grab, string(grab.State))
+	}
+	return nil
+}
+
+// downloadFilesChecked marks every open download-files cause healthy.
+func (e *Engine) downloadFilesChecked(ctx context.Context) error {
+	keys, err := e.openIncidentKeys(ctx, store.IncidentStorage)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if strings.HasPrefix(key, DownloadFilesKeyPrefix) {
+			e.incidentHealthy(store.IncidentStorage, key)
+		}
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/TechXTT/reelay/internal/engine"
@@ -54,11 +55,28 @@ var incidentGuidance = map[string]incidentText{
 	},
 }
 
+// downloadFilesGuidance is for the storage incidents of completed downloads
+// whose files are not accessible; cause takes the local download path.
+var downloadFilesGuidance = incidentText{
+	cause:    "Completed downloads in %s are not accessible",
+	nextStep: "Checks the downloads again on the next status poll.",
+	action:   "Check that the download folder is mounted on the Reelay host and that downloader.path_mappings map the client's paths to it.",
+}
+
+// tmdbGuidance is for TMDB, which only recommendation generation checks.
+var tmdbGuidance = incidentText{
+	cause:    "Metadata provider %s is failing",
+	nextStep: "Generates recommendations again on the next recommendation refresh.",
+	action:   "Usually temporary. If it persists, check outbound network access from the Reelay host and the TMDB API key.",
+}
+
 type incidentDTO struct {
 	store.Incident
 	Cause          string `json:"cause"`
 	NextStep       string `json:"next_step"`
 	OperatorAction string `json:"operator_action"`
+	// ResolvedNote says why an incident closed other than being seen healthy.
+	ResolvedNote string `json:"resolved_note,omitempty"`
 }
 
 // nextCheck moves a scheduled check that has already passed forward by whole
@@ -75,11 +93,20 @@ func (s *Server) describeIncidents(incidents []store.Incident, now time.Time) []
 	out := make([]incidentDTO, len(incidents))
 	for i, incident := range incidents {
 		guidance := incidentGuidance[incident.Kind]
-		if incident.ResolvedAt == nil {
-			incident.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind), now)
+		subject := incident.Key
+		if path, ok := strings.CutPrefix(incident.Key, engine.DownloadFilesKeyPrefix); ok && incident.Kind == store.IncidentStorage {
+			guidance, subject = downloadFilesGuidance, path
+		} else if incident.Kind == store.IncidentMetadata && incident.Key == engine.TMDBIncidentKey {
+			guidance = tmdbGuidance
 		}
-		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, incident.Key),
+		if incident.ResolvedAt == nil {
+			incident.NextCheckAt = nextCheck(incident.NextCheckAt, engine.IncidentCheckInterval(s.cfg, incident.Kind, incident.Key), now)
+		}
+		out[i] = incidentDTO{Incident: incident, Cause: fmt.Sprintf(guidance.cause, subject),
 			NextStep: guidance.nextStep, OperatorAction: guidance.action}
+		if incident.ResolvedAt != nil && strings.HasPrefix(incident.Detail, store.IncidentCauseRemoved) {
+			out[i].ResolvedNote = store.IncidentCauseRemoved
+		}
 	}
 	return out
 }

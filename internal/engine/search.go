@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +27,25 @@ func (e *Engine) search(ctx context.Context, recent bool) (err error) {
 			store.IncidentIndexer, store.IncidentStorage, store.IncidentDownloadClient))
 	}()
 	targets, err := e.dueTargets(ctx)
-	if err != nil || len(targets) == 0 {
+	if err != nil {
 		return err
+	}
+	if !recent {
+		// Open incidents are rechecked at the search interval even when no
+		// item is due, which would otherwise never observe them recovering.
+		if err := e.recheckStorageIncidents(ctx); err != nil {
+			return err
+		}
+		if len(targets) == 0 {
+			for _, client := range e.indexers {
+				if e.incidentOpen(store.IncidentIndexer, client.Name()) {
+					e.probeIndexer(ctx, client)
+				}
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
 	}
 	// Reserve-only check (size 0) of every volume a grab could write to. With
 	// a zero reserve only an unreadable volume skips the cycle.
@@ -145,6 +163,48 @@ func (e *Engine) queryIndexers(ctx context.Context, query indexer.Query) ([]inde
 		return nil, indexer.ErrUnsupported
 	}
 	return out, errors.Join(errs...)
+}
+
+// recheckStorageIncidents measures the free space of every path with an open
+// storage incident against the reserve. Download-files causes are the status
+// loop's.
+func (e *Engine) recheckStorageIncidents(ctx context.Context) error {
+	paths, err := e.openIncidentKeys(ctx, store.IncidentStorage)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, DownloadFilesKeyPrefix) {
+			e.checkPaths(0, []string{path})
+		}
+	}
+	return nil
+}
+
+// probeIndexer checks an indexer with an open incident without searching for
+// an item: the Torznab capabilities endpoint where the client has one,
+// otherwise one recent-feed query. An open circuit breaker refuses the probe
+// without network traffic and keeps the incident open.
+func (e *Engine) probeIndexer(ctx context.Context, client indexer.Indexer) {
+	var prober, canProbe = client.(interface{ Probe(context.Context) error })
+	var err error
+
+	if err = client.Healthy(ctx); err != nil {
+		e.incidentFailed(store.IncidentIndexer, client.Name(), fmt.Sprintf("%s unhealthy: %v", client.Name(), err))
+		return
+	}
+	if canProbe {
+		err = prober.Probe(ctx)
+	} else {
+		_, err = client.Search(ctx, indexer.Query{Recent: true, Categories: indexer.VideoCategories()})
+	}
+	switch {
+	case errors.Is(err, indexer.ErrUnsupported) || ctx.Err() != nil:
+	case err != nil:
+		e.incidentFailed(store.IncidentIndexer, client.Name(), fmt.Sprintf("%s probe: %v", client.Name(), err))
+	default:
+		e.incidentHealthy(store.IncidentIndexer, client.Name())
+	}
 }
 
 func (e *Engine) processSearchTarget(ctx context.Context, target searchTarget, releases []indexer.Release, queryErr error) error {

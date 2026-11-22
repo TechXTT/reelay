@@ -180,13 +180,37 @@ func (t *TMDB) Similar(ctx context.Context, mediaType string, id int) ([]Discove
 }
 
 func (t *TMDB) Discover(ctx context.Context, mediaType string) ([]DiscoveryItem, error) {
+	return t.DiscoverOutsideGenre(ctx, mediaType, "", 1)
+}
+
+func (t *TMDB) DiscoverOutsideGenre(ctx context.Context, mediaType, genre string, page int) ([]DiscoveryItem, error) {
 	kind, err := tmdbKind(mediaType)
 	if err != nil {
 		return nil, err
 	}
 	var payload tmdbSearchResponse
 	q := url.Values{"api_key": {t.key}, "include_adult": {"false"}, "sort_by": {"vote_average.desc"}, "vote_count.gte": {"250"}}
-	if err := t.client.cachedGET(ctx, "discover:"+kind, "/discover/"+kind, q, &payload); err != nil {
+	cacheKey := "discover:" + kind
+	if genre != "" {
+		genres, err := t.genreMap(ctx, mediaType)
+		if err != nil {
+			return nil, err
+		}
+		for id, name := range genres {
+			if strings.EqualFold(name, genre) {
+				q.Set("without_genres", strconv.Itoa(id))
+				break
+			}
+		}
+		if !q.Has("without_genres") {
+			return nil, fmt.Errorf("unknown %s genre %q", mediaType, genre)
+		}
+	}
+	if genre != "" || page != 1 {
+		q.Set("page", strconv.Itoa(page))
+		cacheKey += ":outside:" + q.Get("without_genres") + ":" + strconv.Itoa(page)
+	}
+	if err := t.client.cachedGET(ctx, cacheKey, "/discover/"+kind, q, &payload); err != nil {
 		return nil, err
 	}
 	return t.convertDiscovery(ctx, mediaType, payload.Results)

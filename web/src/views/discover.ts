@@ -84,16 +84,16 @@ function seriesScopeControls(title: string) {
         <small class="scope-explanation">Trials start from the beginning and skip specials. Short series use up to 3 known episodes; a season trial follows all known episodes of the first season. A Continue/Stop vote and personal rating are required afterward.</small></label>`;
 }
 
-function recommendationCard(item: Recommendation, mediaType: MediaType) {
+function recommendationCard(item: Recommendation, mediaType: MediaType, directionPick = false) {
   return `<article class="recommendation-card">
       ${item.poster_url ? `<img src="${esc(item.poster_url)}" alt="" loading="lazy">` : `<div class="recommendation-poster">${esc(item.title.charAt(0))}</div>`}
-      <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}${item.runtime_minutes ? ` · ${item.runtime_minutes} min${mediaType === "series" ? " / episode" : ""}` : ""}</small></div><div class="match-score"><strong>${Number(item.score).toFixed(0)}</strong><small>Match score</small></div></div>
+      <div class="recommendation-body"><div class="recommendation-title"><div><h2>${esc(item.title)}</h2><small>${esc(item.year || "Year unknown")}${item.runtime_minutes ? ` · ${item.runtime_minutes} min${mediaType === "series" ? " / episode" : ""}` : ""}</small></div>${directionPick ? "" : `<div class="match-score"><strong>${Number(item.score).toFixed(0)}</strong><small>Match score</small></div>`}</div>
       <div class="audience-rating" data-audience-rating>${audienceRating(item.vote_average, item.vote_count)}</div>
       ${item.genres?.length ? `<small class="recommendation-genres">${esc(item.genres.join(" · "))}</small>` : ""}
       <p>${esc(item.overview || "No description available.")}</p><ol>${(item.reasons ?? []).map(reason => `<li>${esc(reason)}</li>`).join("")}</ol>
       <button class="command compact rec-preview" data-id="${item.id}" aria-label="Preview ${esc(item.title)}">Preview &amp; trailers</button>
       <div class="row-actions recommendation-actions"><button class="command compact rec-dismiss" data-id="${item.id}">Dismiss</button>
-      <label class="rating-field"><span>Your rating</span><select class="rec-rating" aria-label="Your rating for ${esc(item.title)}"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option></select></label>
+      <label class="rating-field"><span>Your rating</span><select class="rec-rating" aria-label="Your rating for ${esc(item.title)}"><option value="">Choose 1–5</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
       <button class="command compact rec-rate" data-id="${item.id}">Rate</button>${mediaType === "series" ? seriesScopeControls(item.title) : ""}<button class="command compact rec-request" data-id="${item.id}">Request</button></div></div>
     </article>`;
 }
@@ -121,13 +121,71 @@ export async function discoverView(selectedUser = session.discoverUser, mediaTyp
   if (session.current !== "discover" || session.discoverUser !== key || session.discoverType !== mediaType) return;
   const node = content(`${discoverHead(user, users, key, mediaType, recommendations)}
     ${trialsSection(trialPage.items)}
-    <div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div>
+    <div class="discover-toolbar"><label>Look beyond<select id="direction-genre"></select></label>
+      <button class="command" id="change-direction">Change direction</button><button class="command" id="usual-picks" hidden>Back to my picks</button></div>
+    <p id="direction-status" role="status"></p>
+    <section id="usual-results"><div class="recommendation-grid">${recommendations.length ? recommendations.map(item => recommendationCard(item, mediaType)).join("") : `<div class="empty">No active recommendations</div>`}</div></section>
+    <section id="direction-results" hidden><div class="recommendation-grid"></div></section>
     ${statsPanelShell()}${notificationsPanelShell()}`);
   void loadRecommendationStats(node, user, key);
   void loadNotificationsPanel(node, user);
   bindDiscoverToolbar(node, user, key, mediaType);
   bindTrialControls(node, key, mediaType);
   bindRecommendationCards(node, recommendations);
+  bindDirection(node, user, mediaType, recommendations);
+}
+
+function bindDirection(node: HTMLElement, user: JellyfinUser, mediaType: MediaType, ordinary: Recommendation[]) {
+  const genreSelect = pick<HTMLSelectElement>(node, "#direction-genre");
+  const button = pick<HTMLButtonElement>(node, "#change-direction");
+  const back = pick<HTMLButtonElement>(node, "#usual-picks");
+  const status = pick<HTMLElement>(node, "#direction-status");
+  const usual = pick<HTMLElement>(node, "#usual-results");
+  const alternate = pick<HTMLElement>(node, "#direction-results");
+  const grid = pick<HTMLElement>(alternate, ".recommendation-grid");
+  const counts = new Map<string, number>();
+  for (const item of ordinary.slice(0, 10)) {
+    for (const genre of item.genres ?? []) counts.set(genre, (counts.get(genre) ?? 0) + 1);
+  }
+  for (const [genre] of [...counts].sort((a, b) => b[1] - a[1])) genreSelect.add(new Option(genre, genre));
+  genreSelect.add(new Option("My usual picks", ""));
+  const regularIDs = ordinary.map(item => item.tmdb_id);
+  let seen: number[] = [];
+  const query = new URLSearchParams({ server_id: user.server_id, user_id: user.user_id });
+  button.onclick = () => void runControl(button, async () => {
+    const genre = genreSelect.value;
+    genreSelect.disabled = true;
+    back.disabled = true;
+    status.textContent = "Finding different picks…";
+    try {
+      const page = await api<ItemList<Recommendation>>(`/api/v1/recommendations/change-direction?${query}`,
+        jsonRequest("POST", { media_type: mediaType, away_from_genre: genre, seen: [...regularIDs, ...seen] }));
+      if (!button.isConnected) return;
+      const picks = page.items ?? [];
+      seen = [...seen, ...picks.map(item => item.tmdb_id)].slice(-100);
+      usual.hidden = true;
+      alternate.hidden = false;
+      back.hidden = false;
+      status.textContent = picks.length
+        ? `${picks.length} new ${picks.length === 1 ? "pick" : "picks"}${genre ? ` outside ${genre}` : ""}. Your usual preferences still apply.`
+        : "No more matching picks in this batch. Choose another direction or go back to your picks.";
+      grid.innerHTML = picks.map(item => recommendationCard(item, mediaType, true)).join("");
+      bindRecommendationCards(grid, picks);
+    } catch (error) {
+      status.textContent = "Couldn’t load different picks. Try again.";
+      throw error;
+    } finally {
+      genreSelect.disabled = false;
+      back.disabled = false;
+    }
+  });
+  back.onclick = () => {
+    usual.hidden = false;
+    alternate.hidden = true;
+    back.hidden = true;
+    status.textContent = "";
+    button.focus();
+  };
 }
 
 function bindDiscoverToolbar(node: HTMLElement, user: JellyfinUser, key: string, mediaType: MediaType) {
@@ -342,6 +400,11 @@ async function recommendationAction(button: HTMLButtonElement, action: Recommend
   if (!card) return;
   const controls = Array.from(card.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select"));
   const rating = action === "rate" ? Number(card.querySelector<HTMLSelectElement>(".rec-rating")?.value) : undefined;
+  if (action === "rate" && !rating) {
+    showError(new Error("Choose a rating from 1 to 5."));
+    card.querySelector<HTMLSelectElement>(".rec-rating")?.focus();
+    return;
+  }
   const scope = action === "request" ? requestScope(card) : {};
   if (!scope) return;
   controls.forEach(control => control.disabled = true);
@@ -353,8 +416,8 @@ async function recommendationAction(button: HTMLButtonElement, action: Recommend
       await discoverView();
       return;
     }
+    const grid = card.closest<HTMLElement>(".recommendation-grid");
     card.remove();
-    const grid = document.querySelector<HTMLElement>(".recommendation-grid");
     if (grid && !grid.querySelector(".recommendation-card")) grid.innerHTML = `<div class="empty">No active recommendations</div>`;
   } catch (error) {
     controls.forEach(control => control.disabled = false);

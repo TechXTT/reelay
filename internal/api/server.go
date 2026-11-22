@@ -233,6 +233,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		{"GET /api/v1/recommendations/stats", accessMember, s.handleRecommendationStats},
 		{"GET /api/v1/recommendations/{id}/preview", accessMember, withID(s.handleRecommendationPreview)},
 		{"POST /api/v1/recommendations/generate", accessOperator, s.handleRecommendationGenerate},
+		{"POST /api/v1/recommendations/change-direction", accessMember, s.handleChangeDirection},
 		{"POST /api/v1/recommendations/{id}/actions", accessMember, withID(s.handleRecommendationAction)},
 
 		{"GET /api/v1/requests", accessMember, s.handleRequests},

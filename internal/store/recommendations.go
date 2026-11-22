@@ -241,7 +241,7 @@ func (r *RecommendationRepository) ReplaceOffered(ctx context.Context, serverID,
 func replaceRecommendations(ctx context.Context, tx *sql.Tx, serverID, userID, mediaType string, values []model.Recommendation) error {
 	for _, value := range values {
 		reasons, _ := encodeJSON(value.Reasons)
-		features, _ := encodeJSON(map[string]any{"components": value.Components, "genres": value.Genres, "keywords": value.Keywords, "people": value.People, "language": value.Language, "country": value.Country, "runtime_minutes": value.RuntimeMinutes, "vote_average": value.VoteAverage, "vote_count": value.VoteCount})
+		features := recommendationFeatures(value, false)
 		_, err := tx.ExecContext(ctx, `INSERT INTO recommendations(server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmdb_id) DO UPDATE SET title=excluded.title,year=excluded.year,overview=excluded.overview,poster_url=excluded.poster_url,score=excluded.score,reasons_json=excluded.reasons_json,features_json=excluded.features_json,generated_at=excluded.generated_at,expires_at=excluded.expires_at,status=CASE WHEN recommendations.status IN ('dismissed','requested','available') THEN recommendations.status ELSE 'active' END`,
 			serverID, userID, mediaType, value.TMDBID, value.Title, value.Year, value.Overview, value.PosterURL, value.Score, reasons, features, "active", FormatTime(value.GeneratedAt), FormatTime(value.ExpiresAt))
@@ -249,7 +249,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id,media_type,tmd
 			return fmt.Errorf("store recommendation %d: %w", value.TMDBID, err)
 		}
 	}
-	query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active'`
+	query := `DELETE FROM recommendations WHERE server_id=? AND user_id=? AND media_type=? AND status='active' AND COALESCE(json_extract(features_json,'$.direction_pick'),0)=0`
 	args := []any{serverID, userID, mediaType}
 	if len(values) > 0 {
 		query += ` AND tmdb_id NOT IN (` + placeholders(len(values)) + `)`
@@ -300,7 +300,7 @@ func (r *RecommendationRepository) List(ctx context.Context, serverID, userID, m
 	if status == "" {
 		status = "active"
 	}
-	rows, err := r.s.ro.QueryContext(ctx, `SELECT id,server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at FROM recommendations WHERE server_id=? AND user_id=? AND (?='' OR media_type=?) AND status=? ORDER BY score DESC,id LIMIT ? OFFSET ?`, serverID, userID, mediaType, mediaType, status, limit, offset)
+	rows, err := r.s.ro.QueryContext(ctx, `SELECT id,server_id,user_id,media_type,tmdb_id,title,year,overview,poster_url,score,reasons_json,features_json,status,generated_at,expires_at FROM recommendations WHERE server_id=? AND user_id=? AND (?='' OR media_type=?) AND status=? AND (status<>'active' OR COALESCE(json_extract(features_json,'$.direction_pick'),0)=0) ORDER BY score DESC,id LIMIT ? OFFSET ?`, serverID, userID, mediaType, mediaType, status, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list recommendations: %w", err)
 	}

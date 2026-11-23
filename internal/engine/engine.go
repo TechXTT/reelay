@@ -147,7 +147,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	loops := []loopSpec{
 		{"search", e.cfg.Schedules.SearchInterval.Duration, e.searchTrigger, e.SearchOnce, false},
 		{"status", e.cfg.Schedules.StatusInterval.Duration, e.statusTrigger, e.StatusOnce, false},
-		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce, false},
+		{"metadata", e.cfg.Schedules.MetadataInterval.Duration, e.metadataTrigger, e.MetadataOnce, e.metadataOverdue(ctx)},
 		{"recent", e.cfg.Schedules.RecentInterval.Duration, e.recentTrigger, e.RecentOnce, false},
 		{"notifications", time.Minute, nil, e.NotificationsOnce, false},
 	}

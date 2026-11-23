@@ -78,7 +78,29 @@ func (e *Engine) MetadataOnce(ctx context.Context) (err error) {
 			errs = append(errs, err)
 		}
 	}
+	// A provider outage does not count as a run, so the next start retries.
+	if refreshed > 0 || firstFailure == nil {
+		if err := e.store.KV().SetTime(ctx, metadataLastRunKey, e.clock.Now().UTC()); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+const metadataLastRunKey = "engine.metadata.last_run"
+
+// metadataOverdue reports whether a full interval has passed since the last
+// refresh. Only the refresh promotes aired episodes to wanted, so a service
+// restarted more often than the interval would otherwise never want them.
+func (e *Engine) metadataOverdue(ctx context.Context) bool {
+	last, err := e.store.KV().GetTime(ctx, metadataLastRunKey)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			e.log.Warn("read last metadata refresh", "error", err)
+		}
+		return true
+	}
+	return e.clock.Since(last) >= e.cfg.Schedules.MetadataInterval.Duration
 }
 
 // prepareTrialEpisodes stores every announced episode as unmonitored so trial

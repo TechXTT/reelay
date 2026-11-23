@@ -12,9 +12,6 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -69,5 +66,15 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: pages
+  # Deploying in its own job lets the artifact finish registering first; in the
+  # build job deploy-pages often ran before it was listed. Re-running only this
+  # job also redeploys the same catalog instead of rebuilding the zips.
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
       - id: pages
         uses: actions/deploy-pages@v4

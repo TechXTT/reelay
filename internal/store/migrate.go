@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -23,6 +25,11 @@ type migration struct {
 	Name     string
 	SQL      string
 	Checksum string
+	// Checksum hashes the file with LF line endings. Aliases hash it as
+	// embedded and with CRLF: a Windows checkout with core.autocrlf embeds
+	// CRLF (or mixed) bytes, a release build LF, and a database must accept
+	// whichever one applied it.
+	Aliases []string
 }
 
 // Migrate applies every pending migration, each in its own transaction.
@@ -49,12 +56,23 @@ func Migrate(ctx context.Context, s *Store, log *slog.Logger) error {
 	pending := 0
 	for _, m := range ms {
 		if prev, ok := applied[m.Version]; ok {
-			if prev.checksum != m.Checksum {
+			if prev.checksum == m.Checksum {
+				continue
+			}
+			if !slices.Contains(m.Aliases, prev.checksum) {
 				return fmt.Errorf(
 					"store: migration %04d_%s.sql was modified after it was applied "+
 						"(recorded %s, embedded %s); add a new migration instead of editing this one",
 					m.Version, prev.name, short(prev.checksum), short(m.Checksum))
 			}
+			// Same file with other line endings: record the LF checksum so a
+			// build from any checkout matches, including a mixed-ending file.
+			if _, err := s.rw.ExecContext(ctx,
+				"UPDATE schema_migrations SET checksum=? WHERE version=? AND checksum=?",
+				m.Checksum, m.Version, prev.checksum); err != nil {
+				return fmt.Errorf("store: normalize checksum of migration %04d_%s: %w", m.Version, m.Name, err)
+			}
+			log.Info("normalized migration checksum", "version", m.Version, "name", m.Name)
 			continue
 		}
 		if err := applyMigration(ctx, s, m); err != nil {
@@ -124,12 +142,14 @@ func loadMigrations() ([]migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("store: read migration %q: %w", e.Name(), err)
 		}
-		sum := sha256.Sum256(body)
+		lf := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
+		crlf := bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n"))
 		out = append(out, migration{
 			Version:  version,
 			Name:     m[2],
 			SQL:      string(body),
-			Checksum: hex.EncodeToString(sum[:]),
+			Checksum: checksum(lf),
+			Aliases:  []string{checksum(body), checksum(crlf)},
 		})
 	}
 
@@ -214,6 +234,11 @@ func maxVersion(ms []migration) int {
 		return 0
 	}
 	return ms[len(ms)-1].Version
+}
+
+func checksum(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 func short(sum string) string {
